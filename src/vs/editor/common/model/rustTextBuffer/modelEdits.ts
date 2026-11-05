@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { readUInt32BE } from '../../../../base/common/buffer.js';
-import { Range } from '../../core/range.js';
+import { IRange, Range } from '../../core/range.js';
 import { TextChange } from '../../core/textChange.js';
 import { decodeUTF16LELossless } from '../../core/utf16Transfer.js';
 import { ApplyEditsResult, IInternalModelContentChange, IValidEditOperation, ValidAnnotatedEditOperation } from '../../model.js';
@@ -22,7 +22,7 @@ export function applyRustModelEdits(buffer: IRustTextBuffer, operations: readonl
 	let length = 0;
 	for (const operation of operations) {
 		const range = operation.range;
-		if (!fitsCoordinate(range.startLineNumber) || !fitsCoordinate(range.startColumn) || !fitsCoordinate(range.endLineNumber) || !fitsCoordinate(range.endColumn)) {
+		if (!isSupportedRustTextRange(range)) {
 			return undefined;
 		}
 		length += operation.text?.length ?? 0;
@@ -56,6 +56,11 @@ export function applyRustModelEdits(buffer: IRustTextBuffer, operations: readonl
 
 function fitsCoordinate(value: number): boolean {
 	return Number.isInteger(value) && value > 0 && value <= 0xFFFFFFFF;
+}
+
+/** Checks the typed coordinate domain before packing ranges for native model operations. */
+export function isSupportedRustTextRange(range: IRange): boolean {
+	return fitsCoordinate(range.startLineNumber) && fitsCoordinate(range.startColumn) && fitsCoordinate(range.endLineNumber) && fitsCoordinate(range.endColumn);
 }
 
 function decodeModelEdits(bytes: Uint8Array, inputs: readonly ValidAnnotatedEditOperation[], computeUndoEdits: boolean): ITextBufferModelEditsResult {

@@ -16,7 +16,7 @@ mod text_transfer;
 /// Identifies the storage contract independently of the binding generator's version.
 #[wasm_bindgen]
 pub fn text_buffer_abi_version() -> u32 {
-	4
+	5
 }
 
 #[wasm_bindgen]
@@ -144,6 +144,38 @@ impl WasmTextBuffer {
 
 	pub fn line_content(&self, line_number: usize) -> Result<Vec<u16>, JsError> {
 		Ok(self.buffer.line_content(line_number)?)
+	}
+
+	pub fn first_non_whitespace_column(&self, line_number: usize) -> Result<usize, JsError> {
+		Ok(self.buffer.first_non_whitespace_column(line_number)?)
+	}
+
+	pub fn last_non_whitespace_column(&self, line_number: usize) -> Result<usize, JsError> {
+		Ok(self.buffer.last_non_whitespace_column(line_number)?)
+	}
+
+	/// Unsupported visible-line coordinates leave the existing character-count path available.
+	pub fn character_count(
+		&self,
+		start_line: usize,
+		start_column: usize,
+		end_line: usize,
+		end_column: usize,
+		eol_length: usize,
+	) -> Option<usize> {
+		self.buffer
+			.character_count(
+				Position {
+					line_number: start_line,
+					column: start_column,
+				},
+				Position {
+					line_number: end_line,
+					column: end_column,
+				},
+				eol_length,
+			)
+			.ok()
 	}
 
 	pub fn line_batch(

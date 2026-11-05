@@ -154,6 +154,10 @@ export class PieceTreeTextBuffer extends Disposable implements ITextBuffer {
 
 	public getCharacterCountInRange(range: Range, eol: EndOfLinePreference = EndOfLinePreference.TextDefined): number {
 		if (this._mightContainNonBasicASCII) {
+			const native = this._pieceTree.getCharacterCountInRange?.(range, this._getEndOfLine(eol));
+			if (native !== undefined) {
+				return native;
+			}
 			// we must count by iterating
 
 			let result = 0;
@@ -224,6 +228,9 @@ export class PieceTreeTextBuffer extends Disposable implements ITextBuffer {
 	}
 
 	public getLineFirstNonWhitespaceColumn(lineNumber: number): number {
+		if (this._pieceTree.getLineFirstNonWhitespaceColumn) {
+			return this._pieceTree.getLineFirstNonWhitespaceColumn(lineNumber);
+		}
 		const result = strings.firstNonWhitespaceIndex(this.getLineContent(lineNumber));
 		if (result === -1) {
 			return 0;
@@ -232,6 +239,9 @@ export class PieceTreeTextBuffer extends Disposable implements ITextBuffer {
 	}
 
 	public getLineLastNonWhitespaceColumn(lineNumber: number): number {
+		if (this._pieceTree.getLineLastNonWhitespaceColumn) {
+			return this._pieceTree.getLineLastNonWhitespaceColumn(lineNumber);
+		}
 		const result = strings.lastNonWhitespaceIndex(this.getLineContent(lineNumber));
 		if (result === -1) {
 			return 0;

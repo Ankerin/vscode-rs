@@ -96,11 +96,58 @@ function compareBuffers(reference: PieceTreeTextBuffer, actual: PieceTreeTextBuf
 }
 
 test('Rust storage rejects stale bindings before registering a model factory', () => {
-	for (const version of [1, 2, 3]) {
+	for (const version of [1, 2, 3, 4]) {
 		assert.throws(() => registerRustTextBuffer({ ...rust, text_buffer_abi_version: () => version }), /storage contract/);
 	}
 	const registration = registerRustTextBuffer(rust);
 	registration.dispose();
+});
+
+test('Rust scalar model queries preserve seeded character counts, visible endpoints, and whitespace columns', context => {
+	let seed = 23;
+	const random = (limit: number) => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed % limit; };
+	for (const eol of ['\n', '\r\n'] as const) {
+		const [reference, actual] = createPair(context, [(' \t\uFEFF\uD800x\uD83D\uDE00\t' + eol + '\uD800' + eol + '\t ').repeat(128)]);
+		const compare = () => {
+			for (let line = 1; line <= reference.getLineCount(); line++) {
+				assert.deepStrictEqual([actual.getLineFirstNonWhitespaceColumn(line), actual.getLineLastNonWhitespaceColumn(line)], [reference.getLineFirstNonWhitespaceColumn(line), reference.getLineLastNonWhitespaceColumn(line)]);
+			}
+			for (let iteration = 0; iteration < 1024; iteration++) {
+				const startLine = 1 + random(reference.getLineCount());
+				const endLine = startLine + random(reference.getLineCount() - startLine + 1);
+				const startColumn = 1 + random(reference.getLineMaxColumn(startLine));
+				const endColumn = endLine === startLine ? startColumn + random(reference.getLineMaxColumn(endLine) - startColumn + 1) : 1 + random(reference.getLineMaxColumn(endLine));
+				const range = new Range(startLine, startColumn, endLine, endColumn);
+				for (const preference of [EndOfLinePreference.TextDefined, EndOfLinePreference.LF, EndOfLinePreference.CRLF]) {
+					assert.strictEqual(actual.getCharacterCountInRange(range, preference), reference.getCharacterCountInRange(range, preference), `Character range ${range}`);
+				}
+			}
+		};
+		compare();
+		const operations = annotate([{ range: new Range(1, 1, 1, 2), text: '\uD800\uD800x' }, { range: new Range(2, 1, 2, 1), text: '\t\n ' }]);
+		reference.applyEdits(operations, true, true);
+		actual.applyEdits(operations, true, true);
+		compare();
+	}
+	const [reference, actual] = createPair(context, ['\uD800a\r\nnext']);
+	const interior = new Range(1, 1, 1, 4);
+	assert.strictEqual(actual.getCharacterCountInRange(interior), reference.getCharacterCountInRange(interior));
+});
+
+test('Rust scalar model queries avoid decoded line transfers', context => {
+	class ScalarBuffer extends rust.WasmTextBuffer {
+		public static override from_text(text: string): ScalarBuffer { return new ScalarBuffer(encodeUTF16(text)); }
+		public override line_batch(): never { throw new Error('Decoded scalar-query line transfer'); }
+		public override line_content(): never { throw new Error('Copied scalar-query line transfer'); }
+	}
+	const text = ' '.repeat(2048) + '\uD800x\uD83D\uDE00' + '\t'.repeat(4096) + '\r\n\uD800\r\n';
+	const reference = createBuffer([text]);
+	const registration = registerRustTextBuffer({ ...rust, WasmTextBuffer: ScalarBuffer });
+	let actual: PieceTreeTextBuffer;
+	try { actual = createBuffer([text]); } finally { registration.dispose(); }
+	context.after(() => { reference.dispose(); actual.dispose(); });
+	const range = new Range(1, 1, 3, 1);
+	assert.deepStrictEqual([actual.getLineFirstNonWhitespaceColumn(1), actual.getLineLastNonWhitespaceColumn(1), actual.getCharacterCountInRange(range)], [reference.getLineFirstNonWhitespaceColumn(1), reference.getLineLastNonWhitespaceColumn(1), reference.getCharacterCountInRange(range)]);
 });
 
 test('Rust binding batches validate every original range and text slice before changing the document', () => {

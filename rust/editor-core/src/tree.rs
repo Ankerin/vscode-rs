@@ -207,6 +207,20 @@ impl Node {
 		}
 	}
 
+	/// Borrows the leaf prefix ending at a validated, exclusive offset.
+	pub fn chunk_before(&self, offset: usize) -> TextChunk<'_> {
+		match &self.content {
+			Content::Leaf { data, start, .. } => data.chunk().slice(*start..*start + offset),
+			Content::Branch { left, right } => {
+				if offset <= left.summary.length {
+					left.chunk_before(offset)
+				} else {
+					right.chunk_before(offset - left.summary.length)
+				}
+			}
+		}
+	}
+
 	/// Counts completed line endings before `offset`, including a CRLF spanning leaves.
 	pub fn line_breaks_before(&self, offset: usize) -> usize {
 		let prefix = self.prefix_summary(offset);

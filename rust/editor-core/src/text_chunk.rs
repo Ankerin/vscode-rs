@@ -81,3 +81,12 @@ impl Iterator for TextChunkIter<'_> {
 
 impl ExactSizeIterator for TextChunkIter<'_> {}
 impl FusedIterator for TextChunkIter<'_> {}
+
+impl DoubleEndedIterator for TextChunkIter<'_> {
+	fn next_back(&mut self) -> Option<Self::Item> {
+		match self {
+			Self::Latin1(units) => units.next_back().copied().map(u16::from),
+			Self::Utf16(units) => units.next_back().copied(),
+		}
+	}
+}

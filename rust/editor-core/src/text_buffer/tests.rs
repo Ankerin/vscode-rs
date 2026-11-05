@@ -45,6 +45,21 @@ fn assert_matches(buffer: &TextBuffer, expected: &[u16]) {
 	);
 	for (index, range) in ranges.iter().enumerate() {
 		let line_number = index + 1;
+		let text = &expected[range.clone()];
+		assert_eq!(
+			(
+				buffer.first_non_whitespace_column(line_number).unwrap(),
+				buffer.last_non_whitespace_column(line_number).unwrap()
+			),
+			(
+				text.iter()
+					.position(|unit| !matches!(unit, 9 | 32))
+					.map_or(0, |index| index + 1),
+				text.iter()
+					.rposition(|unit| !matches!(unit, 9 | 32))
+					.map_or(0, |index| index + 2),
+			)
+		);
 		assert_eq!(
 			buffer.line_content(line_number).unwrap(),
 			&expected[range.clone()]
@@ -69,6 +84,95 @@ fn assert_matches(buffer: &TextBuffer, expected: &[u16]) {
 		assert_eq!(buffer.char_at(offset), expected.get(offset).copied());
 	}
 	assert_eq!(collect_snapshot(buffer.snapshot()), expected);
+}
+
+#[test]
+fn character_counts_preserve_unmatched_high_surrogates_and_reset_at_line_boundaries() {
+	let buffer = TextBuffer::new(&[
+		97, 0xD800, 98, 0xDC00, 13, 10, 0xD83D, 0xDE00, 0xD800, 10, 0xD800, 0xD801, 0xDC00,
+	]);
+	let start = Position {
+		line_number: 1,
+		column: 1,
+	};
+	let end = Position {
+		line_number: 3,
+		column: 4,
+	};
+	assert_eq!(
+		(
+			buffer.character_count(start, end, 1).unwrap(),
+			buffer.character_count(start, end, 2).unwrap()
+		),
+		(9, 11)
+	);
+	assert_eq!(
+		buffer
+			.character_count(
+				start,
+				Position {
+					line_number: 1,
+					column: 3
+				},
+				1
+			)
+			.unwrap(),
+		2
+	);
+	assert_eq!(
+		buffer
+			.character_count(
+				Position {
+					line_number: 2,
+					column: 2
+				},
+				Position {
+					line_number: 2,
+					column: 4
+				},
+				1
+			)
+			.unwrap(),
+		2
+	);
+	assert!(matches!(
+		buffer.character_count(
+			start,
+			Position {
+				line_number: 1,
+				column: 6
+			},
+			1
+		),
+		Err(BufferError::InvalidPosition)
+	));
+}
+
+#[test]
+fn whitespace_queries_scan_both_directions_across_shared_leaf_splits() {
+	let mut text = vec![32; 1023];
+	text.extend([0xD83D, 0xDE00]);
+	text.extend(vec![9; 4096]);
+	text.extend([13, 10, 32, 9, 10]);
+	let mut buffer = TextBuffer::new(&text);
+	assert_eq!(
+		(
+			buffer.first_non_whitespace_column(1).unwrap(),
+			buffer.last_non_whitespace_column(1).unwrap(),
+			buffer.first_non_whitespace_column(2).unwrap(),
+			buffer.last_non_whitespace_column(2).unwrap()
+		),
+		(1024, 1026, 0, 0)
+	);
+	buffer.replace(0..512, &[]).unwrap();
+	assert_eq!(
+		(
+			buffer.first_non_whitespace_column(1).unwrap(),
+			buffer.last_non_whitespace_column(1).unwrap()
+		),
+		(512, 514)
+	);
+	assert_matches(&buffer, &text[512..]);
 }
 
 #[test]

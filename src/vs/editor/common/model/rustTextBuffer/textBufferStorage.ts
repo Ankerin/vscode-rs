@@ -44,6 +44,10 @@ export interface ITextBufferStorage {
 	getLineCharCode(lineNumber: number, index: number): number;
 	getCharCode(offset: number): number;
 	getLineLength(lineNumber: number): number;
+	getLineFirstNonWhitespaceColumn?(lineNumber: number): number;
+	getLineLastNonWhitespaceColumn?(lineNumber: number): number;
+	/** Counts visible characters without transferring whole lines when the range is supported. */
+	getCharacterCountInRange?(range: Range, eol: string): number | undefined;
 	insert(offset: number, value: string, eolNormalized?: boolean): void;
 	delete(offset: number, length: number): void;
 	/** Applies validated replacements together when the storage supports atomic batches. */

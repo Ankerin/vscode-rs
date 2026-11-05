@@ -185,6 +185,83 @@ impl TextBuffer {
 		self.slice(self.line_range(line_number)?)
 	}
 
+	/// Returns the one-based first non-tab/space column, or zero for an all-whitespace line.
+	pub fn first_non_whitespace_column(&self, line_number: usize) -> Result<usize, BufferError> {
+		let range = self.line_range(line_number)?;
+		let mut offset = range.start;
+		while offset < range.end {
+			let chunk = self.chunk_at(offset);
+			let length = chunk.len().min(range.end - offset);
+			if let Some(index) = chunk
+				.slice(0..length)
+				.iter()
+				.position(|unit| !matches!(unit, 9 | 32))
+			{
+				return Ok(offset - range.start + index + 1);
+			}
+			offset += length;
+		}
+		Ok(0)
+	}
+
+	/// Returns the column after the last non-tab/space unit, or zero for an all-whitespace line.
+	pub fn last_non_whitespace_column(&self, line_number: usize) -> Result<usize, BufferError> {
+		let range = self.line_range(line_number)?;
+		let mut offset = range.end;
+		while offset > range.start {
+			let chunk = self.chunk_before(offset);
+			let length = chunk.len().min(offset - range.start);
+			let text = chunk.slice(chunk.len() - length..chunk.len());
+			if let Some(index) = text.iter().rposition(|unit| !matches!(unit, 9 | 32)) {
+				return Ok(offset - range.start - length + index + 2);
+			}
+			offset -= length;
+		}
+		Ok(0)
+	}
+
+	/// Preserves the existing model's high-surrogate skip rule, including unmatched high units.
+	/// Line boundaries reset that rule and contribute the requested EOL length separately.
+	pub fn character_count(
+		&self,
+		start: Position,
+		end: Position,
+		eol_length: usize,
+	) -> Result<usize, BufferError> {
+		if (start.line_number, start.column) > (end.line_number, end.column)
+			|| !matches!(eol_length, 1 | 2)
+		{
+			return Err(BufferError::InvalidRange);
+		}
+		if start.column > self.line_length(start.line_number)? + 1
+			|| end.column > self.line_length(end.line_number)? + 1
+		{
+			return Err(BufferError::InvalidPosition);
+		}
+		let start_offset = self.offset_at(start)?;
+		let end_offset = self.offset_at(end)?;
+		let mut snapshot = self.snapshot_range(start_offset..end_offset)?;
+		let mut count = 0_usize;
+		let mut skip = false;
+		while let Some(chunk) = snapshot.read() {
+			for unit in chunk.iter() {
+				if skip || matches!(unit, 10 | 13) {
+					skip = false;
+				} else {
+					count += 1;
+					skip = matches!(unit, 0xD800..=0xDBFF);
+				}
+			}
+		}
+		count
+			.checked_add(
+				(end.line_number - start.line_number)
+					.checked_mul(eol_length)
+					.ok_or(BufferError::InvalidRange)?,
+			)
+			.ok_or(BufferError::InvalidRange)
+	}
+
 	/// Transfers complete adjacent lines with their original separators. A long first line is never truncated.
 	pub fn line_batch(
 		&self,
@@ -272,6 +349,16 @@ impl TextBuffer {
 			.as_ref()
 			.expect("A nonempty document has a root")
 			.chunk_at(offset)
+	}
+
+	fn chunk_before(&self, offset: usize) -> TextChunk<'_> {
+		if offset == 0 {
+			return TextChunk::Latin1(&[]);
+		}
+		self.root
+			.as_ref()
+			.expect("A nonempty document has a root")
+			.chunk_before(offset.min(self.len()))
 	}
 
 	pub(crate) fn chunks_at(&self, offset: usize) -> tree::Chunks {

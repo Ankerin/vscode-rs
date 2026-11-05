@@ -406,3 +406,27 @@ The general buffer runner was repeated with the same November 6 toolchain and fi
 | Long lines | Random line reads | 9.55 | 24.17 |
 
 These workloads retain regressions in editing and line transfer. Distributed insertions and random line reads still cross coordinate/text boundaries; occasional surrogate splits require lossless decoding. Literal search and immutable snapshot creation remain faster in the raw capture, while construction, snapshot draining, and full extraction retain their earlier costs. The initial ABI 4 capture before allocation/short-decoding changes is retained in `.build/rust/benchmark-model-edits-initial.json`; the ABI 3 capture is retained in `.build/rust/benchmark-storage.json`. No default promotion follows from these subsystem measurements.
+
+## Scalar model query observation
+
+Measured on November 6, 2026, Windows x64, Node `24.22.1`, Rust `1.99.1`, and release storage ABI 5 bindings. Three fresh processes alternate per engine using `--queries`. Whitespace queries request both first and last columns for deterministic line indices; character queries reuse twenty preconstructed visible-line ranges for 200 calls, cycling the three existing EOL preferences. Setup and warm-up are outside the timer. Every workload checksum matched. Times are medians in milliseconds.
+
+| Fixture | Whitespace queries | Existing columns | Rust/WASM columns | Existing 200 counts | Rust/WASM 200 counts |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Short lines | 10,000 | 2.76 | 4.64 | 6.52 | 1.45 |
+| Unicode lines | 10,000 | 3.34 | 4.89 | 6.57 | 1.18 |
+| Long line | 1,000 | 110.65 | 24.84 | 30.80 | 8.05 |
+| Whitespace-heavy source | 10,000 | 6.84 | 6.23 | 15.04 | 4.07 |
+
+The long line contains 65,536 leading spaces, unmatched/paired surrogate units, and 65,536 trailing tabs. Other sources include 8,192 short/Unicode lines or 1,024 whitespace lines with a BOM sentinel. Native queries borrow persistent leaf data rather than decoding complete lines. Character counts improve in every fixture; whitespace-column queries improve on long and whitespace-heavy sources but remain slower on short lines. Separate WASM calls and rope coordinate traversal remain visible for short scalar queries.
+
+Process peak RSS and final WASM linear memory are medians in MiB.
+
+| Fixture | Existing process peak RSS | Rust process peak RSS | Rust linear memory at completion |
+| --- | ---: | ---: | ---: |
+| Short lines | 58.19 | 66.63 | 1.69 |
+| Unicode lines | 58.34 | 67.02 | 1.44 |
+| Long line | 55.35 | 65.69 | 1.50 |
+| Whitespace-heavy source | 57.80 | 67.33 | 1.75 |
+
+This capture demonstrates faster counting and long-line column queries, while peak process memory is higher. Avoided decoded line transfers do not establish total memory savings; the shared WASM runtime and persistent rope remain part of the measured process. Whole-editor input latency, supported platforms, and the full resource gate remain pending. Raw runs stay ignored in `.build/rust/queries-benchmark.json`.

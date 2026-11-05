@@ -13,7 +13,7 @@ import { StringBuffer } from '../pieceTreeTextBuffer/pieceTreeBase.js';
 import { ITextBufferFlags, ITextBufferModelEditsResult, ITextBufferStorage, ITextBufferStorageEdit, registerTextBufferStorageFactory } from './textBufferStorage.js';
 import { IRustSequenceDiffModule, registerRustSequenceDiff } from '../../diff/defaultLinesDiffComputer/algorithms/rustSequenceDiff.js';
 import { IRustTextChangeModule, registerRustTextChanges } from '../../core/rustTextChanges.js';
-import { applyRustModelEdits } from './modelEdits.js';
+import { applyRustModelEdits, isSupportedRustTextRange } from './modelEdits.js';
 
 /** The generated binding surface; UTF-16 arrays preserve JavaScript string semantics. */
 export interface IRustTextBuffer {
@@ -28,6 +28,9 @@ export interface IRustTextBuffer {
 	offset_at(lineNumber: number, column: number): number;
 	position_at(offset: number): Uint32Array;
 	line_content(lineNumber: number): Uint16Array;
+	first_non_whitespace_column(lineNumber: number): number;
+	last_non_whitespace_column(lineNumber: number): number;
+	character_count(startLine: number, startColumn: number, endLine: number, endColumn: number, eolLength: number): number | undefined;
 	line_batch(startLine: number, maxLines: number, maxUnits: number): string | Uint16Array;
 	find_literal(startLine: number, startColumn: number, endLine: number, endColumn: number, needle: Uint16Array, limit: number): Uint32Array;
 	line_length(lineNumber: number): number;
@@ -98,6 +101,11 @@ class RustTextBufferStorage implements ITextBufferStorage, IDisposable {
 	public getLength(): number { return this._buffer.length(); }
 	public getLineCount(): number { return this._buffer.line_count(); }
 	public getLineLength(lineNumber: number): number { return this.getCachedLine(lineNumber)?.length ?? this._buffer.line_length(lineNumber); }
+	public getLineFirstNonWhitespaceColumn(lineNumber: number): number { return this._buffer.first_non_whitespace_column(lineNumber); }
+	public getLineLastNonWhitespaceColumn(lineNumber: number): number { return this._buffer.last_non_whitespace_column(lineNumber); }
+	public getCharacterCountInRange(range: Range, eol: string): number | undefined {
+		return isSupportedRustTextRange(range) ? this._buffer.character_count(range.startLineNumber, range.startColumn, range.endLineNumber, range.endColumn, eol.length) : undefined;
+	}
 	public getOffsetAt(lineNumber: number, column: number): number { return this._buffer.offset_at(lineNumber, column); }
 	public getNearestChunk(offset: number): string { return fromUnits(this._buffer.nearest_chunk(offset)); }
 	public getCharCode(offset: number): number { return Math.max(0, this._buffer.char_code(offset)); }
@@ -284,7 +292,7 @@ class RustTextBufferStorage implements ITextBufferStorage, IDisposable {
 
 /** Installs an initialized Rust module for new models. Dispose the registration to restore defaults. */
 export function registerRustTextBuffer(module: IRustTextBufferModule, initialization?: IRustTextBufferInitialization): IDisposable {
-	if (typeof module.text_buffer_abi_version !== 'function' || module.text_buffer_abi_version() !== 4) {
+	if (typeof module.text_buffer_abi_version !== 'function' || module.text_buffer_abi_version() !== 5) {
 		throw new Error('The Rust text buffer bindings do not match the current storage contract');
 	}
 	const registration = new DisposableStore();
