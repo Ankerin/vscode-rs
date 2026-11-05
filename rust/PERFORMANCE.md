@@ -564,3 +564,25 @@ Ordinary token widths are eight UTF-16 units; the one-token line has 1,048,576 u
 | Long line, one token | 50.04 | 61.66 | 1.13 |
 
 Process peak RSS is higher with Rust in every fixture. Existing concatenation already allocates typed output directly, so this port does not remove a temporary JavaScript number array. Native mutation returns a scalar and retains no persistent token state; aliases keep existing JavaScript buffers. Observations include loading, warm-up, both workloads, and checksum consumption, and do not establish whole-editor resource improvement. Raw runs remain ignored in `.build/rust/contiguous-tokens-benchmark.json`.
+
+## Owning syntax line-store observation
+
+Measured on November 6, 2026 with Windows x64, Node `24.22.1`, Rust `1.99.1`, and release tokens ABI 4 bindings. The `--token-store` runner alternates three fresh processes per engine, warms 32 edit/equality pairs, then times 1,000 insert/delete pairs, 1,000 equality updates, and 10,000 line reads through actual `ContiguousTokensStore` methods. Every result word contributes to matching checksums. Store population and provider input construction remain outside timing. Provider arrays remain retained throughout, exercising their existing alias ownership. Times are medians in milliseconds.
+
+| Fixture | Lines | Tokens per line | Existing edit pairs | Rust edit pairs | Existing equality updates | Rust equality updates | Existing line reads | Rust line reads |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Small store | 32 | 4 | 1.25 | 4.31 | 0.72 | 1.49 | 2.70 | 2.67 |
+| Dense store | 1,024 | 128 | 6.04 | 8.17 | 3.57 | 3.59 | 30.60 | 31.46 |
+| Multiline edits | 32 | 4 | 1.52 | 2.83 | 0.82 | 1.90 | 2.95 | 2.71 |
+| Many short lines | 32,768 | 1 | 0.88 | 3.17 | 0.39 | 0.49 | 0.89 | 1.18 |
+
+Tokens span eight UTF-16 units. Positions cycle through 32 preconstructed interior ranges; multiline insertion joins back through an unknown inserted line and retains the original token loss/default metadata behavior. Single-line replacements now reuse one temporary native stream, and identical reference equality avoids two copied comparisons. Initial small/many-line equality timings were 2.19/0.83 milliseconds versus final 1.49/0.49; dense equality became close to the reference. Edit timings still regress. Line reads are close in two fixtures and slower in dense/many-line fixtures. The index owner preserves compatibility but does not yet improve these representative resource/latency workloads.
+
+| Fixture | Existing process peak RSS MiB | Rust process peak RSS MiB | Rust linear memory MiB |
+| --- | ---: | ---: | ---: |
+| Small store | 50.56 | 61.84 | 1.13 |
+| Dense store | 54.69 | 64.58 | 1.13 |
+| Multiline edits | 50.96 | 62.27 | 1.13 |
+| Many short lines | 78.45 | 89.39 | 1.81 |
+
+Process peak RSS remains higher with Rust in every fixture. The owner replaces the JavaScript line-reference index with a Rust vector and generated external references; encoded buffers retain JavaScript ownership, and temporary native streams still copy for mutation. Flush and disposal release references/index capacity without invalidating held buffers. Observations include loading, population, warm-up, all workloads, and checksum consumption; they do not establish whole-editor improvement. Final raw runs remain ignored in `.build/rust/token-store-benchmark.json`, with the initial capture in `.build/rust/token-store-benchmark-initial.json`.

@@ -15,9 +15,16 @@ import { LineTokens } from '../../src/vs/editor/common/tokens/lineTokens.js';
 import { IRustTokensModule, registerRustTokens, tryAppendRustContiguousTokens, tryEditRustSparseTokens, tryMergeRustSemanticTokens, tryRemoveRustSparseTokens, trySplitRustSparseTokens, tryUpdateRustContiguousTokens } from '../../src/vs/editor/common/tokens/rustTokens.js';
 import { ContiguousTokensEditing, EMPTY_LINE_TOKENS, toUint32Array } from '../../src/vs/editor/common/tokens/contiguousTokensEditing.js';
 import { ContiguousMultilineTokens } from '../../src/vs/editor/common/tokens/contiguousMultilineTokens.js';
+import { ContiguousTokensStore } from '../../src/vs/editor/common/tokens/contiguousTokensStore.js';
+import { countEOL } from '../../src/vs/editor/common/core/misc/eolCounter.js';
+import { DisposableStore } from '../../src/vs/base/common/lifecycle.js';
+import { errorHandler, setUnexpectedErrorHandler } from '../../src/vs/base/common/errors.js';
+import { EncodedTokenizationResult, IBackgroundTokenizationStore, ITokenizationSupport, TokenizationRegistry } from '../../src/vs/editor/common/languages.js';
+import { ILanguageService } from '../../src/vs/editor/common/languages/language.js';
+import { NullState, nullTokenize } from '../../src/vs/editor/common/languages/nullTokenize.js';
 import { SparseMultilineTokens } from '../../src/vs/editor/common/tokens/sparseMultilineTokens.js';
 import { SparseTokensStore } from '../../src/vs/editor/common/tokens/sparseTokensStore.js';
-import { createTextModel } from '../../src/vs/editor/test/common/testTextModel.js';
+import { createModelServices, createTextModel, instantiateTextModel } from '../../src/vs/editor/test/common/testTextModel.js';
 
 interface IRustModule extends IRustTextBufferModule {
 	default(options: { module_or_path: Uint8Array }): Promise<object>;
@@ -361,4 +368,204 @@ test('Rust contiguous token edits preserve multiline block behavior and held lin
 		withRust(() => actual.applyEdit(range, text));
 		assert.deepStrictEqual({ state: state(actual), backing: native.map(tokens => new Uint32Array(tokens.buffer)) }, { state: state(reference), backing: original.map(tokens => new Uint32Array(tokens.buffer)) });
 	}
+});
+
+test('Rust owning syntax stores preserve seeded model edits, line indexing, equality, and externally mutable buffers', () => {
+	let seed = 173;
+	const random = (limit: number) => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed % limit; };
+	let frees = 0;
+	class CountedStore extends rust.WasmContiguousTokensStore {
+		public override free(): void { frees++; super.free(); }
+	}
+	const codec = new LanguageIdCodec();
+	codec.register('rust');
+	codec.register('typescript');
+	const inserted = ['', 'a', '\uD800', '\uD83D\uDE00', '\r\n', 'first\nlast'];
+	for (let iteration = 0; iteration < 256; iteration++) {
+		const disposables = new DisposableStore();
+		try {
+			const model = disposables.add(createTextModel(('alpha beta gamma delta'.repeat(3) + '\n').repeat(16)));
+			const reference = disposables.add(new ContiguousTokensStore(codec));
+			const actual = withRust(() => disposables.add(new ContiguousTokensStore(codec)), { ...rust, WasmContiguousTokensStore: CountedStore });
+			disposables.add(model.onDidChangeContent(event => {
+				for (const change of event.changes) {
+					const [eols, firstLength] = countEOL(change.text);
+					reference.acceptEdit(change.range, eols, firstLength);
+					actual.acceptEdit(change.range, eols, firstLength);
+				}
+			}));
+			const referenceViews: Uint32Array[] = [];
+			const actualViews: Uint32Array[] = [];
+			const set = (line: number) => {
+				const length = model.getLineLength(line);
+				const ends = length === 0 ? [0] : Array.from(new Set([1 + random(length), 1 + random(length), length])).sort((first, second) => first - second);
+				const records = ends.flatMap(end => [end, random(0x100000000)]);
+				const original = iteration % 2 === 0 ? offsetView(records) : new Uint32Array(records);
+				const native = iteration % 2 === 0 ? offsetView(records) : new Uint32Array(records);
+				referenceViews.push(original);
+				actualViews.push(native);
+				assert.strictEqual(actual.setTokens('rust', line - 1, length, native, true), reference.setTokens('rust', line - 1, length, original, true));
+				assert.strictEqual(actual.setTokens('rust', line - 1, length, native, true), reference.setTokens('rust', line - 1, length, original, true));
+			};
+			for (let line = 1; line <= model.getLineCount(); line += 2) { set(line); }
+			const compare = () => {
+				assert.strictEqual(actual.hasTokens, reference.hasTokens);
+				for (let line = 1; line <= model.getLineCount() + 1; line++) {
+					const text = line <= model.getLineCount() ? model.getLineContent(line) : '';
+					const expectedErrors: string[] = [];
+					const actualErrors: string[] = [];
+					const previousHandler = errorHandler.getUnexpectedErrorHandler();
+					try {
+						setUnexpectedErrorHandler((error: Error) => expectedErrors.push(error.message));
+						const expected = reference.getTokens('typescript', line - 1, text).getEncodedTokens();
+						setUnexpectedErrorHandler((error: Error) => actualErrors.push(error.message));
+						const result = actual.getTokens('typescript', line - 1, text).getEncodedTokens();
+						assert.deepStrictEqual({ result, errors: actualErrors }, { result: expected, errors: expectedErrors }, `Syntax store ${iteration}/${line}`);
+					} finally { setUnexpectedErrorHandler(previousHandler); }
+				}
+				assert.deepStrictEqual(actualViews.map(tokens => new Uint32Array(tokens.buffer)), referenceViews.map(tokens => new Uint32Array(tokens.buffer)));
+			};
+			for (let index = 0; index < 16; index++) {
+				const first = 1 + random(model.getLineCount());
+				const last = first + random(Math.min(3, model.getLineCount() - first + 1));
+				const start = 1 + random(model.getLineLength(first) + 1);
+				const end = last === first ? start + random(model.getLineLength(last) - start + 2) : 1 + random(model.getLineLength(last) + 1);
+				const range = model.validateRange(new Range(first, start, last, end));
+				const text = inserted[random(inserted.length)];
+				model.applyEdits([{ range, text }]);
+				set(1 + random(model.getLineCount()));
+				// Token providers may mutate their retained arrays after publishing them.
+				const alias = random(referenceViews.length);
+				referenceViews[alias][1] ^= 0xFFFF0000;
+				actualViews[alias][1] ^= 0xFFFF0000;
+				compare();
+			}
+			assert.strictEqual(frees, iteration, 'Supported traces must retain the owning native store');
+			actual.flush();
+			reference.flush();
+			compare();
+		} finally { disposables.dispose(); }
+		assert.strictEqual(frees, iteration + 1);
+	}
+});
+
+test('Rust owning syntax stores retain unsupported state and aliases and release on fallback/model disposal', () => {
+	let frees = 0;
+	class CountedStore extends rust.WasmContiguousTokensStore {
+		public override free(): void { frees++; super.free(); }
+	}
+	const module = { ...rust, WasmContiguousTokensStore: CountedStore };
+	for (const invalid of [new Uint32Array([1]), new Uint32Array([1, 7, 3]), new Uint32Array()]) {
+		const disposables = new DisposableStore();
+		try {
+			const codec = new LanguageIdCodec();
+			const reference = disposables.add(new ContiguousTokensStore(codec));
+			const actual = withRust(() => disposables.add(new ContiguousTokensStore(codec)), module);
+			reference.setTokens('plaintext', 0, 3, invalid.slice(), true);
+			actual.setTokens('plaintext', 0, 3, invalid.slice(), true);
+			const range = new Range(1, 2, 1, 3);
+			reference.acceptEdit(range, 0, 1);
+			actual.acceptEdit(range, 0, 1);
+			const errors: string[] = [];
+			const previousHandler = errorHandler.getUnexpectedErrorHandler();
+			setUnexpectedErrorHandler((error: Error) => errors.push(error.message));
+			try {
+				assert.deepStrictEqual(actual.getTokens('plaintext', 0, 'text').getEncodedTokens(), reference.getTokens('plaintext', 0, 'text').getEncodedTokens());
+				assert.deepStrictEqual(errors, ['Token length and text length do not match!', 'Token length and text length do not match!']);
+			} finally { setUnexpectedErrorHandler(previousHandler); }
+		} finally { disposables.dispose(); }
+	}
+	const disposables = new DisposableStore();
+	try {
+		const codec = new LanguageIdCodec();
+		const reference = disposables.add(new ContiguousTokensStore(codec));
+		const actual = withRust(() => disposables.add(new ContiguousTokensStore(codec)), module);
+		const original = offsetView([3, 7]);
+		const native = offsetView([3, 7]);
+		reference.setTokens('plaintext', 1, 3, original, true);
+		actual.setTokens('plaintext', 1, 3, native, true);
+		const before = frees;
+		reference.setTokens('plaintext', 0, 2.5, null, true);
+		actual.setTokens('plaintext', 0, 2.5, null, true);
+		assert.strictEqual(frees, before + 1);
+		original[1] = native[1] = 0xFF000007;
+		assert.deepStrictEqual(actual.getTokens('plaintext', 1, 'tex').getEncodedTokens(), reference.getTokens('plaintext', 1, 'tex').getEncodedTokens());
+	} finally { disposables.dispose(); }
+	const before = frees;
+	const registration = registerRustTextBuffer(module);
+	let model: ReturnType<typeof createTextModel>;
+	try { model = createTextModel('text'); } finally { registration.dispose(); }
+	model.dispose();
+	assert.strictEqual(frees, before + 1);
+	const store = new rust.WasmContiguousTokensStore(EMPTY_LINE_TOKENS);
+	try {
+		assert.throws(() => store.accept_edit(new Float64Array([1])), /edit/);
+		assert.strictEqual(store.set_tokens(1, 262144, 3, null, true), undefined);
+		assert.strictEqual(store.accept_edit(new Float64Array([1, 2, 1, 1, 0, 0])), false);
+		assert.deepStrictEqual(store.export_lines(), []);
+	} finally { store.free(); }
+});
+
+test('Rust owning syntax stores retain shared source buffers through line joins and model debug stores release on replacement', () => {
+	const disposables = new DisposableStore();
+	let created = 0;
+	let freed = 0;
+	let backgroundCreated = 0;
+	let backgroundDisposed = 0;
+	const backgroundStores: IBackgroundTokenizationStore[] = [];
+	class CountedStore extends rust.WasmContiguousTokensStore {
+		constructor(empty: ArrayBuffer) { super(empty); created++; }
+		public override free(): void { freed++; super.free(); }
+	}
+	try {
+		const codec = new LanguageIdCodec();
+		const reference = disposables.add(new ContiguousTokensStore(codec));
+		const actual = withRust(() => disposables.add(new ContiguousTokensStore(codec)));
+		const original = offsetView([3, 7, 6, 9, 10, 11]);
+		const native = offsetView([3, 7, 6, 9, 10, 11]);
+		for (let line = 0; line < 2; line++) {
+			reference.setTokens('plaintext', line, 10, original, false);
+			actual.setTokens('plaintext', line, 10, native, false);
+		}
+		reference.acceptEdit(new Range(1, 3, 2, 4), 0, 1);
+		actual.acceptEdit(new Range(1, 3, 2, 4), 0, 1);
+		assert.deepStrictEqual(new Uint32Array(native.buffer), new Uint32Array(original.buffer));
+		const errors: string[] = [];
+		const previousHandler = errorHandler.getUnexpectedErrorHandler();
+		setUnexpectedErrorHandler((error: Error) => errors.push(error.message));
+		try {
+			const expected = reference.getTokens('plaintext', 0, 'joined').getEncodedTokens();
+			const firstErrors = errors.slice();
+			errors.length = 0;
+			const result = actual.getTokens('plaintext', 0, 'joined').getEncodedTokens();
+			assert.deepStrictEqual({ result, errors }, { result: expected, errors: firstErrors });
+		} finally { setUnexpectedErrorHandler(previousHandler); }
+		const services = createModelServices(disposables);
+		const languages = services.get(ILanguageService);
+		const language = 'rust-token-store-lifetime';
+		disposables.add(languages.registerLanguage({ id: language }));
+		const metadata = languages.languageIdCodec.encodeLanguageId(language) | 0x02008400;
+		const support: ITokenizationSupport = {
+			backgroundTokenizerShouldOnlyVerifyTokens: true,
+			getInitialState: () => NullState,
+			tokenize: () => nullTokenize(language, NullState),
+			tokenizeEncoded: (_line, _hasEOL, state) => new EncodedTokenizationResult(new Uint32Array([0, metadata]), [], state),
+			createBackgroundTokenizer: (_model, store) => {
+				backgroundCreated++;
+				backgroundStores.push(store);
+				return { requestTokens: () => { }, dispose: () => { backgroundDisposed++; } };
+			}
+		};
+		disposables.add(TokenizationRegistry.register(language, support));
+		disposables.add(registerRustTextBuffer({ ...rust, WasmContiguousTokensStore: CountedStore }));
+		const model = disposables.add(instantiateTextModel(services, 'first\nnext', language));
+		for (let index = 0; index < 20; index++) {
+			model.setValue(`value${index}\nnext`);
+			backgroundStores[backgroundStores.length - 1].setTokens([new ContiguousMultilineTokens(1, model.getLinesContent().map(line => new Uint32Array([line.length, metadata])))]);
+			model.tokenization.forceTokenization(2);
+			assert.strictEqual(created - freed, 2, 'Only current foreground and verification stores may remain live');
+		}
+		model.dispose();
+		assert.deepStrictEqual({ created, freed, backgroundCreated, backgroundDisposed }, { created: backgroundCreated + 1, freed: created, backgroundCreated, backgroundDisposed: backgroundCreated });
+	} finally { disposables.dispose(); }
 });

@@ -14,13 +14,25 @@ export interface IRustTokensModule {
 	split_sparse_tokens(tokens: Uint32Array, parameters: Float64Array): Uint32Array | undefined;
 	update_contiguous_tokens(tokens: Uint32Array, operation: number, first: number, second: number): number | undefined;
 	append_contiguous_tokens(first: Uint32Array, second: Uint32Array): Uint32Array | undefined;
+	WasmContiguousTokensStore: { new(empty: ArrayBuffer): IRustContiguousTokensStore };
+}
+
+/** Owns the line index; encoded buffers retain existing externally mutable references. */
+export interface IRustContiguousTokensStore {
+	has_tokens(): boolean;
+	flush(): void;
+	get_tokens(index: number): Uint32Array | ArrayBuffer | null;
+	set_tokens(language: number, index: number, textLength: number, tokens: Uint32Array | ArrayBuffer | null, checkEquality: boolean): boolean | undefined;
+	accept_edit(parameters: Float64Array): boolean;
+	export_lines(): (Uint32Array | ArrayBuffer | null)[];
+	free(): void;
 }
 
 let registeredModule: IRustTokensModule | undefined;
 
 /** Installs token composition for the initialized core's disposable scope. */
 export function registerRustTokens(module: IRustTokensModule): IDisposable {
-	if (typeof module.tokens_abi_version !== 'function' || module.tokens_abi_version() !== 3 || typeof module.merge_semantic_tokens !== 'function' || typeof module.update_sparse_tokens !== 'function' || typeof module.split_sparse_tokens !== 'function' || typeof module.update_contiguous_tokens !== 'function' || typeof module.append_contiguous_tokens !== 'function') {
+	if (typeof module.tokens_abi_version !== 'function' || module.tokens_abi_version() !== 4 || typeof module.merge_semantic_tokens !== 'function' || typeof module.update_sparse_tokens !== 'function' || typeof module.split_sparse_tokens !== 'function' || typeof module.update_contiguous_tokens !== 'function' || typeof module.append_contiguous_tokens !== 'function' || typeof module.WasmContiguousTokensStore !== 'function') {
 		throw new Error('The Rust token bindings do not match the current metadata contract');
 	}
 	if (registeredModule) { throw new Error('A Rust token module is already registered'); }
@@ -28,6 +40,11 @@ export function registerRustTokens(module: IRustTokensModule): IDisposable {
 	return toDisposable(() => {
 		if (registeredModule === module) { registeredModule = undefined; }
 	});
+}
+
+/** The caller immediately registers the owning store's generated free method for disposal. */
+export function createRustContiguousTokensStore(empty: ArrayBuffer): IRustContiguousTokensStore | undefined {
+	return registeredModule ? new registeredModule.WasmContiguousTokensStore(empty) : undefined;
 }
 
 /** Retains source identity while returning the native surviving length or shared-empty sentinel. */

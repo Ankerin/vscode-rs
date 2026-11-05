@@ -32,8 +32,8 @@ export class TokenizerSyntaxTokenBackend extends AbstractSyntaxTokenBackend {
 	private _defaultBackgroundTokenizer: DefaultBackgroundTokenizer | null = null;
 	private readonly _backgroundTokenizer = this._register(new MutableDisposable<IBackgroundTokenizer>());
 
-	private readonly _tokens = new ContiguousTokensStore(this._languageIdCodec);
-	private _debugBackgroundTokens: ContiguousTokensStore | undefined;
+	private readonly _tokens = this._register(new ContiguousTokensStore(this._languageIdCodec));
+	private readonly _debugBackgroundTokens = this._register(new MutableDisposable<ContiguousTokensStore>());
 	private _debugBackgroundStates: TrackingTokenizationStateStore<IState> | undefined;
 
 	private readonly _debugBackgroundTokenizer = this._register(new MutableDisposable<IBackgroundTokenizer>());
@@ -74,7 +74,7 @@ export class TokenizerSyntaxTokenBackend extends AbstractSyntaxTokenBackend {
 
 	public todo_resetTokenization(fireTokenChangeEvent: boolean = true): void {
 		this._tokens.flush();
-		this._debugBackgroundTokens?.flush();
+		this._debugBackgroundTokens.value?.flush();
 		if (this._debugBackgroundStates) {
 			this._debugBackgroundStates = new TrackingTokenizationStateStore(this._textModel.getLineCount());
 		}
@@ -155,12 +155,12 @@ export class TokenizerSyntaxTokenBackend extends AbstractSyntaxTokenBackend {
 			}
 
 			if (tokenizationSupport?.backgroundTokenizerShouldOnlyVerifyTokens && tokenizationSupport.createBackgroundTokenizer) {
-				this._debugBackgroundTokens = new ContiguousTokensStore(this._languageIdCodec);
+				this._debugBackgroundTokens.value = new ContiguousTokensStore(this._languageIdCodec);
 				this._debugBackgroundStates = new TrackingTokenizationStateStore(this._textModel.getLineCount());
 				this._debugBackgroundTokenizer.clear();
 				this._debugBackgroundTokenizer.value = tokenizationSupport.createBackgroundTokenizer(this._textModel, {
 					setTokens: (tokens) => {
-						this._debugBackgroundTokens?.setMultilineTokens(tokens, this._textModel);
+						this._debugBackgroundTokens.value?.setMultilineTokens(tokens, this._textModel);
 					},
 					setFontInfo: (changes: FontTokensUpdate) => {
 						this.setFontInfo(changes);
@@ -173,7 +173,7 @@ export class TokenizerSyntaxTokenBackend extends AbstractSyntaxTokenBackend {
 					},
 				});
 			} else {
-				this._debugBackgroundTokens = undefined;
+				this._debugBackgroundTokens.clear();
 				this._debugBackgroundStates = undefined;
 				this._debugBackgroundTokenizer.value = undefined;
 			}
@@ -195,7 +195,7 @@ export class TokenizerSyntaxTokenBackend extends AbstractSyntaxTokenBackend {
 				const [eolCount, firstLineLength] = countEOL(c.text);
 
 				this._tokens.acceptEdit(c.range, eolCount, firstLineLength);
-				this._debugBackgroundTokens?.acceptEdit(c.range, eolCount, firstLineLength);
+				this._debugBackgroundTokens.value?.acceptEdit(c.range, eolCount, firstLineLength);
 			}
 			this._debugBackgroundStates?.acceptChanges(e.changes);
 
@@ -283,9 +283,9 @@ export class TokenizerSyntaxTokenBackend extends AbstractSyntaxTokenBackend {
 			lineNumber - 1,
 			lineText
 		);
-		if (this._debugBackgroundTokens && this._debugBackgroundStates && this._tokenizer) {
+		if (this._debugBackgroundTokens.value && this._debugBackgroundStates && this._tokenizer) {
 			if (this._debugBackgroundStates.getFirstInvalidEndStateLineNumberOrMax() > lineNumber && this._tokenizer.store.getFirstInvalidEndStateLineNumberOrMax() > lineNumber) {
-				const backgroundResult = this._debugBackgroundTokens.getTokens(
+				const backgroundResult = this._debugBackgroundTokens.value.getTokens(
 					this._textModel.getLanguageId(),
 					lineNumber - 1,
 					lineText

@@ -12,33 +12,58 @@ import { ILanguageIdCodec } from '../languages.js';
 import { LanguageId, FontStyle, ColorId, StandardTokenType, MetadataConsts, TokenMetadata } from '../encodedTokenAttributes.js';
 import { ITextModel } from '../model.js';
 import { ContiguousMultilineTokens } from './contiguousMultilineTokens.js';
+import { Disposable, toDisposable } from '../../../base/common/lifecycle.js';
+import { createRustContiguousTokensStore, IRustContiguousTokensStore } from './rustTokens.js';
 
 /**
  * Represents contiguous tokens in a text model.
  */
-export class ContiguousTokensStore {
+export class ContiguousTokensStore extends Disposable {
 	private _lineTokens: (Uint32Array | ArrayBuffer | null)[];
 	private _len: number;
 	private readonly _languageIdCodec: ILanguageIdCodec;
+	private _native: IRustContiguousTokensStore | undefined;
 
 	constructor(languageIdCodec: ILanguageIdCodec) {
+		super();
 		this._lineTokens = [];
 		this._len = 0;
 		this._languageIdCodec = languageIdCodec;
+		this._native = createRustContiguousTokensStore(EMPTY_LINE_TOKENS);
+		this._register(toDisposable(() => {
+			this._native?.free();
+			this._native = undefined;
+			this._lineTokens = [];
+			this._len = 0;
+		}));
+	}
+
+	/** Transfers only the reference index when an unsupported operation needs the existing path. */
+	private _retainExistingState(): void {
+		if (!this._native) { return; }
+		this._lineTokens = this._native.export_lines();
+		this._len = this._lineTokens.length;
+		this._native.free();
+		this._native = undefined;
 	}
 
 	public flush(): void {
+		this._native?.flush();
 		this._lineTokens = [];
 		this._len = 0;
 	}
 
 	get hasTokens(): boolean {
+		if (this._native) { return this._native.has_tokens(); }
 		return this._lineTokens.length > 0;
 	}
 
 	public getTokens(topLevelLanguageId: string, lineIndex: number, lineText: string): LineTokens {
 		let rawLineTokens: Uint32Array | ArrayBuffer | null = null;
-		if (lineIndex < this._len) {
+		if (this._native && (!Number.isSafeInteger(lineIndex) || lineIndex < 0 || lineIndex > 2 ** 40)) { this._retainExistingState(); }
+		if (this._native) {
+			rawLineTokens = this._native.get_tokens(lineIndex);
+		} else if (lineIndex < this._len) {
 			rawLineTokens = this._lineTokens[lineIndex];
 		}
 
@@ -115,6 +140,11 @@ export class ContiguousTokensStore {
 	}
 
 	public setTokens(topLevelLanguageId: string, lineIndex: number, lineTextLength: number, _tokens: Uint32Array | ArrayBuffer | null, checkEquality: boolean): boolean {
+		if (this._native) {
+			const result = this._native.set_tokens(this._languageIdCodec.encodeLanguageId(topLevelLanguageId), lineIndex, lineTextLength, _tokens, checkEquality);
+			if (result !== undefined) { return result; }
+			this._retainExistingState();
+		}
 		const tokens = ContiguousTokensStore._massageTokens(this._languageIdCodec.encodeLanguageId(topLevelLanguageId), lineTextLength, _tokens);
 		this._ensureLine(lineIndex);
 		const oldTokens = this._lineTokens[lineIndex];
@@ -148,6 +178,10 @@ export class ContiguousTokensStore {
 	//#region Editing
 
 	public acceptEdit(range: IRange, eolCount: number, firstLineLength: number): void {
+		if (this._native) {
+			if (this._native.accept_edit(new Float64Array([range.startLineNumber, range.startColumn, range.endLineNumber, range.endColumn, eolCount, firstLineLength]))) { return; }
+			this._retainExistingState();
+		}
 		this._acceptDeleteRange(range);
 		this._acceptInsertText(new Position(range.startLineNumber, range.startColumn), eolCount, firstLineLength);
 	}
