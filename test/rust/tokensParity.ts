@@ -12,7 +12,7 @@ import { Range } from '../../src/vs/editor/common/core/range.js';
 import { IRustTextBufferModule, registerRustTextBuffer } from '../../src/vs/editor/common/model/rustTextBuffer/rustTextBuffer.js';
 import { LanguageIdCodec } from '../../src/vs/editor/common/services/languagesRegistry.js';
 import { LineTokens } from '../../src/vs/editor/common/tokens/lineTokens.js';
-import { IRustTokensModule, registerRustTokens, tryMergeRustSemanticTokens } from '../../src/vs/editor/common/tokens/rustTokens.js';
+import { IRustTokensModule, registerRustTokens, tryEditRustSparseTokens, tryMergeRustSemanticTokens, tryRemoveRustSparseTokens, trySplitRustSparseTokens } from '../../src/vs/editor/common/tokens/rustTokens.js';
 import { SparseMultilineTokens } from '../../src/vs/editor/common/tokens/sparseMultilineTokens.js';
 import { SparseTokensStore } from '../../src/vs/editor/common/tokens/sparseTokensStore.js';
 import { createTextModel } from '../../src/vs/editor/test/common/testTextModel.js';
@@ -134,5 +134,123 @@ test('Rust semantic overlays preserve real model tokens through edits, partial u
 	} finally {
 		reference.dispose();
 		actual.dispose();
+	}
+});
+
+function sparseState(piece: SparseMultilineTokens) {
+	return { start: piece.startLineNumber, end: piece.endLineNumber, range: piece.getRange(), empty: piece.isEmpty(), text: piece.toString() };
+}
+
+test('Rust sparse token edits preserve seeded block rebasing, boundaries, mutable aliases, and inactive suffixes', () => {
+	let seed = 157;
+	const random = (limit: number) => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed % limit; };
+	const insertions = ['', 'a', '0', 'Z', '_', ' ', 'xy', '\uD800', '\uD83D\uDE00', '\r', '\n', 'first\r\nlast', '\n\n'];
+	for (let iteration = 0; iteration < 1024; iteration++) {
+		const records = Array.from({ length: 32 }, (_, index) => {
+			const start = random(32);
+			return [Math.floor(index / 4), start, start + random(16), random(0x100000000)];
+		}).flat();
+		const original = offsetView(records);
+		const native = offsetView(records);
+		const blockStart = 1 + random(8);
+		const reference = SparseMultilineTokens.create(blockStart, original);
+		const actual = SparseMultilineTokens.create(blockStart, native);
+		for (let index = 0; index < 16; index++) {
+			const startLine = 1 + random(20);
+			const endLine = startLine + random(index % 4 === 0 ? 8 : 2);
+			const startColumn = 1 + random(32);
+			const endColumn = endLine === startLine ? startColumn + random(8) : 1 + random(32);
+			const range = new Range(startLine, startColumn, endLine, endColumn);
+			const text = insertions[random(insertions.length)];
+			const referenceAlias = reference.getLineTokens(reference.startLineNumber);
+			const actualAlias = actual.getLineTokens(actual.startLineNumber);
+			reference.applyEdit(range, text);
+			withRust(() => actual.applyEdit(range, text));
+			assert.deepStrictEqual({ state: sparseState(actual), backing: new Uint32Array(native.buffer), alias: actualAlias?.getEncodedTokens() }, { state: sparseState(reference), backing: new Uint32Array(original.buffer), alias: referenceAlias?.getEncodedTokens() }, `Sparse edit ${iteration}/${index}`);
+		}
+	}
+});
+
+test('Rust sparse removals and splits preserve touching endpoints, negative relative lines, and independent storage', () => {
+	let seed = 163;
+	const random = (limit: number) => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed % limit; };
+	for (let iteration = 0; iteration < 2048; iteration++) {
+		const records = Array.from({ length: 1 + random(64) }, (_, index) => [Math.floor(index / 4), random(32), random(32), random(0x100000000)]).flat();
+		const original = offsetView(records);
+		const native = offsetView(records);
+		const blockStart = 1 + random(16);
+		const reference = SparseMultilineTokens.create(blockStart, original);
+		const actual = SparseMultilineTokens.create(blockStart, native);
+		for (let index = 0; index < 4; index++) {
+			const start = 1 + random(32);
+			const range = new Range(start, 1 + random(32), start + random(8), 1 + random(32));
+			const expectedSplit = reference.split(range);
+			const actualSplit = withRust(() => actual.split(range));
+			assert.deepStrictEqual(actualSplit.map(sparseState), expectedSplit.map(sparseState), `Sparse split ${iteration}/${index}`);
+			for (let splitIndex = 0; splitIndex < 2; splitIndex++) {
+				expectedSplit[splitIndex].applyEdit(new Range(start, 1, start, 1), 'a\n');
+				withRust(() => actualSplit[splitIndex].applyEdit(new Range(start, 1, start, 1), 'a\n'));
+			}
+			assert.deepStrictEqual(actualSplit.map(sparseState), expectedSplit.map(sparseState));
+			reference.removeTokens(range);
+			withRust(() => actual.removeTokens(range));
+			assert.deepStrictEqual({ state: sparseState(actual), backing: new Uint32Array(native.buffer) }, { state: sparseState(reference), backing: new Uint32Array(original.buffer) }, `Sparse removal ${iteration}/${index}`);
+		}
+	}
+});
+
+test('Rust sparse mutation rejects malformed packets atomically and retains unsupported-state fallback', () => {
+	const tokens = offsetView([0, 1, 4, 7, 1, 0, 5, 9]);
+	const before = new Uint32Array(tokens.buffer.slice(0));
+	for (const parameters of [[], [2, 0], [0, 0], [1, 0]]) {
+		assert.throws(() => rust.update_sparse_tokens(tokens, new Float64Array(parameters)), /operation/);
+		assert.deepStrictEqual(new Uint32Array(tokens.buffer), before);
+	}
+	assert.throws(() => rust.update_sparse_tokens(tokens.subarray(0, 3), new Float64Array([0, 0, 0, 1, 0])), /contract/);
+	assert.deepStrictEqual(new Uint32Array(tokens.buffer), before);
+	assert.throws(() => rust.split_sparse_tokens(tokens, new Float64Array()), /range/);
+	assert.strictEqual(rust.update_sparse_tokens(tokens, new Float64Array([1, 1, 1, 2, 1, 1, 0, 0, 0, 0])), undefined);
+	assert.strictEqual(rust.update_sparse_tokens(tokens, new Float64Array([0, 0, Number.NaN, 1, 0])), undefined);
+	assert.strictEqual(rust.split_sparse_tokens(tokens, new Float64Array([0, 0, Number.POSITIVE_INFINITY, 0])), undefined);
+	assert.deepStrictEqual(new Uint32Array(tokens.buffer), before);
+	withRust(() => {
+		assert.strictEqual(tryRemoveRustSparseTokens(tokens, 3, 0, 0, 1, 0), undefined);
+		assert.strictEqual(trySplitRustSparseTokens(tokens, 2, 0, 0, 2 ** 41, 0), undefined);
+		assert.strictEqual(tryEditRustSparseTokens(tokens, 2, 1, new Range(1, 1, 1, 1), 0, 0.5, 0, 0), undefined);
+	});
+	for (const result of [new Float64Array([1]), new Float64Array([3, 1]), new Float64Array([0, Number.NaN])]) {
+		assert.throws(() => withRust(() => tryRemoveRustSparseTokens(tokens, 2, 0, 0, 1, 0), { ...rust, update_sparse_tokens: () => result }), /sparse token result/);
+	}
+	for (const result of [new Uint32Array([0]), new Uint32Array([8, 0]), new Uint32Array([0, 0, 1])]) {
+		assert.throws(() => withRust(() => trySplitRustSparseTokens(tokens, 2, 0, 0, 1, 0), { ...rust, split_sparse_tokens: () => result }), /sparse token split/);
+	}
+	const reference = SparseMultilineTokens.create(1, tokens.slice());
+	const actual = SparseMultilineTokens.create(1, tokens.slice());
+	const range = new Range(1, 2, 2, 2);
+	const expectedSplit = reference.split(range);
+	const actualSplit = withRust(() => actual.split(range), { ...rust, split_sparse_tokens: () => undefined });
+	assert.deepStrictEqual(actualSplit.map(sparseState), expectedSplit.map(sparseState));
+	reference.applyEdit(range, 'first\nlast');
+	withRust(() => actual.applyEdit(range, 'first\nlast'), { ...rust, update_sparse_tokens: () => undefined });
+	assert.deepStrictEqual(sparseState(actual), sparseState(reference));
+});
+
+test('Rust sparse edits preserve typed-array wrapping, word-edge affinity, and cleared block coordinates', () => {
+	for (const fixture of [
+		{ tokens: [0, 0, 6, 7, 0xFFFFFFFF, 0, 6, 9], range: new Range(1, 3, 1, 3), eolCount: 0xFFFFFFFF, firstLength: 1, lastLength: 2, firstCode: 97 },
+		{ tokens: [0, 0xFFFFFFFD, 0xFFFFFFFF, 7], range: new Range(1, 0xFFFFFFFE, 1, 0xFFFFFFFE), eolCount: 0, firstLength: 8, lastLength: 8, firstCode: 97 },
+		{ tokens: [0, 1, 3, 7, 0, 3, 5, 9], range: new Range(1, 4, 1, 4), eolCount: 0, firstLength: 1, lastLength: 1, firstCode: 97 },
+		{ tokens: [0, 1, 3, 7, 0, 3, 5, 9], range: new Range(1, 4, 1, 4), eolCount: 0, firstLength: 1, lastLength: 1, firstCode: 95 },
+		{ tokens: [0, 1, 3, 7], range: new Range(1, 1, 3, 1), eolCount: 1, firstLength: 0, lastLength: 0, firstCode: 10 },
+		{ tokens: [], range: new Range(1, 1, 1, 1), eolCount: 1, firstLength: 0, lastLength: 0, firstCode: 10 }
+	]) {
+		const { tokens, range, eolCount, firstLength, lastLength, firstCode } = fixture;
+		const original = offsetView(tokens);
+		const native = offsetView(tokens);
+		const reference = SparseMultilineTokens.create(1, original);
+		const actual = SparseMultilineTokens.create(1, native);
+		reference.acceptEdit(range, eolCount, firstLength, lastLength, firstCode);
+		withRust(() => actual.acceptEdit(range, eolCount, firstLength, lastLength, firstCode));
+		assert.deepStrictEqual({ state: sparseState(actual), backing: new Uint32Array(native.buffer) }, { state: sparseState(reference), backing: new Uint32Array(original.buffer) });
 	}
 });

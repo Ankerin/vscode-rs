@@ -9,6 +9,7 @@ import { IRange, Range } from '../core/range.js';
 import { countEOL } from '../core/misc/eolCounter.js';
 import { ITextModel } from '../model.js';
 import { RateLimiter } from './common.js';
+import { tryEditRustSparseTokens, tryRemoveRustSparseTokens, trySplitRustSparseTokens } from './rustTokens.js';
 
 /**
  * Represents sparse tokens over a contiguous range of lines.
@@ -95,6 +96,12 @@ export class SparseMultilineTokens {
 	}
 
 	public acceptEdit(range: IRange, eolCount: number, firstLineLength: number, lastLineLength: number, firstCharCode: number): void {
+		const native = this._tokens.tryAcceptRustEdit(this._startLineNumber, range, eolCount, firstLineLength, lastLineLength, firstCharCode);
+		if (native !== undefined) {
+			this._startLineNumber = native;
+			this._updateEndLineNumber();
+			return;
+		}
 		this._acceptDeleteRange(range);
 		this._acceptInsertText(new Position(range.startLineNumber, range.startColumn), eolCount, firstLineLength, lastLineLength, firstCharCode);
 		this._updateEndLineNumber();
@@ -270,6 +277,11 @@ class SparseMultilineTokensStorage {
 	}
 
 	public removeTokens(startDeltaLine: number, startChar: number, endDeltaLine: number, endChar: number): number {
+		const native = tryRemoveRustSparseTokens(this._tokens, this._tokenCount, startDeltaLine, startChar, endDeltaLine, endChar);
+		if (native) {
+			this._tokenCount = native[0];
+			return native[1];
+		}
 		const tokens = this._tokens;
 		const tokenCount = this._tokenCount;
 		let newTokenCount = 0;
@@ -312,6 +324,10 @@ class SparseMultilineTokensStorage {
 	}
 
 	public split(startDeltaLine: number, startChar: number, endDeltaLine: number, endChar: number): [SparseMultilineTokensStorage, SparseMultilineTokensStorage, number] {
+		const native = trySplitRustSparseTokens(this._tokens, this._tokenCount, startDeltaLine, startChar, endDeltaLine, endChar);
+		if (native) {
+			return [new SparseMultilineTokensStorage(native.first), new SparseMultilineTokensStorage(native.second), native.deltaLine];
+		}
 		const tokens = this._tokens;
 		const tokenCount = this._tokenCount;
 		const aTokens: number[] = [];
@@ -348,6 +364,14 @@ class SparseMultilineTokensStorage {
 		}
 
 		return [new SparseMultilineTokensStorage(new Uint32Array(aTokens)), new SparseMultilineTokensStorage(new Uint32Array(bTokens)), destFirstDeltaLine];
+	}
+
+	/** Applies native block edits without replacing arrays that may already be externally aliased. */
+	public tryAcceptRustEdit(blockStart: number, range: IRange, eolCount: number, firstLineLength: number, lastLineLength: number, firstCharCode: number): number | undefined {
+		const native = tryEditRustSparseTokens(this._tokens, this._tokenCount, blockStart, range, eolCount, firstLineLength, lastLineLength, firstCharCode);
+		if (!native) { return undefined; }
+		this._tokenCount = native[0];
+		return native[1];
 	}
 
 	public acceptDeleteRange(horizontalShiftForFirstLineTokens: number, startDeltaLine: number, startCharacter: number, endDeltaLine: number, endCharacter: number): void {

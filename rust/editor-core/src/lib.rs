@@ -11,6 +11,7 @@ mod indentation;
 mod model_edits;
 mod search;
 mod sequence_diff;
+mod sparse_tokens;
 mod text_buffer;
 mod text_change;
 mod text_chunk;
@@ -31,6 +32,10 @@ pub use sequence_diff::{
 	SequenceDiffResult, TextRange, compute_document_diff, compute_moved_lines,
 	dynamic_programming_diff, myers_diff, optimize_sequence_diffs, refine_character_diff,
 	refine_line_diff,
+};
+pub use sparse_tokens::{
+	SparseTokenEdit, SparseTokensUpdate, edit_sparse_tokens, remove_sparse_tokens,
+	split_sparse_tokens,
 };
 pub use text_buffer::{BufferError, Position, TextBuffer, TextEdit, TextSnapshot};
 pub use text_change::{CompressedTextChange, TextChange, UndoChangeBatch, compress_text_changes};

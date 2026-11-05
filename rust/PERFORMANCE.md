@@ -520,3 +520,25 @@ Short lines contain 32 UTF-16 units; dense lines contain 8,192. Unicode retains 
 | Clamped provider spans | 65.40 | 62.50 | 1.19 |
 
 Process peak RSS is higher with Rust in three fixtures and lower in the clamped fixture. These observations include module loading, setup, warm-up, and all measured merges. Temporary native result state is dropped after each call; no persistent token store is added. This is metadata composition evidence, not tokenization/rendering latency or whole-editor resource evidence. Raw runs remain ignored in `.build/rust/tokens-benchmark.json`.
+
+## Sparse semantic token adjustment observation
+
+Measured on November 6, 2026 with Windows x64, Node `24.22.1`, Rust `1.99.1`, and release tokens ABI 2 bindings. The `--sparse-tokens` runner alternates three fresh processes per engine. It warms 32 edit/split pairs, then times operations through actual `SparseMultilineTokens` methods. Editing includes insertion and its inverse deletion; splitting creates independent blocks and reads all resulting line-token views. Every backing/output word contributes to identical checksums inside timing. Record/position setup remains outside timing. Times are medians in milliseconds.
+
+| Fixture | Calls per workload | Tokens | Existing edit pairs | Rust edit pairs | Existing splits | Rust splits |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Small block | 10,000 | 8 | 8.37 | 27.50 | 3.27 | 8.25 |
+| Dense block | 1,000 | 8,192 | 406.28 | 407.91 | 706.18 | 642.91 |
+| Multiline insertion | 1,000 | 8,192 | 424.79 | 426.12 | 741.90 | 627.58 |
+| Unicode insertion | 1,000 | 8,192 | 402.83 | 410.53 | 701.24 | 617.02 |
+
+Tokens are distributed eight per line. Positions cycle through 32 preconstructed interior ranges; insertions contain one ASCII character, two lines, or lone/paired surrogate units. Multiline insertion intentionally cuts the enclosing semantic token with the original affinity rule; inverse deletion preserves that adjusted state. Dense split timings improve while edit timings remain close, including a Unicode regression. Small blocks are slower because allocation and generated transfers dominate their few records. No default promotion follows.
+
+| Fixture | Existing process peak RSS MiB | Rust process peak RSS MiB | Rust linear memory MiB |
+| --- | ---: | ---: | ---: |
+| Small block | 50.61 | 63.61 | 1.13 |
+| Dense block | 97.96 | 67.93 | 1.44 |
+| Multiline insertion | 97.77 | 68.38 | 1.44 |
+| Unicode insertion | 97.95 | 68.02 | 1.44 |
+
+Dense runs have lower process peak RSS in this capture; small blocks have higher RSS. Native splits avoid the two intermediate JavaScript number arrays, but generated input/result transfers and independent output buffers still allocate. Mutable input views retain JavaScript ownership and copy back after edits/removals; native adjustment adds no persistent store or duplicate document. These observations include module loading, warm-up, both workloads, and result consumption. They do not establish whole-editor memory or typing-latency improvement. Raw runs remain ignored in `.build/rust/sparse-tokens-benchmark.json`.
