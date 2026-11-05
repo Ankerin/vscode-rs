@@ -3,12 +3,35 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+use js_sys::Uint32Array;
 use wasm_bindgen::prelude::*;
 
 /// Identifies token metadata composition independently of storage and diff contracts.
 #[wasm_bindgen]
 pub fn tokens_abi_version() -> u32 {
-	10
+	11
+}
+
+/// Selects a mutable source view without transferring every sparse record into native memory.
+#[wasm_bindgen]
+pub fn sparse_line_token_range(tokens: Uint32Array, count: f64, desired: f64) -> Option<Vec<f64>> {
+	if !count.is_finite()
+		|| count < 0.0
+		|| count.fract() != 0.0
+		|| count * 4.0 > f64::from(tokens.length())
+		|| !tokens.length().is_multiple_of(4)
+		|| tokens.length() > 4 * 1024 * 1024
+		|| desired.is_nan()
+	{
+		return None;
+	}
+	let range = vscode_editor_core::find_sparse_line_tokens(count as usize, desired, |index| {
+		let offset = index as u32 * 4;
+		(offset < tokens.length()).then(|| tokens.get_index(offset))
+	});
+	Some(range.map_or_else(Vec::new, |(first, end)| {
+		vec![(first * 4) as f64, (end * 4) as f64]
+	}))
 }
 
 /// Copies edits back to the source view; -1 represents the editor's shared empty-line sentinel.

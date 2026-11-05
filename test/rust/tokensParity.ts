@@ -12,7 +12,7 @@ import { Range } from '../../src/vs/editor/common/core/range.js';
 import { IRustTextBufferModule, registerRustTextBuffer } from '../../src/vs/editor/common/model/rustTextBuffer/rustTextBuffer.js';
 import { LanguageIdCodec } from '../../src/vs/editor/common/services/languagesRegistry.js';
 import { LineTokens } from '../../src/vs/editor/common/tokens/lineTokens.js';
-import { IRustTokensModule, registerRustTokens, tryAppendRustContiguousTokens, tryEditRustSparseTokens, tryMergeRustSemanticTokens, tryRemoveRustSparseTokens, trySplitRustSparseTokens, tryUpdateRustContiguousTokens } from '../../src/vs/editor/common/tokens/rustTokens.js';
+import { IRustTokensModule, registerRustTokens, tryAppendRustContiguousTokens, tryEditRustSparseTokens, tryFindRustSparseLineTokens, tryMergeRustSemanticTokens, tryRemoveRustSparseTokens, trySplitRustSparseTokens, tryUpdateRustContiguousTokens } from '../../src/vs/editor/common/tokens/rustTokens.js';
 import { ContiguousTokensEditing, EMPTY_LINE_TOKENS, toUint32Array } from '../../src/vs/editor/common/tokens/contiguousTokensEditing.js';
 import { ContiguousMultilineTokens } from '../../src/vs/editor/common/tokens/contiguousMultilineTokens.js';
 import { ContiguousTokensStore } from '../../src/vs/editor/common/tokens/contiguousTokensStore.js';
@@ -51,6 +51,73 @@ function offsetView(values: number[]): Uint32Array {
 	backing.set(values, 3);
 	return backing.subarray(3, 3 + values.length);
 }
+
+test('Rust sparse line selection preserves seeded duplicate bounds, live source aliases, and inactive suffixes', () => {
+	let seed = 3721;
+	let calls = 0;
+	const random = (limit: number) => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed % limit; };
+	const module: IRustTokensModule = { ...rust, sparse_line_token_range: (tokens, count, desired) => { calls++; return rust.sparse_line_token_range(tokens, count, desired); } };
+	for (let trace = 0; trace < 1024; trace++) {
+		let line = 0;
+		const words = Array.from({ length: 1 + random(96) }, () => {
+			line += random(3);
+			return [line, random(16), random(32), random(2 ** 32)];
+		}).flat();
+		const first = offsetView(words);
+		const second = offsetView(words);
+		const reference = SparseMultilineTokens.create(5, first);
+		const actual = SparseMultilineTokens.create(5, second);
+		const read = (piece: SparseMultilineTokens, line: number) => {
+			const tokens = piece.getLineTokens(line)?.getEncodedTokens();
+			return tokens ? { words: Array.from(tokens), offset: tokens.byteOffset, length: tokens.length } : null;
+		};
+		const query = Array.from({ length: 24 }, () => 3 + random(line + 7));
+		assert.deepStrictEqual(withRust(() => query.map(line => read(actual, line)), module), query.map(line => read(reference, line)));
+		const expectedHeld = reference.getLineTokens(5 + first[0]);
+		const actualHeld = withRust(() => actual.getLineTokens(5 + second[0]), module);
+		for (const tokens of [first, second]) { tokens[1] = 27; tokens[3] ^= 0xFFFFFFFF; if (tokens.length > 4) { tokens[4] = tokens[0]; } }
+		assert.deepStrictEqual(actualHeld?.getEncodedTokens(), expectedHeld?.getEncodedTokens());
+		assert.deepStrictEqual(withRust(() => query.map(line => read(actual, line)), module), query.map(line => read(reference, line)));
+		const range = new Range(5, 1, 5 + Math.floor(line / 2), 4);
+		reference.removeTokens(range);
+		withRust(() => actual.removeTokens(range), module);
+		assert.deepStrictEqual(withRust(() => query.map(line => read(actual, line)), module), query.map(line => read(reference, line)));
+		assert.deepStrictEqual(new Uint32Array(second.buffer), new Uint32Array(first.buffer));
+	}
+	assert.ok(calls > 10000, 'Actual public piece queries dispatch the native selector');
+});
+
+test('Rust sparse line selection retains malformed ordering, provider subarray callbacks, and detached or unsupported states', () => {
+	for (const words of [[4, 0, 3, 7, 0, 0, 3, 9, 2, 1, 4, 11, 2, 4, 8, 13, 1, 2, 3, 17, 4, 0, 2, 19], [0, 0, 3, 7, 3], []]) {
+		const piece = SparseMultilineTokens.create(1, new Uint32Array(words));
+		const read = () => [0, 1, 1.5, 2, 3, 4, 5, 6, Number.NaN, Number.POSITIVE_INFINITY].map(line => piece.getLineTokens(line)?.getEncodedTokens());
+		assert.deepStrictEqual(withRust(read), read());
+	}
+	const failure = new Error('Original sparse source view failure');
+	class CallbackTokens extends Uint32Array {
+		public override subarray(): Uint32Array<ArrayBuffer> { throw failure; }
+	}
+	const callbacks = SparseMultilineTokens.create(1, new CallbackTokens([0, 0, 3, 7]));
+	assert.throws(() => withRust(() => callbacks.getLineTokens(1)), error => error === failure);
+	const tokens = new Uint32Array([0, 0, 3, 7]);
+	const detached = SparseMultilineTokens.create(1, tokens);
+	structuredClone(tokens.buffer, { transfer: [tokens.buffer] });
+	assert.deepStrictEqual(withRust(() => detached.getLineTokens(1)), detached.getLineTokens(1));
+	const backing = new Uint32Array([0, 0, 3, 7, 2, 1, 4, 9]);
+	withRust(() => {
+		assert.strictEqual(tryFindRustSparseLineTokens(backing, 1.5, 0), undefined);
+		assert.strictEqual(tryFindRustSparseLineTokens(backing, 3, 0), undefined);
+		assert.strictEqual(tryFindRustSparseLineTokens(backing, 2, Number.NaN), undefined);
+		assert.deepStrictEqual(tryFindRustSparseLineTokens(backing, 0, 0), new Float64Array([0, 4]));
+		assert.deepStrictEqual(tryFindRustSparseLineTokens(backing, 1, 2), new Float64Array());
+	});
+	assert.strictEqual(rust.sparse_line_token_range(backing, 3, 0), undefined);
+	assert.strictEqual(rust.sparse_line_token_range(new Uint32Array([0]), 0, 0), undefined);
+	for (const result of [new Float64Array([0]), new Float64Array([-4, 4]), new Float64Array([0, 12]), new Float64Array([1, 4])]) {
+		withRust(() => assert.throws(() => tryFindRustSparseLineTokens(backing, 2, 0), /sparse line token range/), { ...rust, sparse_line_token_range: () => result });
+	}
+	assert.throws(() => registerRustTokens({ ...rust, tokens_abi_version: () => 10 }), /metadata contract/);
+});
 
 test('Rust semantic overlays preserve seeded boundaries, all presentation masks, and source aliases', () => {
 	let seed = 151;

@@ -45,8 +45,8 @@ pub use sequence_diff::{
 	refine_line_diff,
 };
 pub use sparse_tokens::{
-	SparseTokenEdit, SparseTokensUpdate, edit_sparse_tokens, remove_sparse_tokens,
-	split_sparse_tokens,
+	SparseTokenEdit, SparseTokensUpdate, edit_sparse_tokens, find_sparse_line_tokens,
+	remove_sparse_tokens, split_sparse_tokens,
 };
 pub use text_buffer::{BufferError, Position, TextBuffer, TextEdit, TextSnapshot};
 pub use text_change::{CompressedTextChange, TextChange, UndoChangeBatch, compress_text_changes};

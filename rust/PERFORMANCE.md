@@ -12,6 +12,8 @@ Tokens ABI 9 still packs source lengths and transfers clipping results for seque
 
 Tokens ABI 10 preserves the original live JavaScript iterator and callback result array without a native duplicate. Iterator steps, field reads, range construction, callback dispatch, and map pushes still cross the boundary per token. Descriptor preflight scans the initial sequence, and callback-installed nonnumeric values require a caught host coercion. Fusing compatible callback-free consumers and retaining shared token ownership remain Phase 2 opportunities. No performance improvement is claimed for this correctness-focused traversal migration.
 
+Tokens ABI 11 avoids a full sparse record transfer for line selection. Each binary-search/duplicate-expansion read still crosses the host boundary, and each successful query returns a two-number typed array before the existing source-view construction. Shared piece ownership and fused selection/composition remain Phase 2 opportunities. No new benchmark or performance improvement claim accompanies this Phase 1 boundary.
+
 ## Method
 
 Run `pnpm run build-rust-editor` followed by `pnpm run benchmark-rust-editor`. The benchmark alternates the original and Rust implementations in three fresh Node processes per fixture each. Both use the actual existing `PieceTreeTextBuffer` wrapper and its model construction path. Rust uses a release WebAssembly build; the reference uses the current TypeScript sources bundled with the same esbuild recipe. Eight construction/disposal iterations warm the adapter and allocator before timing. The runner verifies matching workload checksums within each fixture. Keep other builds and workload-heavy processes stopped during measurement.

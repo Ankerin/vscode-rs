@@ -9,7 +9,7 @@ import { IRange, Range } from '../core/range.js';
 import { countEOL } from '../core/misc/eolCounter.js';
 import { ITextModel } from '../model.js';
 import { RateLimiter } from './common.js';
-import { tryEditRustSparseTokens, tryRemoveRustSparseTokens, trySplitRustSparseTokens } from './rustTokens.js';
+import { tryEditRustSparseTokens, tryFindRustSparseLineTokens, tryRemoveRustSparseTokens, trySplitRustSparseTokens } from './rustTokens.js';
 
 /**
  * Represents sparse tokens over a contiguous range of lines.
@@ -241,6 +241,8 @@ class SparseMultilineTokensStorage {
 	}
 
 	public getLineTokens(deltaLine: number): SparseLineTokens | null {
+		const native = tryFindRustSparseLineTokens(this._tokens, this._tokenCount, deltaLine);
+		if (native) { return native.length === 0 ? null : new SparseLineTokens(this._tokens.subarray(native[0], native[1])); }
 		let low = 0;
 		let high = this._getTokenCount() - 1;
 

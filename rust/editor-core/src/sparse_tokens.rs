@@ -27,6 +27,40 @@ pub struct SparseTokensUpdate {
 	pub start_line: i64,
 }
 
+/// Selects the original duplicate-line span using live records and the existing binary-search bounds.
+pub fn find_sparse_line_tokens(
+	count: usize,
+	desired: f64,
+	line: impl Fn(usize) -> Option<u32>,
+) -> Option<(usize, usize)> {
+	let mut low = 0;
+	let mut high = count as i64 - 1;
+	while (low as i64) < high {
+		let middle = low + (high as usize - low) / 2;
+		let middle_line = f64::from(line(middle)?);
+		if middle_line < desired {
+			low = middle + 1;
+		} else if middle_line > desired {
+			high = middle as i64 - 1;
+		} else {
+			let mut first = middle;
+			while first > low && line(first - 1).is_some_and(|value| f64::from(value) == desired) {
+				first -= 1;
+			}
+			let mut last = middle;
+			while (last as i64) < high
+				&& line(last + 1).is_some_and(|value| f64::from(value) == desired)
+			{
+				last += 1;
+			}
+			return Some((first, last + 1));
+		}
+	}
+	line(low)
+		.filter(|&value| f64::from(value) == desired)
+		.map(|_| (low, low + 1))
+}
+
 /// Removes touching tokens in place, preserving the original inactive record suffix.
 pub fn remove_sparse_tokens(
 	tokens: &mut [u32],
@@ -325,6 +359,27 @@ fn insert(tokens: &mut [[u32; 4]], delta_line: i64, character: i64, edit: &Spars
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn selection_keeps_duplicate_bounds_unsorted_records_and_zero_active_count_reads() {
+		let lines = [0, 0, 2, 2, 2, 4];
+		let read = |index| lines.get(index).copied();
+		assert_eq!(
+			[
+				find_sparse_line_tokens(6, 2.0, read),
+				find_sparse_line_tokens(6, 3.0, read),
+				find_sparse_line_tokens(6, 4.0, read),
+				find_sparse_line_tokens(0, 0.0, read),
+				find_sparse_line_tokens(0, 0.0, |_| None)
+			],
+			[Some((2, 5)), None, Some((5, 6)), Some((0, 1)), None]
+		);
+		let lines = [4, 0, 2, 2, 1, 4];
+		assert_eq!(
+			find_sparse_line_tokens(lines.len(), 2.0, |index| lines.get(index).copied()),
+			Some((2, 4))
+		);
+	}
 
 	#[test]
 	fn removal_preserves_inactive_suffix_and_rebases_survivors() {
