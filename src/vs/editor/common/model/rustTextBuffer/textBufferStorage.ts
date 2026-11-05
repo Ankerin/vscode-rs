@@ -9,6 +9,13 @@ import { Range } from '../../core/range.js';
 import { FindMatch, ITextSnapshot, SearchData } from '../../model.js';
 import { StringBuffer } from '../pieceTreeTextBuffer/pieceTreeBase.js';
 
+/** A replacement in the original document's UTF-16 coordinates, ordered from bottom to top. */
+export interface ITextBufferStorageEdit {
+	readonly rangeOffset: number;
+	readonly rangeLength: number;
+	readonly text: string;
+}
+
 /** Storage operations beneath the existing edit, undo, and notification implementation. */
 export interface ITextBufferStorage {
 	getEOL(): '\r\n' | '\n';
@@ -27,6 +34,8 @@ export interface ITextBufferStorage {
 	getLineLength(lineNumber: number): number;
 	insert(offset: number, value: string, eolNormalized?: boolean): void;
 	delete(offset: number, length: number): void;
+	/** Applies validated replacements together when the storage supports atomic batches. */
+	applyEdits?(operations: readonly ITextBufferStorageEdit[]): void;
 	findMatchesLineByLine(searchRange: Range, searchData: SearchData, captureMatches: boolean, limitResultCount: number): FindMatch[];
 }
 

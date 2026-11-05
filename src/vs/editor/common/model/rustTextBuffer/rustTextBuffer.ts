@@ -9,7 +9,7 @@ import { Range } from '../../core/range.js';
 import { FindMatch, ITextSnapshot, SearchData } from '../../model.js';
 import { Searcher, createFindMatch, isValidMatch } from '../textModelSearch.js';
 import { StringBuffer } from '../pieceTreeTextBuffer/pieceTreeBase.js';
-import { ITextBufferStorage, registerTextBufferStorageFactory } from './textBufferStorage.js';
+import { ITextBufferStorage, ITextBufferStorageEdit, registerTextBufferStorageFactory } from './textBufferStorage.js';
 
 /** The generated binding surface; UTF-16 arrays preserve JavaScript string semantics. */
 export interface IRustTextBuffer {
@@ -17,6 +17,7 @@ export interface IRustTextBuffer {
 	line_count(): number;
 	replace(offset: number, length: number, units: Uint16Array): void;
 	replace_text(offset: number, length: number, text: string): void;
+	apply_edits(ranges: Uint32Array, units: Uint16Array): void;
 	slice(offset: number, length: number): Uint16Array;
 	slice_text(offset: number, length: number): string | Uint16Array;
 	offset_at(lineNumber: number, column: number): number;
@@ -194,6 +195,36 @@ class RustTextBufferStorage implements ITextBufferStorage, IDisposable {
 		this._cachedLines = undefined;
 	}
 
+	public applyEdits(operations: readonly ITextBufferStorageEdit[]): void {
+		if (operations.length === 0) {
+			return;
+		}
+		if (operations.length === 1) {
+			const operation = operations[0];
+			this.replace(operation.rangeOffset, operation.rangeLength, operation.text);
+		} else {
+			let length = 0;
+			for (const operation of operations) {
+				length += operation.text.length;
+			}
+			const ranges = new Uint32Array(operations.length * 4);
+			const units = new Uint16Array(length);
+			let offset = 0;
+			for (let index = 0; index < operations.length; index++) {
+				const operation = operations[operations.length - index - 1];
+				ranges[index * 4] = operation.rangeOffset;
+				ranges[index * 4 + 1] = operation.rangeLength;
+				ranges[index * 4 + 2] = offset;
+				ranges[index * 4 + 3] = operation.text.length;
+				for (let unit = 0; unit < operation.text.length; unit++) {
+					units[offset++] = operation.text.charCodeAt(unit);
+				}
+			}
+			this._buffer.apply_edits(ranges, units);
+		}
+		this._cachedLines = undefined;
+	}
+
 	private replace(offset: number, length: number, text: string): void {
 		if (containsSurrogates.test(text)) {
 			this._buffer.replace(offset, length, toUnits(text));
@@ -276,7 +307,7 @@ class RustTextBufferStorage implements ITextBufferStorage, IDisposable {
 
 /** Installs an initialized Rust module for new models. Dispose the registration to restore defaults. */
 export function registerRustTextBuffer(module: IRustTextBufferModule): IDisposable {
-	if (typeof module.text_buffer_abi_version !== 'function' || module.text_buffer_abi_version() !== 2) {
+	if (typeof module.text_buffer_abi_version !== 'function' || module.text_buffer_abi_version() !== 3) {
 		throw new Error('The Rust text buffer bindings do not match the current storage contract');
 	}
 	return registerTextBufferStorageFactory((chunks, eol, eolNormalized) => new RustTextBufferStorage(module, chunks, eol, eolNormalized));

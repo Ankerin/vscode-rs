@@ -317,6 +317,39 @@ impl Random {
 }
 
 #[test]
+fn seeded_batches_match_flat_replacements_and_retain_original_snapshots() {
+	let mut random = Random(42);
+	for _ in 0..256 {
+		let original = random.text(4096);
+		let mut reference = original.clone();
+		let mut buffer = TextBuffer::new(&original);
+		let snapshot = buffer.snapshot();
+		let mut replacements = Vec::new();
+		let mut offset = 0;
+		for _ in 0..16 {
+			let start = (offset + random.next(129)).min(original.len());
+			let end = (start + random.next(9)).min(original.len());
+			let length = random.next(33);
+			replacements.push((start..end, random.text(length)));
+			offset = end;
+		}
+		for (range, text) in replacements.iter().rev() {
+			reference.splice(range.clone(), text.iter().copied());
+		}
+		let edits: Vec<_> = replacements
+			.iter()
+			.map(|(range, text)| TextEdit {
+				range: range.clone(),
+				text,
+			})
+			.collect();
+		buffer.apply_edits(&edits).unwrap();
+		assert_matches(&buffer, &reference);
+		assert_eq!(collect_snapshot(snapshot), original);
+	}
+}
+
+#[test]
 fn seeded_edits_match_a_flat_reference_and_keep_tree_balanced() {
 	for seed in 1..=16 {
 		let mut random = Random(seed);

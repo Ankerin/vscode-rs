@@ -125,11 +125,20 @@ impl TextBuffer {
 			}
 			previous_end = edit.range.end;
 		}
-		let mut updated = self.clone();
-		for edit in edits.iter().rev() {
-			updated.replace(edit.range.clone(), edit.text)?;
+		let mut updated = None;
+		let mut tail = self.root.clone();
+		let mut offset = 0;
+		for edit in edits {
+			if edit.range.is_empty() && edit.text.is_empty() {
+				continue;
+			}
+			let (before, rest) = tree::split(tail, edit.range.start - offset);
+			let (_, after) = tree::split(rest, edit.range.len());
+			updated = tree::concat(tree::concat(updated, before), tree::from_units(edit.text));
+			tail = after;
+			offset = edit.range.end;
 		}
-		*self = updated;
+		self.root = tree::concat(updated, tail);
 		Ok(())
 	}
 

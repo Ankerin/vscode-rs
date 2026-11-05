@@ -74,6 +74,20 @@ try {
 		}
 	});
 
+	const batchDocument = createTextBuffer(text, DefaultEndOfLine.LF);
+	try {
+		measure('batch_200_multicursor_edits_ms', () => {
+			for (let iteration = 0; iteration < 200; iteration++) {
+				const length = batchDocument.textBuffer.getLength();
+				const operations = Array.from({ length: 32 }, (_, index) => new ValidAnnotatedEditOperation(null, batchDocument.textBuffer.getRangeAt(Math.floor((index + 1) * length / 33), 0), 'inserted', false, false, false));
+				batchDocument.textBuffer.applyEdits(operations, false, false);
+			}
+		});
+		checksum += batchDocument.textBuffer.getLength();
+	} finally {
+		batchDocument.disposable.dispose();
+	}
+
 	const document = createTextBuffer(text, DefaultEndOfLine.LF);
 	const current = document.textBuffer;
 	try {

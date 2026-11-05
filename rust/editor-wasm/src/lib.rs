@@ -5,7 +5,7 @@
 
 //! Typed WebAssembly bindings. Text crosses the boundary as UTF-16, never a lossy Rust string.
 
-use vscode_editor_core::{BufferError, Position, TextBuffer, TextSnapshot};
+use vscode_editor_core::{BufferError, Position, TextBuffer, TextEdit, TextSnapshot};
 use wasm_bindgen::prelude::*;
 
 mod text_transfer;
@@ -13,7 +13,7 @@ mod text_transfer;
 /// Identifies the storage contract independently of the binding generator's version.
 #[wasm_bindgen]
 pub fn text_buffer_abi_version() -> u32 {
-	2
+	3
 }
 
 #[wasm_bindgen]
@@ -61,6 +61,35 @@ impl WasmTextBuffer {
 			.checked_add(length)
 			.ok_or(BufferError::InvalidRange)?;
 		Ok(self.buffer.replace_text(offset..end, text)?)
+	}
+
+	/// Receives ascending replacements as offset, length, text offset, and text length tuples.
+	pub fn apply_edits(&mut self, ranges: &[u32], units: &[u16]) -> Result<(), JsError> {
+		let (ranges, remainder) = ranges.as_chunks::<4>();
+		if !remainder.is_empty() {
+			return Err(BufferError::InvalidRange.into());
+		}
+		let edits: Result<Vec<_>, BufferError> = ranges
+			.iter()
+			.map(|range| {
+				let start = range[0] as usize;
+				let end = start
+					.checked_add(range[1] as usize)
+					.ok_or(BufferError::InvalidRange)?;
+				let text_start = range[2] as usize;
+				let text_end = text_start
+					.checked_add(range[3] as usize)
+					.ok_or(BufferError::InvalidRange)?;
+				let text = units
+					.get(text_start..text_end)
+					.ok_or(BufferError::InvalidRange)?;
+				Ok(TextEdit {
+					range: start..end,
+					text,
+				})
+			})
+			.collect();
+		Ok(self.buffer.apply_edits(&edits?)?)
 	}
 
 	pub fn slice(&self, offset: usize, length: usize) -> Result<Vec<u16>, JsError> {

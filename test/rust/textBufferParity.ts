@@ -93,9 +93,30 @@ function compareBuffers(reference: PieceTreeTextBuffer, actual: PieceTreeTextBuf
 }
 
 test('Rust storage rejects stale bindings before registering a model factory', () => {
-	assert.throws(() => registerRustTextBuffer({ ...rust, text_buffer_abi_version: () => 1 }), /storage contract/);
+	for (const version of [1, 2]) {
+		assert.throws(() => registerRustTextBuffer({ ...rust, text_buffer_abi_version: () => version }), /storage contract/);
+	}
 	const registration = registerRustTextBuffer(rust);
 	registration.dispose();
+});
+
+test('Rust binding batches validate every original range and text slice before changing the document', () => {
+	const original = new Uint16Array([97, 98, 99, 100, 101, 102]);
+	const buffer = new rust.WasmTextBuffer(original);
+	try {
+		for (const ranges of [
+			[0, 0],
+			[0, 1, 0, 1, 5, 2, 0, 1],
+			[0, 1, 0, 1, 3, 1, 1, 2],
+			[0, 3, 0, 1, 2, 1, 0, 1],
+			[3, 0, 0, 1, 1, 0, 0, 1]
+		]) {
+			assert.throws(() => buffer.apply_edits(new Uint32Array(ranges), new Uint16Array([65])));
+			assert.deepStrictEqual(buffer.slice(0, buffer.length()), original);
+		}
+		buffer.apply_edits(new Uint32Array([1, 0, 0, 1, 1, 0, 1, 1, 3, 2, 2, 2]), new Uint16Array([65, 66, 0xD800, 0xDC00]));
+		assert.deepStrictEqual(buffer.slice(0, buffer.length()), new Uint16Array([97, 65, 66, 98, 99, 0xD800, 0xDC00, 102]));
+	} finally { buffer.free(); }
 });
 
 test('Rust storage preserves chunked UTF-16 input, BOM, and both default EOLs', context => {
@@ -194,6 +215,28 @@ test('Rust storage produces identical edits, inverse edits, and notifications', 
 	actual.applyEdits(annotate(actualEdits.reverseEdits!), true, false);
 	compareBuffers(reference, actual);
 	assert.deepStrictEqual([actualEvents, referenceEvents], [2, 2]);
+});
+
+test('Rust storage batches keep touching insertions, tracked edits, undo text, and snapshots in order', context => {
+	for (const tracked of [false, true]) {
+		const [reference, actual] = createPair(context, ['one\r\n'.repeat(256)]);
+		const previous = readSnapshot(reference.createSnapshot(false));
+		const snapshot = actual.createSnapshot(false);
+		const operations = [
+			new ValidAnnotatedEditOperation(null, new Range(1, 2, 1, 2), 'first\uD800', false, false, tracked),
+			new ValidAnnotatedEditOperation(null, new Range(1, 2, 1, 3), 'changed\nline', false, false, tracked),
+			new ValidAnnotatedEditOperation(null, new Range(1, 2, 1, 2), 'second\uDC00', false, false, tracked),
+			...Array.from({ length: tracked ? 1000 : 32 }, (_, index) => new ValidAnnotatedEditOperation(null, new Range(200, 2, 200, 2), String(index), false, false, tracked))
+		];
+		const expected = reference.applyEdits(operations, true, true);
+		const result = actual.applyEdits(operations, true, true);
+		assert.deepStrictEqual(result, expected);
+		compareBuffers(reference, actual);
+		assert.strictEqual(readSnapshot(snapshot), previous);
+		reference.applyEdits(annotate(expected.reverseEdits!), true, false);
+		actual.applyEdits(annotate(result.reverseEdits!), true, false);
+		compareBuffers(reference, actual);
+	}
 });
 
 test('Rust storage keeps snapshots stable while edits and EOL changes continue', context => {

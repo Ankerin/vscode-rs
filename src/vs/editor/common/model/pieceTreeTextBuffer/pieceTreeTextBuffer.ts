@@ -496,6 +496,10 @@ export class PieceTreeTextBuffer extends Disposable implements ITextBuffer {
 		operations.sort(PieceTreeTextBuffer._sortOpsDescending);
 
 		const contentChanges: IInternalModelContentChange[] = [];
+		const appliedInStorage = !!this._pieceTree.applyEdits;
+		if (this._pieceTree.applyEdits) {
+			this._pieceTree.applyEdits(operations);
+		}
 
 		// operations are from bottom to top
 		for (let i = 0; i < operations.length; i++) {
@@ -511,12 +515,12 @@ export class PieceTreeTextBuffer extends Disposable implements ITextBuffer {
 				continue;
 			}
 
-			if (op.text) {
+			if (!appliedInStorage && op.text) {
 				// replacement
 				this._pieceTree.delete(op.rangeOffset, op.rangeLength);
 				this._pieceTree.insert(op.rangeOffset, op.text, true);
 
-			} else {
+			} else if (!appliedInStorage) {
 				// deletion
 				this._pieceTree.delete(op.rangeOffset, op.rangeLength);
 			}
