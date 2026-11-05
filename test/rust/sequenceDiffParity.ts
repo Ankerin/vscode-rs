@@ -11,13 +11,14 @@ import { pathToFileURL } from 'node:url';
 import { DateTimeout, DiffAlgorithmResult, InfiniteTimeout } from '../../src/vs/editor/common/diff/defaultLinesDiffComputer/algorithms/diffAlgorithm.js';
 import { DynamicProgrammingDiffing } from '../../src/vs/editor/common/diff/defaultLinesDiffComputer/algorithms/dynamicProgrammingDiffing.js';
 import { MyersDiffAlgorithm } from '../../src/vs/editor/common/diff/defaultLinesDiffComputer/algorithms/myersDiffAlgorithm.js';
-import { registerRustSequenceDiff, tryComputeRustCharacterDiff, tryComputeRustLineAlignment, tryComputeRustLineDiff } from '../../src/vs/editor/common/diff/defaultLinesDiffComputer/algorithms/rustSequenceDiff.js';
+import { registerRustSequenceDiff, tryComputeRustCharacterDiff, tryComputeRustLineAlignment, tryComputeRustLineDiff, tryComputeRustMovedLines } from '../../src/vs/editor/common/diff/defaultLinesDiffComputer/algorithms/rustSequenceDiff.js';
 import { DefaultLinesDiffComputer } from '../../src/vs/editor/common/diff/defaultLinesDiffComputer/defaultLinesDiffComputer.js';
 import { extendDiffsToEntireWordIfAppropriate, optimizeSequenceDiffs, removeShortMatches, removeVeryShortMatchingLinesBetweenDiffs, removeVeryShortMatchingTextBetweenLongDiffs } from '../../src/vs/editor/common/diff/defaultLinesDiffComputer/heuristicSequenceOptimizations.js';
 import { LineSequence } from '../../src/vs/editor/common/diff/defaultLinesDiffComputer/lineSequence.js';
 import { LinesSliceCharSequence } from '../../src/vs/editor/common/diff/defaultLinesDiffComputer/linesSliceCharSequence.js';
 import { Range } from '../../src/vs/editor/common/core/range.js';
 import { RangeMapping } from '../../src/vs/editor/common/diff/rangeMapping.js';
+import { computeMovedLines } from '../../src/vs/editor/common/diff/defaultLinesDiffComputer/computeMovedLines.js';
 import { IRustTextBufferModule, registerRustTextBuffer } from '../../src/vs/editor/common/model/rustTextBuffer/rustTextBuffer.js';
 import { ArraySequence } from './testSequence.js';
 
@@ -321,4 +322,58 @@ test('Rust line refinement validates weights and retains timeout latching and cu
 	assert.throws(() => rust.diff_lines(units, units, offsets, offsets, new Float64Array()), /scores/);
 	assert.throws(() => rust.diff_lines(units, units, new Uint32Array([0, 2]), offsets, new Float64Array([1])), /ranges/);
 	assert.throws(() => rust.diff_lines(units, units, offsets, offsets, new Float64Array([1]), () => { throw new Error('Line timeout failure'); }), /Line timeout failure/);
+});
+
+test('Rust move detection preserves seeded block rotations, approximate moves, and repeated triples', () => {
+	let seed = 41;
+	const random = (limit: number) => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed % limit; };
+	const computer = new DefaultLinesDiffComputer();
+	const options = { ignoreTrimWhitespace: false, maxComputationTimeMs: 0, computeMoves: false };
+	const alphabet = ['first repeated line', 'second repeated line', 'third repeated line', '\uD800', '\uDC00', '\uFEFF', '\t', 'a', ''];
+	for (let iteration = 0; iteration < 512; iteration++) {
+		const blocks = Array.from({ length: 3 + random(6) }, (_, block) => Array.from({ length: 3 + random(6) }, (_, line) => iteration % 3 === 0 ? alphabet[line % alphabet.length] : `block ${block} line ${line} long enough`));
+		const original = blocks.flat();
+		const reordered = blocks.slice();
+		for (let index = reordered.length - 1; index > 0; index--) {
+			const other = random(index + 1);
+			[reordered[index], reordered[other]] = [reordered[other], reordered[index]];
+		}
+		const modified = reordered.flat().map((line, index) => iteration % 2 === 0 && index % 7 === 0 ? `${line} changed` : line);
+		const changes = computer.computeDiff(original, modified, options).changes.slice();
+		const { originalHashes, modifiedHashes } = alignLinesReference(original, modified);
+		const reference = computeMovedLines(changes, original, modified, originalHashes, modifiedHashes, InfiniteTimeout.instance);
+		assert.deepStrictEqual(withRust(() => tryComputeRustMovedLines(changes, original, modified, originalHashes, modifiedHashes, InfiniteTimeout.instance)), reference, `Moved blocks ${iteration}`);
+	}
+});
+
+test('Rust move detection validates packets and retains deadline latching and fallback', () => {
+	const original = ['alpha line one', 'alpha line two', 'alpha line three', 'beta line one', 'beta line two', 'beta line three'];
+	const modified = [...original.slice(3), ...original.slice(0, 3)];
+	const changes = new DefaultLinesDiffComputer().computeDiff(original, modified, { ignoreTrimWhitespace: false, maxComputationTimeMs: 0, computeMoves: false }).changes.slice();
+	const { originalHashes, modifiedHashes } = alignLinesReference(original, modified);
+	const reference = computeMovedLines(changes, original, modified, originalHashes, modifiedHashes, InfiniteTimeout.instance);
+	let checks = 0;
+	assert.strictEqual(withRust(() => tryComputeRustMovedLines(changes, original, modified, originalHashes, modifiedHashes, { isValid: () => { checks++; return true; } })), undefined);
+	assert.strictEqual(checks, 0);
+	let attempts = 0;
+	let registration = registerRustSequenceDiff({ ...rust, moved_lines: () => { attempts++; return undefined; } });
+	try {
+		assert.deepStrictEqual({ moves: computeMovedLines(changes, original, modified, originalHashes, modifiedHashes, InfiniteTimeout.instance), attempts }, { moves: reference, attempts: 1 });
+	} finally {
+		registration.dispose();
+	}
+	const timeout = new DateTimeout(30000);
+	registration = registerRustSequenceDiff({ ...rust, moved_lines: (...args) => { args[6] = Number.NEGATIVE_INFINITY; return rust.moved_lines(...args); } });
+	try {
+		assert.deepStrictEqual({ moves: tryComputeRustMovedLines(changes, original, modified, originalHashes, modifiedHashes, timeout), valid: timeout.isValid() }, { moves: [], valid: false });
+	} finally {
+		registration.dispose();
+	}
+	const units = new Uint16Array([97]);
+	const offsets = new Uint32Array([0, 1]);
+	const hashes = new Uint32Array([0, 0]);
+	assert.throws(() => rust.moved_lines(units, units, new Uint32Array([0, 2]), offsets, hashes, new Uint32Array()), /ranges/);
+	assert.throws(() => rust.moved_lines(units, units, offsets, offsets, hashes, new Uint32Array([0])), /ranges/);
+	assert.strictEqual(rust.moved_lines(units, units, offsets, offsets, new Uint32Array([0]), new Uint32Array()), undefined);
+	assert.strictEqual(rust.moved_lines(units, units, offsets, offsets, hashes, new Uint32Array([0, 2, 0, 1])), undefined);
 });

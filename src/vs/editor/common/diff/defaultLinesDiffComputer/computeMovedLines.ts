@@ -13,6 +13,7 @@ import { LinesSliceCharSequence } from './linesSliceCharSequence.js';
 import { LineRangeFragment, isSpace } from './utils.js';
 import { MyersDiffAlgorithm } from './algorithms/myersDiffAlgorithm.js';
 import { Range } from '../../core/range.js';
+import { tryComputeRustMovedLines } from './algorithms/rustSequenceDiff.js';
 
 export function computeMovedLines(
 	changes: DetailedLineRangeMapping[],
@@ -22,6 +23,10 @@ export function computeMovedLines(
 	hashedModifiedLines: number[],
 	timeout: ITimeout
 ): LineRangeMapping[] {
+	const native = tryComputeRustMovedLines(changes, originalLines, modifiedLines, hashedOriginalLines, hashedModifiedLines, timeout);
+	if (native) {
+		return native;
+	}
 	let { moves, excludedChanges } = computeMovesFromSimpleDeletionsToSimpleInsertions(changes, originalLines, modifiedLines, timeout);
 
 	if (!timeout.isValid()) { return []; }

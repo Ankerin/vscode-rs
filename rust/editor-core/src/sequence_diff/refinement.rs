@@ -50,6 +50,10 @@ pub struct CharacterSequence {
 }
 
 impl CharacterSequence {
+	pub(super) fn elements(&self) -> &[u16] {
+		&self.elements
+	}
+
 	/// The input contains exactly the lines touched by `range`, including its final line.
 	pub fn new(
 		lines: &[&[u16]],

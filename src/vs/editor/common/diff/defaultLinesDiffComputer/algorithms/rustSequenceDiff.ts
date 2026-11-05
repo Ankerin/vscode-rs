@@ -5,8 +5,9 @@
 
 import { IDisposable, toDisposable } from '../../../../../base/common/lifecycle.js';
 import { OffsetRange } from '../../../core/ranges/offsetRange.js';
+import { LineRange } from '../../../core/ranges/lineRange.js';
 import { Range } from '../../../core/range.js';
-import { RangeMapping } from '../../rangeMapping.js';
+import { DetailedLineRangeMapping, LineRangeMapping, RangeMapping } from '../../rangeMapping.js';
 import { DateTimeout, DiffAlgorithmResult, InfiniteTimeout, ISequence, ITimeout, SequenceDiff } from './diffAlgorithm.js';
 
 /** Generated sequence alignment bindings, independent of the storage ABI. */
@@ -17,6 +18,7 @@ export interface IRustSequenceDiffModule {
 	optimize_diff(original: Float64Array, modified: Float64Array, originalStrong: Uint32Array, modifiedStrong: Uint32Array, originalScores: Float64Array, modifiedScores: Float64Array, ranges: Uint32Array): Uint32Array | undefined;
 	refine_diff(original: Uint16Array, modified: Uint16Array, originalOffsets: Uint32Array, modifiedOffsets: Uint32Array, settings: Uint32Array, timeout?: () => boolean, deadline?: number): Uint32Array | undefined;
 	diff_lines(original: Uint16Array, modified: Uint16Array, originalOffsets: Uint32Array, modifiedOffsets: Uint32Array, equalityScores: Float64Array, timeout?: () => boolean, deadline?: number): Uint32Array | undefined;
+	moved_lines(original: Uint16Array, modified: Uint16Array, originalOffsets: Uint32Array, modifiedOffsets: Uint32Array, hashes: Uint32Array, changes: Uint32Array, deadline?: number): Uint32Array | undefined;
 }
 
 const maxDynamicDiffCells = 4 * 1024 * 1024;
@@ -25,7 +27,7 @@ let registeredModule: IRustSequenceDiffModule | undefined;
 
 /** Registers algorithms only for the lifetime of the initialized editor core. */
 export function registerRustSequenceDiff(module: IRustSequenceDiffModule): IDisposable {
-	if (typeof module.sequence_diff_abi_version !== 'function' || module.sequence_diff_abi_version() !== 6) {
+	if (typeof module.sequence_diff_abi_version !== 'function' || module.sequence_diff_abi_version() !== 7) {
 		throw new Error('The Rust sequence diff bindings do not match the current algorithm contract');
 	}
 	if (registeredModule) {
@@ -37,6 +39,32 @@ export function registerRustSequenceDiff(module: IRustSequenceDiffModule): IDisp
 			registeredModule = undefined;
 		}
 	});
+}
+
+/** Runs the existing block matching and extension rules in the native line-coordinate domain. */
+export function tryComputeRustMovedLines(changes: DetailedLineRangeMapping[], original: string[], modified: string[], originalHashes: number[], modifiedHashes: number[], timeout: ITimeout): LineRangeMapping[] | undefined {
+	if (!registeredModule || original.length === 0 || modified.length === 0) {
+		return undefined;
+	}
+	const { check, deadline } = getTimeout(timeout);
+	if (check) {
+		return undefined;
+	}
+	const first = encodeLines(original, new Range(1, 1, original.length, original[original.length - 1].length + 1));
+	const second = encodeLines(modified, new Range(1, 1, modified.length, modified[modified.length - 1].length + 1));
+	if (!first || !second) {
+		return undefined;
+	}
+	const hashes = new Uint32Array(originalHashes.length + modifiedHashes.length);
+	hashes.set(originalHashes);
+	hashes.set(modifiedHashes, originalHashes.length);
+	const ranges = new Uint32Array(changes.length * 4);
+	for (let index = 0; index < changes.length; index++) {
+		const change = changes[index];
+		ranges.set([change.original.startLineNumber - 1, change.original.endLineNumberExclusive - 1, change.modified.startLineNumber - 1, change.modified.endLineNumberExclusive - 1], index * 4);
+	}
+	const result = registeredModule.moved_lines(first.units, second.units, first.offsets, second.offsets, hashes, ranges, deadline);
+	return result ? decodeResult(result, timeout).diffs.map(diff => new LineRangeMapping(new LineRange(diff.seq1Range.start + 1, diff.seq1Range.endExclusive + 1), new LineRange(diff.seq2Range.start + 1, diff.seq2Range.endExclusive + 1))) : undefined;
 }
 
 function encodeLines(lines: string[], range: Range): { units: Uint16Array; offsets: Uint32Array } | undefined {

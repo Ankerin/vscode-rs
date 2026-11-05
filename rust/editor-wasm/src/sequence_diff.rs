@@ -6,15 +6,74 @@
 use js_sys::Function;
 use vscode_editor_core::{
 	CharacterDiffOptions, CharacterSequence, LineEqualityScores, OptimizationSequence, Position,
-	SequenceDiff, SequenceDiffError, SequenceDiffResult, TextRange, dynamic_programming_diff,
-	myers_diff, optimize_sequence_diffs, refine_character_diff, refine_line_diff,
+	SequenceDiff, SequenceDiffError, SequenceDiffResult, TextRange, compute_moved_lines,
+	dynamic_programming_diff, myers_diff, optimize_sequence_diffs, refine_character_diff,
+	refine_line_diff,
 };
 use wasm_bindgen::prelude::*;
 
 /// Versions sequence alignment independently of the text storage contract.
 #[wasm_bindgen]
 pub fn sequence_diff_abi_version() -> u32 {
-	6
+	7
+}
+
+/// Detects moved blocks from validated line changes and shared trimmed line identities.
+#[wasm_bindgen]
+pub fn moved_lines(
+	original: &[u16],
+	modified: &[u16],
+	original_offsets: &[u32],
+	modified_offsets: &[u32],
+	hashes: &[u32],
+	changes: &[u32],
+	deadline: Option<f64>,
+) -> Result<Option<Vec<u32>>, JsError> {
+	let first = unpack_lines(original, original_offsets)?;
+	let second = unpack_lines(modified, modified_offsets)?;
+	let (original_hashes, modified_hashes) = hashes
+		.split_at_checked(first.len())
+		.ok_or(SequenceDiffError::InvalidRanges)?;
+	let changes = decode_ranges(changes)?;
+	let mut valid = true;
+	let result = compute_moved_lines(
+		&changes,
+		&first,
+		&second,
+		original_hashes,
+		modified_hashes,
+		|| {
+			valid = deadline.is_none_or(|deadline| js_sys::Date::now() < deadline) && valid;
+			valid
+		},
+	);
+	match result {
+		Ok(diffs) => Ok(Some(encode_result(SequenceDiffResult {
+			diffs,
+			hit_timeout: !valid,
+		}))),
+		Err(
+			SequenceDiffError::TooLarge
+			| SequenceDiffError::AllocationFailed
+			| SequenceDiffError::UnrepresentablePath
+			| SequenceDiffError::InvalidRanges,
+		) => Ok(None),
+		Err(error) => Err(error.into()),
+	}
+}
+
+fn decode_ranges(ranges: &[u32]) -> Result<Vec<SequenceDiff>, SequenceDiffError> {
+	let (ranges, remainder) = ranges.as_chunks::<4>();
+	if !remainder.is_empty() {
+		return Err(SequenceDiffError::InvalidRanges);
+	}
+	Ok(ranges
+		.iter()
+		.map(|range| SequenceDiff {
+			original: range[0] as usize..range[1] as usize,
+			modified: range[2] as usize..range[3] as usize,
+		})
+		.collect())
 }
 
 /// Returns timeout, line counts, trimmed identities, and optimized half-open line ranges.
@@ -268,17 +327,7 @@ pub fn optimize_diff(
 	modified_scores: &[f64],
 	ranges: &[u32],
 ) -> Result<Option<Vec<u32>>, JsError> {
-	let (ranges, remainder) = ranges.as_chunks::<4>();
-	if !remainder.is_empty() {
-		return Err(SequenceDiffError::InvalidRanges.into());
-	}
-	let diffs: Vec<_> = ranges
-		.iter()
-		.map(|range| SequenceDiff {
-			original: range[0] as usize..range[1] as usize,
-			modified: range[2] as usize..range[3] as usize,
-		})
-		.collect();
+	let diffs = decode_ranges(ranges)?;
 	let original = OptimizationSequence {
 		elements: original,
 		strong_elements: original_strong,
