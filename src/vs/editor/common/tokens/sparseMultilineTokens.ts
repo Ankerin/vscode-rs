@@ -599,6 +599,11 @@ export class SparseLineTokens {
 		this._tokens = tokens;
 	}
 
+	/** Returns the existing encoding view for read-only native metadata composition. */
+	public getEncodedTokens(): Uint32Array {
+		return this._tokens;
+	}
+
 	public getCount(): number {
 		return this._tokens.length / 4;
 	}

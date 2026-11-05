@@ -115,6 +115,11 @@ export class LineTokens implements IViewLineTokens {
 		return this._text.length;
 	}
 
+	/** Returns the existing encoding view for read-only native metadata composition. */
+	public getEncodedTokens(): Uint32Array {
+		return this._tokens;
+	}
+
 	public equals(other: IViewLineTokens): boolean {
 		if (other instanceof LineTokens) {
 			return this.slicedEquals(other, 0, this._tokensCount);

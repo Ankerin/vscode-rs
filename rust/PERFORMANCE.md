@@ -498,3 +498,25 @@ Short/Unicode fixtures repeat 2,048 four-line blocks, with blank lines and paire
 | Long whitespace run | 75.55 | 70.73 | 1.19 |
 
 Peak RSS is lower for the whitespace fixture and higher for the others. These observations include setup, warm-up, both query workloads, and checksum consumption; they do not isolate guide allocations or establish whole-editor resource improvement. No persistent query state or decoded source line cache is added by native guides. Current raw runs stay ignored in `.build/rust/guides-benchmark.json`, with the initial capture in `.build/rust/guides-benchmark-initial.json`.
+
+## Semantic metadata overlay observation
+
+Measured on November 6, 2026 with Windows x64, Node `24.22.1`, Rust `1.99.1`, and release tokens ABI 1 bindings. The `--tokens` runner alternates three fresh processes per implementation and fixture. It warms 128 merges, then times calls through the actual `SparseTokensStore.addSparseTokens`, including input/output conversion, result construction, and checksum consumption of every output word. Setup remains outside the timer. Complete checksums match; times are medians in milliseconds.
+
+| Fixture | Calls | Syntax/semantic tokens per line | Existing merge | Rust merge |
+| --- | ---: | ---: | ---: | ---: |
+| Short lines | 100,000 | 8 / 4 | 110.72 | 107.65 |
+| Dense line | 1,000 | 2,048 / 1,024 | 180.43 | 128.69 |
+| Unicode dense line | 1,000 | 2,048 / 1,024 | 174.09 | 135.07 |
+| Clamped provider spans | 1,000 | 2,048 / 1,024 | 145.13 | 115.17 |
+
+Short lines contain 32 UTF-16 units; dense lines contain 8,192. Unicode retains paired/lone surrogate units, while clamped spans extend beyond the line. All six semantic fields participate. Rust avoids the temporary JavaScript number array and its subsequent typed-array conversion. Dense merges improve in this capture; the short-line difference is small and does not establish a reliable application improvement. The implementation retains source ownership and aliases, so both encoded inputs still cross the generated binding on every call.
+
+| Fixture | Existing process peak RSS MiB | Rust process peak RSS MiB | Rust linear memory MiB |
+| --- | ---: | ---: | ---: |
+| Short lines | 52.93 | 63.41 | 1.13 |
+| Dense line | 57.07 | 62.67 | 1.19 |
+| Unicode dense line | 57.13 | 62.28 | 1.19 |
+| Clamped provider spans | 65.40 | 62.50 | 1.19 |
+
+Process peak RSS is higher with Rust in three fixtures and lower in the clamped fixture. These observations include module loading, setup, warm-up, and all measured merges. Temporary native result state is dropped after each call; no persistent token store is added. This is metadata composition evidence, not tokenization/rendering latency or whole-editor resource evidence. Raw runs remain ignored in `.build/rust/tokens-benchmark.json`.

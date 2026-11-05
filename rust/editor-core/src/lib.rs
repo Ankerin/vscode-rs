@@ -14,6 +14,7 @@ mod sequence_diff;
 mod text_buffer;
 mod text_change;
 mod text_chunk;
+mod tokens;
 mod tree;
 
 pub use folding::{IndentationFoldingRanges, compute_indentation_folding};
@@ -34,3 +35,4 @@ pub use sequence_diff::{
 pub use text_buffer::{BufferError, Position, TextBuffer, TextEdit, TextSnapshot};
 pub use text_change::{CompressedTextChange, TextChange, UndoChangeBatch, compress_text_changes};
 pub use text_chunk::{TextChunk, TextChunkIter};
+pub use tokens::{TokensError, merge_semantic_tokens};

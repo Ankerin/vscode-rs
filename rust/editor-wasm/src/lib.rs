@@ -15,6 +15,7 @@ mod model_edits;
 mod sequence_diff;
 mod text_change;
 mod text_transfer;
+mod tokens;
 
 /// Identifies the storage contract independently of the binding generator's version.
 #[wasm_bindgen]

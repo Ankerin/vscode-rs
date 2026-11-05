@@ -10,6 +10,7 @@ import { SparseMultilineTokens } from './sparseMultilineTokens.js';
 import { ILanguageIdCodec } from '../languages.js';
 import { MetadataConsts } from '../encodedTokenAttributes.js';
 import { ITextModel } from '../model.js';
+import { tryMergeRustSemanticTokens } from './rustTokens.js';
 
 /**
  * Represents sparse tokens in a text model.
@@ -147,6 +148,11 @@ export class SparseTokensStore {
 
 		if (!bTokens) {
 			return aTokens;
+		}
+
+		const native = tryMergeRustSemanticTokens(aTokens.getEncodedTokens(), bTokens.getEncodedTokens(), aTokens.getTextLength());
+		if (native) {
+			return new LineTokens(native, aTokens.getLineContent(), this._languageIdCodec);
 		}
 
 		const aLen = aTokens.getCount();

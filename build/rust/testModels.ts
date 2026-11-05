@@ -15,6 +15,8 @@ const output = resolve(root, '.build/rust/registerTextBuffer.mjs');
 const tests = [
 	'textModel.test.ts',
 	'textModelWithTokens.test.ts',
+	'tokensStore.test.ts',
+	'textModelTokens.test.ts',
 	'textModelSearch.test.ts',
 	'editableTextModel.test.ts',
 	'editStack.test.ts',
@@ -47,7 +49,8 @@ const testArgs = [
 	'--run', 'src/vs/editor/test/node/diffing/verifyLinesDiff.test.ts',
 	'--run', 'src/vs/platform/undoRedo/test/common/undoRedoService.test.ts',
 	'--run', 'src/vs/editor/contrib/folding/test/browser/indentRangeProvider.test.ts',
-	'--run', 'src/vs/editor/contrib/folding/test/browser/foldingRanges.test.ts'
+	'--run', 'src/vs/editor/contrib/folding/test/browser/foldingRanges.test.ts',
+	'--run', 'src/vs/editor/test/common/core/lineTokens.test.ts'
 ];
 for (const engine of ['existing', 'rust']) {
 	const args = engine === 'rust' ? ['--import', pathToFileURL(output).href] : [];
