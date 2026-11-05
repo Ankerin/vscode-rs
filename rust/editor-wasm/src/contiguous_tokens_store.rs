@@ -12,8 +12,8 @@ use vscode_editor_core::{
 };
 use wasm_bindgen::prelude::*;
 
-const MAX_LINES: usize = 262_144;
-const MAX_WORDS: u32 = 4 * 1024 * 1024;
+pub(crate) const MAX_LINES: usize = 262_144;
+pub(crate) const MAX_WORDS: u32 = 4 * 1024 * 1024;
 
 /// Owns syntax line state without retaining a second decoded token/document representation.
 #[wasm_bindgen]
@@ -226,7 +226,7 @@ impl WasmContiguousTokensStore {
 }
 
 impl WasmContiguousTokensStore {
-	fn edit_line(
+	pub(crate) fn edit_line(
 		&self,
 		value: &JsValue,
 		start: i64,
@@ -260,15 +260,10 @@ impl WasmContiguousTokensStore {
 	}
 
 	fn supports(&self, index: usize) -> bool {
-		let value = &self.lines[index];
-		if value.is_null() || *value == self.empty {
-			return true;
-		}
-		let length = view(value).length();
-		length != 0 && length.is_multiple_of(2) && length <= MAX_WORDS
+		supported(&self.lines[index], &self.empty)
 	}
 
-	fn delete(&self, value: &JsValue, start: i64, end: i64) -> Result<JsValue, JsError> {
+	pub(crate) fn delete(&self, value: &JsValue, start: i64, end: i64) -> Result<JsValue, JsError> {
 		if value.is_null() || *value == self.empty || start == end {
 			return Ok(value.clone());
 		}
@@ -285,7 +280,7 @@ impl WasmContiguousTokensStore {
 		})
 	}
 
-	fn delete_ending(&self, value: &JsValue, start: i64) -> Result<JsValue, JsError> {
+	pub(crate) fn delete_ending(&self, value: &JsValue, start: i64) -> Result<JsValue, JsError> {
 		if value.is_null() || *value == self.empty {
 			return Ok(value.clone());
 		}
@@ -304,7 +299,12 @@ impl WasmContiguousTokensStore {
 		)
 	}
 
-	fn insert(&self, value: &JsValue, character: i64, length: i64) -> Result<JsValue, JsError> {
+	pub(crate) fn insert(
+		&self,
+		value: &JsValue,
+		character: i64,
+		length: i64,
+	) -> Result<JsValue, JsError> {
 		if value.is_null() || *value == self.empty {
 			return Ok(value.clone());
 		}
@@ -318,7 +318,7 @@ impl WasmContiguousTokensStore {
 		Ok(value.clone())
 	}
 
-	fn append(&self, first: &JsValue, second: &JsValue) -> Result<JsValue, JsError> {
+	pub(crate) fn append(&self, first: &JsValue, second: &JsValue) -> Result<JsValue, JsError> {
 		if *second == self.empty {
 			return Ok(first.clone());
 		}
@@ -337,11 +337,22 @@ impl WasmContiguousTokensStore {
 	}
 }
 
-fn integer(value: f64) -> bool {
+pub(crate) fn integer(value: f64) -> bool {
 	value.is_finite() && value.fract() == 0.0 && value.abs() <= (1u64 << 40) as f64
 }
 
-fn view(value: &JsValue) -> Uint32Array {
+pub(crate) fn supported(value: &JsValue, empty: &JsValue) -> bool {
+	if value.is_null() || value == empty {
+		return true;
+	}
+	if !value.is_instance_of::<Uint32Array>() && !value.is_instance_of::<ArrayBuffer>() {
+		return false;
+	}
+	let length = view(value).length();
+	length != 0 && length.is_multiple_of(2) && length <= MAX_WORDS
+}
+
+pub(crate) fn view(value: &JsValue) -> Uint32Array {
 	if let Some(tokens) = value.dyn_ref::<Uint32Array>() {
 		tokens.clone()
 	} else {

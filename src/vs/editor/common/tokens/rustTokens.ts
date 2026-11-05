@@ -15,6 +15,7 @@ export interface IRustTokensModule {
 	split_sparse_tokens(tokens: Uint32Array, parameters: Float64Array): Uint32Array | undefined;
 	update_contiguous_tokens(tokens: Uint32Array, operation: number, first: number, second: number): number | undefined;
 	append_contiguous_tokens(first: Uint32Array, second: Uint32Array): Uint32Array | undefined;
+	edit_contiguous_tokens_block(start: number, lines: (Uint32Array | ArrayBuffer | null)[], empty: ArrayBuffer, parameters: Float64Array): [number, (Uint32Array | ArrayBuffer | null)[]] | undefined;
 	WasmContiguousTokensStore: { new(empty: ArrayBuffer): IRustContiguousTokensStore };
 	WasmSparseTokensStore: { new(standardEdit?: SparseMultilineTokens['acceptEdit']): IRustSparseTokensStore };
 }
@@ -47,7 +48,7 @@ let registeredModule: IRustTokensModule | undefined;
 
 /** Installs token composition for the initialized core's disposable scope. */
 export function registerRustTokens(module: IRustTokensModule): IDisposable {
-	if (typeof module.tokens_abi_version !== 'function' || module.tokens_abi_version() !== 5 || typeof module.merge_semantic_tokens !== 'function' || typeof module.update_sparse_tokens !== 'function' || typeof module.split_sparse_tokens !== 'function' || typeof module.update_contiguous_tokens !== 'function' || typeof module.append_contiguous_tokens !== 'function' || typeof module.WasmContiguousTokensStore !== 'function' || typeof module.WasmSparseTokensStore !== 'function') {
+	if (typeof module.tokens_abi_version !== 'function' || module.tokens_abi_version() !== 6 || typeof module.merge_semantic_tokens !== 'function' || typeof module.update_sparse_tokens !== 'function' || typeof module.split_sparse_tokens !== 'function' || typeof module.update_contiguous_tokens !== 'function' || typeof module.append_contiguous_tokens !== 'function' || typeof module.edit_contiguous_tokens_block !== 'function' || typeof module.WasmContiguousTokensStore !== 'function' || typeof module.WasmSparseTokensStore !== 'function') {
 		throw new Error('The Rust token bindings do not match the current metadata contract');
 	}
 	if (registeredModule) { throw new Error('A Rust token module is already registered'); }
@@ -65,6 +66,14 @@ export function createRustContiguousTokensStore(empty: ArrayBuffer): IRustContig
 /** The caller registers the generated native owner for its own disposable scope. */
 export function createRustSparseTokensStore(standardEdit: SparseMultilineTokens['acceptEdit']): IRustSparseTokensStore | undefined {
 	return registeredModule ? new registeredModule.WasmSparseTokensStore(standardEdit) : undefined;
+}
+
+/** Adjusts block coordinates and the original line-array references in one native edit scope. */
+export function tryEditRustContiguousTokenBlock(start: number, lines: (Uint32Array | ArrayBuffer | null)[], empty: ArrayBuffer, range: IRange, eolCount: number, firstLength: number): [number, (Uint32Array | ArrayBuffer | null)[]] | undefined {
+	if (!registeredModule) { return undefined; }
+	const result = registeredModule.edit_contiguous_tokens_block(start, lines, empty, new Float64Array([range.startLineNumber, range.startColumn, range.endLineNumber, range.endColumn, eolCount, firstLength]));
+	if (result && (result.length !== 2 || !Number.isSafeInteger(result[0]) || !Array.isArray(result[1]))) { throw new Error('The Rust contiguous token block result does not match the editor contract'); }
+	return result;
 }
 
 /** Retains source identity while returning the native surviving length or shared-empty sentinel. */

@@ -218,11 +218,7 @@ impl WasmSparseTokensStore {
 				index += 1;
 				continue;
 			}
-			for slot in (index + 1..length).rev() {
-				self.pieces.set(slot + 1, self.pieces.get(slot));
-			}
-			self.pieces.set(index, first);
-			self.pieces.set(index + 1, second);
+			self.pieces.splice_many(index, 1, &[first, second]);
 			index += 1;
 			length += 1;
 			insertion.get_or_insert(index);
@@ -230,17 +226,7 @@ impl WasmSparseTokensStore {
 		}
 		if pieces.length() > 0 {
 			let at = insertion.unwrap_or(self.pieces.length());
-			let result = Array::new();
-			for index in 0..at {
-				result.push(&self.pieces.get(index));
-			}
-			for piece in pieces.iter() {
-				result.push(&piece);
-			}
-			for index in at..self.pieces.length() {
-				result.push(&self.pieces.get(index));
-			}
-			self.pieces = result;
+			self.pieces = crate::arrays::insert(&self.pieces, at, &pieces);
 		}
 		Ok(Some(range))
 	}
@@ -377,11 +363,7 @@ fn edit_piece(
 }
 
 fn remove_at(array: &Array, index: u32) {
-	let length = array.length();
-	for slot in index..length - 1 {
-		array.set(slot, array.get(slot + 1));
-	}
-	array.set_length(length - 1);
+	array.splice_many(index, 1, &[]);
 }
 
 fn supported_range(value: &JsValue) -> Result<bool, JsValue> {

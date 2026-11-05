@@ -607,4 +607,30 @@ Positions cycle through 32 preconstructed interior ranges. Single-line insertion
 | Multiline edits | 54.58 | 63.80 | 1.13 |
 | Many pieces | 60.94 | 78.28 | 1.13 |
 
-Process peak RSS is higher with Rust in every fixture. The owner keeps the original JavaScript array, objects, and encoded buffers, preserving existing external aliases without retaining a second persistent encoding. Temporary streams are copied only for affected standard pieces. Flush/disposal release the owner references, and unsupported-state fallback exports the same array before freeing the native owner. Observations include loading, population, warm-up, all workloads, and checksum consumption; they do not establish application resource improvements. Final raw runs remain ignored in `.build/rust/sparse-store-benchmark.json`, with the initial capture in `.build/rust/sparse-store-benchmark-initial.json`.
+Process peak RSS is higher with Rust in every fixture. The owner keeps the original JavaScript array, objects, and encoded buffers, preserving existing external aliases without retaining a second persistent encoding. Temporary streams are copied only for affected standard pieces. Flush/disposal release the owner references, and unsupported-state fallback exports the same array before freeing the native owner. Observations include loading, population, warm-up, all workloads, and checksum consumption; they do not establish application resource improvements. ABI 5 raw runs remain ignored in `.build/rust/sparse-store-benchmark-abi5.json`, with the initial capture in `.build/rust/sparse-store-benchmark-initial.json`.
+
+## Contiguous token block observation
+
+Measured on November 6, 2026 with Windows x64, Node `24.22.1`, Rust `1.99.1`, and release tokens ABI 6 bindings. The `--token-block` runner alternates three fresh processes per engine, warms 32 replacements and fresh multiline edits, and times 1,000 same-line replacements plus 200 multiline edits through actual `ContiguousMultilineTokens.applyEdit` calls. Each multiline edit starts with a freshly cloned provider index and records prepared outside its timer; it replaces a three-line span or removes the block prefix. Timers include changed boundary-line consumption and block coordinates. Complete retained provider records also contribute to identical final checksums. Times are medians in milliseconds.
+
+| Fixture | Lines | Tokens per line | Existing replacements | Rust replacements | Existing multiline edits | Rust multiline edits |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Small block | 8 | 4 | 1.19 | 3.39 | 0.63 | 2.06 |
+| Dense block | 64 | 128 | 5.07 | 8.10 | 1.48 | 2.60 |
+| Prefix removal | 8 | 4 | 1.22 | 3.91 | 0.27 | 0.65 |
+| Many lines | 32,768 | 1 | 0.84 | 3.25 | 27.98 | 30.39 |
+
+Same-line replacements delete one interior character and insert it again, preserving topology while mutating retained inputs. Dense records and all changed boundaries cross the native scope once without nested kernel bindings. Multiline operations retain original splices, slices, and absolute insertion positions. Shared generated host-array operations create one final concatenated index without transferring each slot or creating an extra concatenation index. Small calls remain slower due to preflight and binding overhead. Large-block edits are close to the reference; this does not establish an application performance improvement.
+
+| Fixture | Existing process peak RSS MiB | Rust process peak RSS MiB | Rust linear memory MiB |
+| --- | ---: | ---: | ---: |
+| Small block | 46.81 | 60.27 | 1.13 |
+| Dense block | 53.66 | 67.88 | 1.13 |
+| Prefix removal | 46.36 | 60.05 | 1.13 |
+| Many lines | 339.50 | 349.39 | 1.13 |
+
+Peak RSS is higher with Rust in every fixture. Fresh-block preparation dominates the many-line process memory observations and remains outside timing; these figures do not measure persistent block state or whole-editor memory. The native call retains no block handle or second encoded representation after return. Raw runs remain ignored in `.build/rust/token-block-benchmark.json`, with the initial two-concatenation capture in `.build/rust/token-block-benchmark-initial.json`.
+
+## Sparse host-array operation observation
+
+Tokens ABI 6 also replaces individual sparse piece slot shifts/copies with the existing host-array splice/slice/concat primitives called from Rust. Under the same `--sparse-store` method and fixtures, current existing/Rust partial-update medians are 1.22/2.28 milliseconds for small stores, 1.56/3.33 for dense stores, 1.24/3.11 for multiline edits, and 3.69/15.98 for 4,096 pieces. The many-piece Rust partial-update median decreased from 44.98 milliseconds in the ABI 5 capture to 15.98, while still regressing against the reference. Complete checksums match. Many-piece edit pairs remain 20.73/505.00 milliseconds, and merged reads remain 4.83/13.85; the per-piece scalar/object boundary is still expensive. Peak RSS remains higher with Rust in every fixture; many-piece process medians are 60.77/78.10 MiB, and native linear memory remains 1.13 MiB. No default promotion follows. Current raw runs remain ignored in `.build/rust/sparse-store-benchmark.json`; the ABI 5 capture remains in `.build/rust/sparse-store-benchmark-abi5.json`.

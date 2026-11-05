@@ -11,6 +11,8 @@ use vscode_editor_core::{
 };
 use wasm_bindgen::prelude::*;
 
+mod arrays;
+mod contiguous_tokens_block;
 mod contiguous_tokens_store;
 mod model_edits;
 mod sequence_diff;

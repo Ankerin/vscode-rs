@@ -15,6 +15,7 @@ const output = resolve(root, '.build/rust/registerTextBuffer.mjs');
 const tests = [
 	'textModel.test.ts',
 	'textModelWithTokens.test.ts',
+	'model.line.test.ts',
 	'tokensStore.test.ts',
 	'textModelTokens.test.ts',
 	'textModelSearch.test.ts',

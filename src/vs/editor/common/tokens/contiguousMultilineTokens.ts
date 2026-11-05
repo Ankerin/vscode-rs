@@ -8,8 +8,9 @@ import { readUInt32BE, writeUInt32BE } from '../../../base/common/buffer.js';
 import { Position } from '../core/position.js';
 import { IRange } from '../core/range.js';
 import { countEOL } from '../core/misc/eolCounter.js';
-import { ContiguousTokensEditing } from './contiguousTokensEditing.js';
+import { ContiguousTokensEditing, EMPTY_LINE_TOKENS } from './contiguousTokensEditing.js';
 import { LineRange } from '../core/ranges/lineRange.js';
+import { tryEditRustContiguousTokenBlock } from './rustTokens.js';
 
 /**
  * Represents contiguous tokens over a contiguous range of lines.
@@ -110,6 +111,12 @@ export class ContiguousMultilineTokens {
 
 	public applyEdit(range: IRange, text: string): void {
 		const [eolCount, firstLineLength] = countEOL(text);
+		const native = tryEditRustContiguousTokenBlock(this._startLineNumber, this._tokens, EMPTY_LINE_TOKENS, range, eolCount, firstLineLength);
+		if (native) {
+			this._startLineNumber = native[0];
+			this._tokens = native[1];
+			return;
+		}
 		this._acceptDeleteRange(range);
 		this._acceptInsertText(new Position(range.startLineNumber, range.startColumn), eolCount, firstLineLength);
 	}
