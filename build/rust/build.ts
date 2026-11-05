@@ -7,9 +7,11 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { verifyUnicodeData } from './unicode.ts';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const workspace = resolve(root, 'rust');
+await verifyUnicodeData();
 const manifest = readFileSync(resolve(workspace, 'editor-wasm/Cargo.toml'), 'utf8');
 const bindingVersion = /wasm-bindgen = "=(?<version>[\d.]+)"/.exec(manifest)?.groups?.version;
 if (!bindingVersion) {

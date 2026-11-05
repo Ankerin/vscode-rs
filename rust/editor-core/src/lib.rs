@@ -6,6 +6,7 @@
 //! Platform-independent editor algorithms. Text coordinates use UTF-16 code units.
 
 mod contiguous_tokens;
+mod cursor_columns;
 mod folding;
 mod guides;
 mod indentation;
@@ -20,10 +21,15 @@ mod text_chunk;
 mod token_array;
 mod tokens;
 mod tree;
+mod unicode_grapheme_data;
 
 pub use contiguous_tokens::{
 	ContiguousTokensUpdate, append_contiguous_tokens, delete_contiguous_tokens,
 	insert_contiguous_tokens,
+};
+pub use cursor_columns::{
+	CursorColumnOperation, cursor_column, grapheme_break_type, next_cursor_tab_stop,
+	previous_cursor_tab_stop,
 };
 pub use folding::{IndentationFoldingRanges, compute_indentation_folding};
 pub use guides::{ActiveIndentGuide, compute_active_indent_guide, compute_indent_guides};

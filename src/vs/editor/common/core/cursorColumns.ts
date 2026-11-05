@@ -5,6 +5,7 @@
 
 import { CharCode } from '../../../base/common/charCode.js';
 import * as strings from '../../../base/common/strings.js';
+import { tryComputeRustCursorColumn, tryComputeRustCursorTabStop } from './rustCursorColumns.js';
 
 /**
  * A column in a position is the gap between two adjacent characters. The methods here
@@ -39,6 +40,8 @@ export class CursorColumns {
 	 * @see {@link CursorColumns}
 	 */
 	public static visibleColumnFromColumn(lineContent: string, column: number, tabSize: number): number {
+		const native = this === CursorColumns && standardCursorMethods() ? tryComputeRustCursorColumn(lineContent, column, tabSize, 0) : undefined;
+		if (native !== undefined) { return native; }
 		const textLen = Math.min(column - 1, lineContent.length);
 		const text = lineContent.substring(0, textLen);
 		const iterator = new strings.GraphemeIterator(text);
@@ -59,6 +62,8 @@ export class CursorColumns {
 	 * @see {@link CursorColumns}
 	 */
 	public static toStatusbarColumn(lineContent: string, column: number, tabSize: number): number {
+		const native = this === CursorColumns && standardCursorMethods() ? tryComputeRustCursorColumn(lineContent, column, tabSize, 1) : undefined;
+		if (native !== undefined) { return native; }
 		const text = lineContent.substring(0, Math.min(column - 1, lineContent.length));
 		const iterator = new strings.CodePointIterator(text);
 
@@ -84,6 +89,8 @@ export class CursorColumns {
 		if (visibleColumn <= 0) {
 			return 1;
 		}
+		const native = this === CursorColumns && standardCursorMethods() ? tryComputeRustCursorColumn(lineContent, visibleColumn, tabSize, 2) : undefined;
+		if (native !== undefined) { return native; }
 
 		const lineContentLength = lineContent.length;
 		const iterator = new strings.GraphemeIterator(lineContent);
@@ -120,6 +127,8 @@ export class CursorColumns {
 	 * @see {@link CursorColumns}
 	 */
 	public static nextRenderTabStop(visibleColumn: number, tabSize: number): number {
+		const native = tryComputeRustCursorTabStop(visibleColumn, tabSize, false);
+		if (native !== undefined) { return native; }
 		return visibleColumn + tabSize - visibleColumn % tabSize;
 	}
 
@@ -136,6 +145,8 @@ export class CursorColumns {
 	 * @see {@link CursorColumns}
 	 */
 	public static prevRenderTabStop(column: number, tabSize: number): number {
+		const native = tryComputeRustCursorTabStop(column, tabSize, true);
+		if (native !== undefined) { return native; }
 		return Math.max(0, column - 1 - (column - 1) % tabSize);
 	}
 
@@ -146,4 +157,14 @@ export class CursorColumns {
 	public static prevIndentTabStop(column: number, indentSize: number): number {
 		return CursorColumns.prevRenderTabStop(column, indentSize);
 	}
+}
+
+const cursorMethods = ['_nextVisibleColumn', 'nextRenderTabStop'].map(name => ({ name, descriptor: Object.getOwnPropertyDescriptor(CursorColumns, name) }));
+
+/** Preserves callbacks installed on the existing class instead of bypassing their implementation. */
+function standardCursorMethods(): boolean {
+	return cursorMethods.every(({ name, descriptor }) => {
+		const current = Object.getOwnPropertyDescriptor(CursorColumns, name);
+		return current?.value === descriptor?.value && current?.get === descriptor?.get;
+	});
 }
