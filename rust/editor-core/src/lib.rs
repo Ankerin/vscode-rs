@@ -5,6 +5,7 @@
 
 //! Platform-independent editor algorithms. Text coordinates use UTF-16 code units.
 
+mod model_edits;
 mod search;
 mod sequence_diff;
 mod text_buffer;
@@ -12,6 +13,10 @@ mod text_change;
 mod text_chunk;
 mod tree;
 
+pub use model_edits::{
+	MAX_MODEL_EDIT_UNITS, MAX_MODEL_EDITS, ModelEdit, ModelEditOptions, ModelTextFlags,
+	PreparedModelEdit, PreparedModelEdits, prepare_model_edits,
+};
 pub use sequence_diff::{
 	CharacterDiffOptions, CharacterDiffResult, CharacterSequence, DetailedLineDiff,
 	DocumentDiffOptions, DocumentDiffResult, LineDiffResult, LineEqualityScores,

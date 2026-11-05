@@ -20,9 +20,11 @@ The original ASCII-only observation was measured on November 5, 2026, Windows x6
 | Drain ten snapshots | 1.67 | 22.68 |
 | Extract the entire document | 0.51 | 1.64 |
 
-## Current observation
+## Storage batch observation
 
 Measured on November 5, 2026, Windows x64, repository-pinned Node `24.22.1`, Rust `1.99.1`, wasm-bindgen `0.2.130`, js-sys `0.3.107`, and memchr `2.8.3`. The implementation uses compact Latin-1 leaves with shared backing/indexes, lazy sequential snapshots, storage ABI 3, atomic model batch application, direct single-leaf transfers, adaptive line caching, and native literal search. ASCII output uses the binding's string path; non-ASCII output uses UTF-16 typed arrays and native JavaScript decoding. All six runs per fixture produced matching checksums. Times below are medians of three processes, in milliseconds.
+
+This capture precedes complete buffer edit transactions and direct decoding of short UTF-16 results. Its raw runs are retained in `.build/rust/benchmark-storage.json`.
 
 | Fixture | Initial UTF-16 units | Initial nonempty lines | Consecutive reads | Random reads |
 | --- | ---: | ---: | ---: | ---: |
@@ -359,3 +361,48 @@ The following process peak RSS and final WASM memory are medians in MiB. Each pr
 | Fragmented Unicode insertion | 85.67 | 108.60 | 1.88 |
 
 This capture does not demonstrate lower process memory. Native batches own flat vectors rather than shared rope fragments, and general composition still copies the next payload before committing. Remaining undo metadata and service orchestration are TypeScript. End-to-end keystroke latency, many open undo histories, sustained memory behavior, and whole-application resource savings remain unmeasured. Current raw runs are ignored in `.build/rust/undo-benchmark.json`; initial owning runs are retained in `.build/rust/undo-benchmark-owned-initial.json`.
+
+## Complete buffer transaction observation
+
+Measured on November 6, 2026, Windows x64, Node `24.22.1`, Rust `1.99.1`, and release storage ABI 4 bindings. The dedicated `--edits` runner alternates three fresh processes for each of three engines: the existing buffer, Rust storage with the original TypeScript transaction path, and the complete native transaction. Each timed pair applies a fixed batch and its inverse with undo generation enabled. Three pairs warm the implementation; range/input construction and the final restored-document checksum are outside the timer. Metadata checksums and restored document checksums match across all engines. Times are medians in milliseconds.
+
+| Fixture | Apply/reverse pairs | Existing | Rust storage with TypeScript transactions | Complete Rust/WASM transaction |
+| --- | ---: | ---: | ---: | ---: |
+| Single-character typing | 10,000 | 27.22 | 53.50 | 58.13 |
+| 1,024 tracked cursors | 50 | 144.72 | 274.20 | 236.09 |
+| 512 fragmented ASCII replacements | 30 | 445.32 | 101.25 | 93.81 |
+| 512 fragmented Unicode replacements | 30 | 504.03 | 116.32 | 96.22 |
+
+The fragmented fixtures replace six-unit spans of a 98,304-unit source with `changed` followed by LF. The Unicode source contains paired and lone surrogates and BOM. Tracked operations retain separate metadata rather than invoking the thousand-edit reduction path. Existing input strings are reused for unchanged normalized text, original deleted ranges serialize directly from shared leaves, and one/two-unit results decode without temporary typed-array views. Other short UTF-16 results decode directly; larger results retain the lossless span decoder.
+
+Process peak RSS and final native-transaction WASM linear memory are medians in MiB, including setup, warm-up, and final checksum work.
+
+| Fixture | Existing process peak RSS | Rust storage process peak RSS | Complete transaction process peak RSS | Complete transaction linear memory |
+| --- | ---: | ---: | ---: | ---: |
+| Single-character typing | 62.98 | 73.84 | 74.92 | 1.13 |
+| 1,024 tracked cursors | 90.40 | 82.63 | 77.73 | 1.56 |
+| Fragmented ASCII | 237.87 | 73.98 | 74.57 | 1.81 |
+| Fragmented Unicode | 303.74 | 82.92 | 74.63 | 2.44 |
+
+The complete transaction improves on the storage-only path for cursor and fragmented workloads in this capture. Fragmented workloads are also faster than the existing editor buffer and have lower peak RSS. Typing and cursor latency remain slower than the existing buffer, and typing peak RSS is higher. Intermediate captures varied substantially: cursor medians for the initial native transaction, direct short decoding, and final allocation reuse were 295.05, 423.23, and 236.09 milliseconds. Unicode decoding improved from 329.03 to 105.24 and then 96.22 milliseconds. These variations limit cross-capture attribution; the final within-capture comparisons are the relevant evidence. This stage remains opt-in and does not establish whole-editor resource savings or input-to-paint latency. Raw captures are ignored in `.build/rust/edits-benchmark.json`, `.build/rust/edits-benchmark-initial.json`, and `.build/rust/edits-benchmark-decoding.json`.
+
+## Buffer workload with complete transactions
+
+The general buffer runner was repeated with the same November 6 toolchain and final transaction/short-decoding implementation. All checksums matched. The following rows summarize editing and random-line access; other raw measurements remain in the ignored `.build/rust/benchmark.json`. Times are medians in milliseconds.
+
+| Fixture | Workload | Existing | Rust/WASM |
+| --- | --- | ---: | ---: |
+| ASCII | 200 batches of 32 cursor insertions | 18.19 | 25.45 |
+| Latin-1 | 200 batches of 32 cursor insertions | 20.48 | 25.10 |
+| Unicode | 200 batches of 32 cursor insertions | 17.64 | 27.19 |
+| Long lines | 200 batches of 32 cursor insertions | 20.34 | 25.38 |
+| ASCII | 2,000 distributed insertions | 4.27 | 10.52 |
+| Latin-1 | 2,000 distributed insertions | 4.03 | 11.18 |
+| Unicode | 2,000 distributed insertions | 4.12 | 11.73 |
+| Long lines | 2,000 distributed insertions | 3.86 | 10.10 |
+| ASCII | Random line reads | 4.03 | 18.90 |
+| Latin-1 | Random line reads | 3.77 | 45.41 |
+| Unicode | Random line reads | 4.10 | 49.30 |
+| Long lines | Random line reads | 9.55 | 24.17 |
+
+These workloads retain regressions in editing and line transfer. Distributed insertions and random line reads still cross coordinate/text boundaries; occasional surrogate splits require lossless decoding. Literal search and immutable snapshot creation remain faster in the raw capture, while construction, snapshot draining, and full extraction retain their earlier costs. The initial ABI 4 capture before allocation/short-decoding changes is retained in `.build/rust/benchmark-model-edits-initial.json`; the ABI 3 capture is retained in `.build/rust/benchmark-storage.json`. No default promotion follows from these subsystem measurements.

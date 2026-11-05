@@ -6,7 +6,7 @@
 import { IDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
 import { Position } from '../../core/position.js';
 import { Range } from '../../core/range.js';
-import { FindMatch, ITextSnapshot, SearchData } from '../../model.js';
+import { ApplyEditsResult, FindMatch, ITextSnapshot, SearchData, ValidAnnotatedEditOperation } from '../../model.js';
 import { createLineStartsFast, StringBuffer } from '../pieceTreeTextBuffer/pieceTreeBase.js';
 
 /** A replacement in the original document's UTF-16 coordinates, ordered from bottom to top. */
@@ -14,6 +14,18 @@ export interface ITextBufferStorageEdit {
 	readonly rangeOffset: number;
 	readonly rangeLength: number;
 	readonly text: string;
+}
+
+/** Sticky text properties retained by model consumers across edits. */
+export interface ITextBufferFlags {
+	readonly mightContainNonBasicASCII: boolean;
+	readonly mightContainRTL: boolean;
+	readonly mightContainUnusualLineTerminators: boolean;
+}
+
+/** A completed native transaction using the existing model result contract. */
+export interface ITextBufferModelEditsResult extends ITextBufferFlags {
+	readonly result: ApplyEditsResult;
 }
 
 /** Storage operations beneath the existing edit, undo, and notification implementation. */
@@ -36,6 +48,8 @@ export interface ITextBufferStorage {
 	delete(offset: number, length: number): void;
 	/** Applies validated replacements together when the storage supports atomic batches. */
 	applyEdits?(operations: readonly ITextBufferStorageEdit[]): void;
+	/** Applies the complete model edit transaction when supported; undefined leaves storage unchanged. */
+	applyModelEdits?(operations: readonly ValidAnnotatedEditOperation[], flags: ITextBufferFlags, recordTrimAutoWhitespace: boolean, computeUndoEdits: boolean): ITextBufferModelEditsResult | undefined;
 	findMatchesLineByLine(searchRange: Range, searchData: SearchData, captureMatches: boolean, limitResultCount: number): FindMatch[];
 }
 

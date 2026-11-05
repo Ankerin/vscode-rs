@@ -13,9 +13,12 @@ import { Range } from '../../src/vs/editor/common/core/range.js';
 import { DefaultEndOfLine, EndOfLinePreference, ITextSnapshot, IIdentifiedSingleEditOperation, ValidAnnotatedEditOperation } from '../../src/vs/editor/common/model.js';
 import { PieceTreeTextBuffer } from '../../src/vs/editor/common/model/pieceTreeTextBuffer/pieceTreeTextBuffer.js';
 import { PieceTreeTextBufferBuilder } from '../../src/vs/editor/common/model/pieceTreeTextBuffer/pieceTreeTextBufferBuilder.js';
-import { IRustTextBufferModule, registerRustTextBuffer } from '../../src/vs/editor/common/model/rustTextBuffer/rustTextBuffer.js';
+import { IRustTextBuffer, IRustTextBufferModule, registerRustTextBuffer } from '../../src/vs/editor/common/model/rustTextBuffer/rustTextBuffer.js';
 import { SearchParams } from '../../src/vs/editor/common/model/textModelSearch.js';
 import { createTextModel } from '../../src/vs/editor/test/common/testTextModel.js';
+import { encodeUTF16 } from '../../src/vs/editor/common/core/utf16Transfer.js';
+import { containsRTL, containsUnusualLineTerminators, isBasicASCII } from '../../src/vs/base/common/strings.js';
+import { readUInt32BE } from '../../src/vs/base/common/buffer.js';
 
 interface IRustModule extends IRustTextBufferModule {
 	default(options: { module_or_path: Uint8Array }): Promise<{ memory: WebAssembly.Memory }>;
@@ -93,7 +96,7 @@ function compareBuffers(reference: PieceTreeTextBuffer, actual: PieceTreeTextBuf
 }
 
 test('Rust storage rejects stale bindings before registering a model factory', () => {
-	for (const version of [1, 2]) {
+	for (const version of [1, 2, 3]) {
 		assert.throws(() => registerRustTextBuffer({ ...rust, text_buffer_abi_version: () => version }), /storage contract/);
 	}
 	const registration = registerRustTextBuffer(rust);
@@ -117,6 +120,154 @@ test('Rust binding batches validate every original range and text slice before c
 		buffer.apply_edits(new Uint32Array([1, 0, 0, 1, 1, 0, 1, 1, 3, 2, 2, 2]), new Uint16Array([65, 66, 0xD800, 0xDC00]));
 		assert.deepStrictEqual(buffer.slice(0, buffer.length()), new Uint16Array([97, 65, 66, 98, 99, 0xD800, 0xDC00, 102]));
 	} finally { buffer.free(); }
+});
+
+test('Rust model transactions validate packets atomically and retain unsupported-state fallback', context => {
+	const buffer = new rust.WasmTextBuffer(new Uint16Array([97, 98, 99]));
+	try {
+		for (const ranges of [
+			[1], [1, 1, 1, 2, 0, 2, 0], [0, 1, 1, 2, 0, 1, 0], [1, 1, 1, 2, 0, 1, 8],
+			[1, 1, 1, 3, 0, 1, 0, 1, 2, 1, 4, 0, 1, 0]
+		]) {
+			assert.throws(() => buffer.apply_model_edits(new Uint32Array(ranges), new Uint16Array([88]), false, 0, true, true));
+			assert.deepStrictEqual(buffer.slice(0, buffer.length()), new Uint16Array([97, 98, 99]));
+		}
+		assert.strictEqual(buffer.apply_model_edits(new Uint32Array([1, 1, 1, 1, 0, 4194305, 0]), new Uint16Array(4194305), false, 0, false, false), undefined);
+		assert.deepStrictEqual(buffer.slice(0, buffer.length()), new Uint16Array([97, 98, 99]));
+	} finally {
+		buffer.free();
+	}
+	class UnsupportedBuffer extends rust.WasmTextBuffer {
+		public static override from_text(text: string): UnsupportedBuffer { return new UnsupportedBuffer(encodeUTF16(text)); }
+		public override apply_model_edits(): undefined { return undefined; }
+	}
+	const reference = createBuffer(['one\ntwo']);
+	const registration = registerRustTextBuffer({ ...rust, WasmTextBuffer: UnsupportedBuffer });
+	let actual: PieceTreeTextBuffer;
+	try {
+		actual = createBuffer(['one\ntwo']);
+	} finally {
+		registration.dispose();
+	}
+	context.after(() => { reference.dispose(); actual.dispose(); });
+	const operations = annotate([{ range: new Range(1, 2, 2, 2), text: '\uD800\r\ninserted' }]);
+	assert.deepStrictEqual(actual.applyEdits(operations, true, true), reference.applyEdits(operations, true, true));
+	compareBuffers(reference, actual);
+});
+
+test('Rust model transactions share one boundary for normalization, inverse text, and whitespace state', context => {
+	let calls = 0;
+	class TransactionBuffer extends rust.WasmTextBuffer {
+		public static override from_text(text: string): TransactionBuffer { return new TransactionBuffer(encodeUTF16(text)); }
+		public override apply_model_edits(...args: Parameters<IRustTextBuffer['apply_model_edits']>): Uint8Array | undefined { calls++; return super.apply_model_edits(...args); }
+		public override offset_at(): never { throw new Error('Separate model coordinate read'); }
+		public override slice_text(): never { throw new Error('Separate model inverse text read'); }
+		public override apply_edits(): never { throw new Error('Separate model application'); }
+	}
+	const reference = createBuffer([' \r\nword\r\n']);
+	const registration = registerRustTextBuffer({ ...rust, WasmTextBuffer: TransactionBuffer });
+	let actual: PieceTreeTextBuffer;
+	try {
+		actual = createBuffer([' \r\nword\r\n']);
+	} finally {
+		registration.dispose();
+	}
+	context.after(() => { reference.dispose(); actual.dispose(); });
+	const operations = annotate([
+		{ range: new Range(1, 2, 1, 2), text: '\t\n ', isAutoWhitespaceEdit: true },
+		{ range: new Range(2, 2, 2, 3), text: '\uD802\uDC00\u2028\uD800', forceMoveMarkers: true }
+	]);
+	assert.deepStrictEqual({ result: actual.applyEdits(operations, true, true), calls, lines: actual.getLinesContent() }, { result: reference.applyEdits(operations, true, true), calls: 1, lines: reference.getLinesContent() });
+});
+
+test('Rust model text flags match existing classification for every UTF-16 unit and supplementary RTL pair', () => {
+	const buffer = new rust.WasmTextBuffer(new Uint16Array());
+	const ranges = new Uint32Array([1, 1, 1, 1, 0, 1, 0]);
+	const compare = (text: string) => {
+		ranges[3] = buffer.length() + 1;
+		ranges[5] = text.length;
+		const bytes = buffer.apply_model_edits(ranges, encodeUTF16(text), false, 0, false, false);
+		assert.ok(bytes);
+		assert.strictEqual(readUInt32BE(bytes, 0) & 7, (isBasicASCII(text) ? 0 : 1) | (containsRTL(text) ? 2 : 0) | (containsUnusualLineTerminators(text) ? 4 : 0), `Text flags ${JSON.stringify(text)}`);
+		// A line break insertion changes the range contract; keep each classification independent.
+		buffer.replace(0, buffer.length(), new Uint16Array());
+	};
+	try {
+		for (let unit = 0; unit <= 0xFFFF; unit++) {
+			compare(String.fromCharCode(unit));
+		}
+		for (const high of [0xD802, 0xD803, 0xD83A, 0xD83B]) {
+			for (let low = 0xDBFF; low <= 0xE000; low++) {
+				compare(String.fromCharCode(high, low));
+			}
+		}
+	} finally {
+		buffer.free();
+	}
+});
+
+test('Rust model transactions preserve the thousand-edit reduction threshold and tracked metadata', context => {
+	for (const count of [999, 1000, 1001]) {
+		for (const tracked of [false, true]) {
+			const [reference, actual] = createPair(context, ['x '.repeat(1024)]);
+			const operations = Array.from({ length: count }, (_, index) => new ValidAnnotatedEditOperation({ major: index, minor: 1 }, new Range(1, index * 2 + 1, 1, index * 2 + 2), index % 7 === 0 ? '\uD800\r\n' : 'changed', index % 17 === 0, true, tracked && index === 0));
+			operations.reverse();
+			const result = actual.applyEdits(operations, true, true);
+			assert.deepStrictEqual(result, reference.applyEdits(operations, true, true));
+			compareBuffers(reference, actual);
+			assert.strictEqual(result.changes.length, count >= 1000 && !tracked ? 1 : count);
+		}
+	}
+});
+
+test('Rust complete model transactions preserve seeded batch results in both EOL and undo modes', context => {
+	let seed = 107;
+	const random = (limit: number) => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed % limit; };
+	const alphabet = ['a', ' ', '\t', '\n', '\r', '\r\n', '\uFEFF', '\uD800', '\uDC00', '\u05D0', '\uD803\uDC00', '\u2028'];
+	for (const eol of [DefaultEndOfLine.LF, DefaultEndOfLine.CRLF]) {
+		for (const record of [false, true]) {
+			for (const undo of [false, true]) {
+				const [reference, actual] = createPair(context, [' \n\t\ntext\n'.repeat(8)], eol);
+				reference.setEOL(eol === DefaultEndOfLine.LF ? '\n' : '\r\n');
+				actual.setEOL(reference.getEOL());
+				for (let iteration = 0; iteration < 128; iteration++) {
+					const offsets: number[] = [];
+					for (let line = 1; line <= reference.getLineCount(); line++) {
+						for (let column = 1; column <= reference.getLineMaxColumn(line); column++) {
+							offsets.push(reference.getOffsetAt(line, column));
+						}
+					}
+					let cursor = 0;
+					const operations: ValidAnnotatedEditOperation[] = [];
+					for (let index = 0, count = 1 + random(8); index < count; index++) {
+						const start = cursor + random(offsets.length - cursor);
+						const end = start + random(Math.min(16, offsets.length - start));
+						const text = random(8) === 0 ? null : Array.from({ length: random(8) }, () => alphabet[random(alphabet.length)]).join('');
+						operations.push(new ValidAnnotatedEditOperation({ major: iteration, minor: index }, reference.getRangeAt(offsets[start], offsets[end] - offsets[start]), text, !!random(2), !!random(2), !!random(2)));
+						cursor = end;
+					}
+					for (let index = operations.length - 1; index > 0; index--) {
+						const other = random(index + 1);
+						[operations[index], operations[other]] = [operations[other], operations[index]];
+					}
+					if (iteration % 16 === 0) {
+						reference.resetMightContainUnusualLineTerminators();
+						actual.resetMightContainUnusualLineTerminators();
+					}
+					const before = readSnapshot(reference.createSnapshot(false));
+					const snapshot = actual.createSnapshot(false);
+					const expected = reference.applyEdits(operations, record, undo);
+					const result = actual.applyEdits(operations, record, undo);
+					const flags = (buffer: PieceTreeTextBuffer) => [buffer.mightContainNonBasicASCII(), buffer.mightContainRTL(), buffer.mightContainUnusualLineTerminators()];
+					assert.deepStrictEqual({ result, lines: actual.getLinesContent(), flags: flags(actual), snapshot: readSnapshot(snapshot) }, { result: expected, lines: reference.getLinesContent(), flags: flags(reference), snapshot: before }, `Model transaction ${eol}/${record}/${undo}/${iteration}`);
+					if (undo && iteration % 8 === 0) {
+						assert.deepStrictEqual(actual.applyEdits(annotate(result.reverseEdits!), false, true), reference.applyEdits(annotate(expected.reverseEdits!), false, true));
+						assert.strictEqual(readSnapshot(actual.createSnapshot(false)), before);
+					}
+				}
+			}
+		}
+	}
 });
 
 test('Rust storage preserves chunked UTF-16 input, BOM, and both default EOLs', context => {

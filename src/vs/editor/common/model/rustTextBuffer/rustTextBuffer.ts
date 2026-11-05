@@ -7,12 +7,13 @@ import { DisposableStore, IDisposable, toDisposable } from '../../../../base/com
 import { decodeUTF16 as fromUnits, encodeUTF16 as toUnits } from '../../core/utf16Transfer.js';
 import { Position } from '../../core/position.js';
 import { Range } from '../../core/range.js';
-import { FindMatch, ITextSnapshot, SearchData } from '../../model.js';
+import { FindMatch, ITextSnapshot, SearchData, ValidAnnotatedEditOperation } from '../../model.js';
 import { Searcher, createFindMatch, isValidMatch } from '../textModelSearch.js';
 import { StringBuffer } from '../pieceTreeTextBuffer/pieceTreeBase.js';
-import { ITextBufferStorage, ITextBufferStorageEdit, registerTextBufferStorageFactory } from './textBufferStorage.js';
+import { ITextBufferFlags, ITextBufferModelEditsResult, ITextBufferStorage, ITextBufferStorageEdit, registerTextBufferStorageFactory } from './textBufferStorage.js';
 import { IRustSequenceDiffModule, registerRustSequenceDiff } from '../../diff/defaultLinesDiffComputer/algorithms/rustSequenceDiff.js';
 import { IRustTextChangeModule, registerRustTextChanges } from '../../core/rustTextChanges.js';
+import { applyRustModelEdits } from './modelEdits.js';
 
 /** The generated binding surface; UTF-16 arrays preserve JavaScript string semantics. */
 export interface IRustTextBuffer {
@@ -21,6 +22,7 @@ export interface IRustTextBuffer {
 	replace(offset: number, length: number, units: Uint16Array): void;
 	replace_text(offset: number, length: number, text: string): void;
 	apply_edits(ranges: Uint32Array, units: Uint16Array): void;
+	apply_model_edits(operations: Uint32Array, units: Uint16Array, crlf: boolean, flags: number, recordTrimAutoWhitespace: boolean, computeUndoEdits: boolean): Uint8Array | undefined;
 	slice(offset: number, length: number): Uint16Array;
 	slice_text(offset: number, length: number): string | Uint16Array;
 	offset_at(lineNumber: number, column: number): number;
@@ -65,7 +67,7 @@ export function getRustTextBufferInitialization(): IRustTextBufferInitialization
 // UTF-8 bindings replace lone surrogates. Keep surrogate-bearing input on the code-unit path.
 const containsSurrogates = /[\uD800-\uDFFF]/;
 
-/** Keeps rendering, edit validation, notifications, and undo in their existing implementation. */
+/** Retains native text and edit transactions beneath the existing model and rendering contracts. */
 class RustTextBufferStorage implements ITextBufferStorage, IDisposable {
 	private readonly _buffer: IRustTextBuffer;
 	private _disposed = false;
@@ -189,6 +191,17 @@ class RustTextBufferStorage implements ITextBufferStorage, IDisposable {
 		this._cachedLines = undefined;
 	}
 
+	public applyModelEdits(operations: readonly ValidAnnotatedEditOperation[], flags: ITextBufferFlags, recordTrimAutoWhitespace: boolean, computeUndoEdits: boolean): ITextBufferModelEditsResult | undefined {
+		if (!this._eolNormalized) {
+			return undefined;
+		}
+		const result = applyRustModelEdits(this._buffer, operations, this._eol === '\r\n', flags, recordTrimAutoWhitespace, computeUndoEdits);
+		if (result) {
+			this._cachedLines = undefined;
+		}
+		return result;
+	}
+
 	private replace(offset: number, length: number, text: string): void {
 		if (containsSurrogates.test(text)) {
 			this._buffer.replace(offset, length, toUnits(text));
@@ -271,7 +284,7 @@ class RustTextBufferStorage implements ITextBufferStorage, IDisposable {
 
 /** Installs an initialized Rust module for new models. Dispose the registration to restore defaults. */
 export function registerRustTextBuffer(module: IRustTextBufferModule, initialization?: IRustTextBufferInitialization): IDisposable {
-	if (typeof module.text_buffer_abi_version !== 'function' || module.text_buffer_abi_version() !== 3) {
+	if (typeof module.text_buffer_abi_version !== 'function' || module.text_buffer_abi_version() !== 4) {
 		throw new Error('The Rust text buffer bindings do not match the current storage contract');
 	}
 	const registration = new DisposableStore();

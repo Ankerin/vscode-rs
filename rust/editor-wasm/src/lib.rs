@@ -8,6 +8,7 @@
 use vscode_editor_core::{BufferError, Position, TextBuffer, TextEdit, TextSnapshot};
 use wasm_bindgen::prelude::*;
 
+mod model_edits;
 mod sequence_diff;
 mod text_change;
 mod text_transfer;
@@ -15,7 +16,7 @@ mod text_transfer;
 /// Identifies the storage contract independently of the binding generator's version.
 #[wasm_bindgen]
 pub fn text_buffer_abi_version() -> u32 {
-	3
+	4
 }
 
 #[wasm_bindgen]
@@ -92,6 +93,27 @@ impl WasmTextBuffer {
 			})
 			.collect();
 		Ok(self.buffer.apply_edits(&edits?)?)
+	}
+
+	/// Prepares model edits, inverse records, and whitespace candidates in one native scope.
+	pub fn apply_model_edits(
+		&mut self,
+		operations: &[u32],
+		units: &[u16],
+		crlf: bool,
+		flags: u32,
+		record_trim_auto_whitespace: bool,
+		compute_undo_edits: bool,
+	) -> Result<Option<Vec<u8>>, JsError> {
+		model_edits::apply(
+			&mut self.buffer,
+			operations,
+			units,
+			crlf,
+			flags,
+			record_trim_auto_whitespace,
+			compute_undo_edits,
+		)
 	}
 
 	pub fn slice(&self, offset: usize, length: usize) -> Result<Vec<u16>, JsError> {

@@ -20,6 +20,9 @@ export function decodeUTF16(units: string | Uint16Array): string {
 	if (typeof units === 'string') {
 		return units;
 	}
+	if (units.length <= 64) {
+		return String.fromCharCode(...units);
+	}
 	if (isLittleEndian) {
 		try {
 			return utf16Decoder.decode(new Uint8Array(units.buffer, units.byteOffset, units.byteLength));
@@ -60,6 +63,12 @@ export function decodeUTF16(units: string | Uint16Array): string {
 
 /** Decodes a little-endian byte span losslessly, including unaligned views and other host byte orders. */
 export function decodeUTF16LELossless(bytes: Uint8Array, offset: number, length: number): string {
+	if (length === 1) {
+		return String.fromCharCode(bytes[offset] | bytes[offset + 1] << 8);
+	}
+	if (length === 2) {
+		return String.fromCharCode(bytes[offset] | bytes[offset + 1] << 8, bytes[offset + 2] | bytes[offset + 3] << 8);
+	}
 	if (isLittleEndian && (bytes.byteOffset + offset) % 2 === 0) {
 		return decodeUTF16(new Uint16Array(bytes.buffer, bytes.byteOffset + offset, length));
 	}

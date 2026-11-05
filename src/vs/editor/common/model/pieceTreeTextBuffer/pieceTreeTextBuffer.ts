@@ -257,6 +257,18 @@ export class PieceTreeTextBuffer extends Disposable implements ITextBuffer {
 	}
 
 	public applyEdits(rawOperations: ValidAnnotatedEditOperation[], recordTrimAutoWhitespace: boolean, computeUndoEdits: boolean): ApplyEditsResult {
+		const native = this._pieceTree.applyModelEdits?.(rawOperations, {
+			mightContainRTL: this._mightContainRTL,
+			mightContainUnusualLineTerminators: this._mightContainUnusualLineTerminators,
+			mightContainNonBasicASCII: this._mightContainNonBasicASCII
+		}, recordTrimAutoWhitespace, computeUndoEdits);
+		if (native) {
+			this._mightContainRTL = native.mightContainRTL;
+			this._mightContainUnusualLineTerminators = native.mightContainUnusualLineTerminators;
+			this._mightContainNonBasicASCII = native.mightContainNonBasicASCII;
+			this._onDidChangeContent.fire();
+			return native.result;
+		}
 		let mightContainRTL = this._mightContainRTL;
 		let mightContainUnusualLineTerminators = this._mightContainUnusualLineTerminators;
 		let mightContainNonBasicASCII = this._mightContainNonBasicASCII;

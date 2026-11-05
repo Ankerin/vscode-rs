@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 
 interface BenchmarkResult {
-	engine: 'existing' | 'rust';
+	engine: 'existing' | 'storage' | 'rust';
 	fixture: string;
 	inputUtf16Units: number;
 	linesRead?: number;
@@ -23,7 +23,8 @@ interface BenchmarkResult {
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const sequenceDiff = process.argv.includes('--diff');
 const textChanges = process.argv.includes('--undo');
-const benchmark = sequenceDiff ? 'sequenceDiffBenchmark' : textChanges ? 'textChangeBenchmark' : 'textBufferBenchmark';
+const modelEdits = process.argv.includes('--edits');
+const benchmark = sequenceDiff ? 'sequenceDiffBenchmark' : textChanges ? 'textChangeBenchmark' : modelEdits ? 'modelEditsBenchmark' : 'textBufferBenchmark';
 const output = resolve(root, `.build/rust/${benchmark}.mjs`);
 await build({
 	entryPoints: [resolve(root, `test/rust/${benchmark}.ts`)],
@@ -36,11 +37,12 @@ await build({
 });
 
 const runs: BenchmarkResult[] = [];
-const fixtures = sequenceDiff ? ['small', 'medium', 'large', 'unicode'] : textChanges ? ['typing', 'multicursor', 'fragmented', 'unicode'] : ['ascii', 'latin1', 'unicode', 'longLine'];
+const fixtures = sequenceDiff ? ['small', 'medium', 'large', 'unicode'] : textChanges || modelEdits ? ['typing', 'multicursor', 'fragmented', 'unicode'] : ['ascii', 'latin1', 'unicode', 'longLine'];
 for (const fixture of fixtures) {
 	for (let iteration = 0; iteration < 3; iteration++) {
-		for (const engine of iteration % 2 === 0 ? ['existing', 'rust'] : ['rust', 'existing']) {
-			const result = spawnSync(process.execPath, [...(sequenceDiff || textChanges ? ['--expose-gc'] : []), output, engine, fixture], { cwd: root, encoding: 'utf8', windowsHide: true });
+		const engines = modelEdits ? ['existing', 'storage', 'rust'] : ['existing', 'rust'];
+		for (const engine of iteration % 2 === 0 ? engines : engines.reverse()) {
+			const result = spawnSync(process.execPath, [...(sequenceDiff || textChanges || modelEdits ? ['--expose-gc'] : []), output, engine, fixture], { cwd: root, encoding: 'utf8', windowsHide: true });
 			if (result.error) {
 				throw result.error;
 			}
@@ -64,9 +66,10 @@ function median(values: number[]): number {
 const rows = fixtures.flatMap(fixture => Object.keys(runs[0].measurements).map(workload => {
 	const existing = median(runs.filter(run => run.fixture === fixture && run.engine === 'existing').map(run => run.measurements[workload]));
 	const rust = median(runs.filter(run => run.fixture === fixture && run.engine === 'rust').map(run => run.measurements[workload]));
-	return { fixture, workload, existingMs: existing.toFixed(2), rustMs: rust.toFixed(2), rustOverExisting: (rust / existing).toFixed(2) };
+	const storage = modelEdits ? median(runs.filter(run => run.fixture === fixture && run.engine === 'storage').map(run => run.measurements[workload])) : undefined;
+	return { fixture, workload, existingMs: existing.toFixed(2), ...(storage === undefined ? {} : { storageMs: storage.toFixed(2) }), rustMs: rust.toFixed(2), rustOverExisting: (rust / existing).toFixed(2) };
 }));
-const resultsFile = `.build/rust/${sequenceDiff ? 'diff-benchmark' : textChanges ? 'undo-benchmark' : 'benchmark'}.json`;
+const resultsFile = `.build/rust/${sequenceDiff ? 'diff-benchmark' : textChanges ? 'undo-benchmark' : modelEdits ? 'edits-benchmark' : 'benchmark'}.json`;
 await writeFile(resolve(root, resultsFile), JSON.stringify({ node: process.version, platform: process.platform, architecture: process.arch, runs }, null, '\t') + '\n');
 console.table(rows);
 console.log(`Raw runs and process memory observations: ${resultsFile}`);
