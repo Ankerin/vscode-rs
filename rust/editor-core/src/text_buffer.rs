@@ -299,6 +299,33 @@ impl TextBuffer {
 		Ok(start..end)
 	}
 
+	/// Resolves adjacent lines ending at the requested line. A long final line is never truncated.
+	pub fn backward_line_batch_range(
+		&self,
+		end_line: usize,
+		max_lines: usize,
+		max_units: usize,
+	) -> Result<Range<usize>, BufferError> {
+		if max_lines == 0 {
+			return Err(BufferError::InvalidPosition);
+		}
+		if max_lines == 1 {
+			return self.line_range(end_line);
+		}
+		let end = self.line_range(end_line)?.end;
+		let budget_start = end.saturating_sub(max_units);
+		let mut start_line = end_line
+			.saturating_sub(max_lines - 1)
+			.max(1)
+			.max(self.position_at(budget_start).line_number);
+		let mut start = self.line_start(start_line)?;
+		if start_line < end_line && start < budget_start {
+			start_line += 1;
+			start = self.line_start(start_line)?;
+		}
+		Ok(start..end)
+	}
+
 	/// Rewrites only line-ending units; all other UTF-16 units are preserved verbatim.
 	pub fn normalize_eol(&mut self, crlf: bool) {
 		let mut units = Vec::with_capacity(self.len());
@@ -351,7 +378,7 @@ impl TextBuffer {
 			.chunk_at(offset)
 	}
 
-	fn chunk_before(&self, offset: usize) -> TextChunk<'_> {
+	pub(crate) fn chunk_before(&self, offset: usize) -> TextChunk<'_> {
 		if offset == 0 {
 			return TextChunk::Latin1(&[]);
 		}

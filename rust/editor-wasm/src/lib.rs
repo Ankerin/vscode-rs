@@ -6,7 +6,8 @@
 //! Typed WebAssembly bindings. Text crosses the boundary as UTF-16, never a lossy Rust string.
 
 use vscode_editor_core::{
-	BufferError, Position, TextBuffer, TextEdit, TextSnapshot, guess_indentation,
+	BufferError, Position, TextBuffer, TextEdit, TextSnapshot, compute_indentation_folding,
+	guess_indentation,
 };
 use wasm_bindgen::prelude::*;
 
@@ -18,7 +19,7 @@ mod text_transfer;
 /// Identifies the storage contract independently of the binding generator's version.
 #[wasm_bindgen]
 pub fn text_buffer_abi_version() -> u32 {
-	6
+	7
 }
 
 #[wasm_bindgen]
@@ -165,6 +166,78 @@ impl WasmTextBuffer {
 		Ok(vec![guess.tab_size, f64::from(guess.insert_spaces)])
 	}
 
+	/// Computes indentation folding in one native scope; JavaScript retains regex semantics.
+	pub fn indentation_folding(
+		&self,
+		tab_size: f64,
+		off_side: bool,
+		limit: f64,
+		marker: Option<js_sys::Function>,
+	) -> Result<Option<Vec<u32>>, JsValue> {
+		if !limit.is_finite() || !(0.0..=65535.0).contains(&limit) || limit.fract() != 0.0 {
+			return Ok(None);
+		}
+		let mut marker_start = 0;
+		let mut marker_values = Vec::new();
+		let result = compute_indentation_folding(
+			&self.buffer,
+			tab_size,
+			off_side,
+			limit as usize,
+			&mut |line| -> Result<u8, JsValue> {
+				if line >= marker_start
+					&& let Some(&value) = marker_values.get(line - marker_start)
+				{
+					return Ok(value);
+				}
+				let Some(marker) = &marker else { return Ok(0) };
+				let value = marker.call1(&JsValue::UNDEFINED, &JsValue::from_f64(line as f64))?;
+				if value.is_instance_of::<js_sys::Uint8Array>() {
+					let values = js_sys::Uint8Array::from(value);
+					let length = values.length() as usize;
+					if length == 0 || length > 64 || length > line {
+						return Err(JsError::new(
+							"The folding marker batch does not match the current model contract",
+						)
+						.into());
+					}
+					marker_values = values.to_vec();
+					if marker_values.iter().any(|&value| value > 2) {
+						return Err(JsError::new(
+							"The folding marker batch does not match the current model contract",
+						)
+						.into());
+					}
+					marker_start = line + 1 - length;
+					return Ok(marker_values[length - 1]);
+				}
+				match value.as_f64() {
+					Some(0.0) => Ok(0),
+					Some(1.0) => Ok(1),
+					Some(2.0) => Ok(2),
+					_ => Err(JsError::new(
+						"The folding marker does not match the current model contract",
+					)
+					.into()),
+				}
+			},
+		)?;
+		let Some(result) = result else {
+			return Ok(None);
+		};
+		let mut values = Vec::new();
+		if values
+			.try_reserve_exact(1 + result.starts.len() * 2)
+			.is_err()
+		{
+			return Ok(None);
+		}
+		values.push(result.computed as u32);
+		values.extend_from_slice(&result.starts);
+		values.extend_from_slice(&result.ends);
+		Ok(Some(values))
+	}
+
 	/// Unsupported visible-line coordinates leave the existing character-count path available.
 	pub fn character_count(
 		&self,
@@ -198,6 +271,18 @@ impl WasmTextBuffer {
 		let range = self
 			.buffer
 			.line_batch_range(start_line, max_lines, max_units)?;
+		Ok(text_transfer::read_range(&self.buffer, range)?)
+	}
+
+	pub fn backward_line_batch(
+		&self,
+		end_line: usize,
+		max_lines: usize,
+		max_units: usize,
+	) -> Result<JsValue, JsError> {
+		let range = self
+			.buffer
+			.backward_line_batch_range(end_line, max_lines, max_units)?;
 		Ok(text_transfer::read_range(&self.buffer, range)?)
 	}
 

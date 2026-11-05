@@ -6,7 +6,7 @@
 import { IDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
 import { Position } from '../../core/position.js';
 import { Range } from '../../core/range.js';
-import { ApplyEditsResult, FindMatch, ITextSnapshot, SearchData, ValidAnnotatedEditOperation } from '../../model.js';
+import { ApplyEditsResult, FindMatch, IIndentationFoldingRanges, ITextSnapshot, SearchData, ValidAnnotatedEditOperation } from '../../model.js';
 import { createLineStartsFast, StringBuffer } from '../pieceTreeTextBuffer/pieceTreeBase.js';
 import type { IGuessedIndentation } from '../indentationGuesser.js';
 
@@ -50,6 +50,7 @@ export interface ITextBufferStorage {
 	/** Counts visible characters without transferring whole lines when the range is supported. */
 	getCharacterCountInRange?(range: Range, eol: string): number | undefined;
 	getGuessedIndentation?(defaultTabSize: number, defaultInsertSpaces: boolean): IGuessedIndentation;
+	getIndentationFoldingRanges?(tabSize: number, offSide: boolean, limit: number, getMarker?: (lineNumber: number) => number): IIndentationFoldingRanges | undefined;
 	insert(offset: number, value: string, eolNormalized?: boolean): void;
 	delete(offset: number, length: number): void;
 	/** Applies validated replacements together when the storage supports atomic batches. */

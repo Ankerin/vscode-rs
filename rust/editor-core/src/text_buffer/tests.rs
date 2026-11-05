@@ -240,6 +240,68 @@ fn bounded_line_batches_preserve_mixed_endings_empty_lines_and_long_lines() {
 }
 
 #[test]
+fn backward_line_batches_keep_complete_end_lines_and_respect_budgets() {
+	let buffer = TextBuffer::new(&units("one\r\n\rtwo\nthree\r\n"));
+	let observations: Vec<_> = [
+		(5, 64, 100),
+		(5, 64, 0),
+		(4, 64, 5),
+		(4, 2, 100),
+		(3, 1, 100),
+		(1, 64, 100),
+	]
+	.into_iter()
+	.map(|(line, count, budget)| {
+		buffer
+			.slice(
+				buffer
+					.backward_line_batch_range(line, count, budget)
+					.unwrap(),
+			)
+			.unwrap()
+	})
+	.collect();
+	assert_eq!(
+		observations,
+		[
+			"one\r\n\rtwo\nthree\r\n",
+			"",
+			"three",
+			"two\nthree",
+			"two",
+			"one"
+		]
+		.map(units)
+	);
+	for (line, count) in [(0, 64), (6, 64), (1, 0)] {
+		assert_eq!(
+			buffer.backward_line_batch_range(line, count, 100),
+			Err(BufferError::InvalidPosition)
+		);
+	}
+	let text = format!("short\n{}\nlast", "x".repeat(40000));
+	let long = TextBuffer::from_text(&text);
+	assert_eq!(
+		long.slice(long.backward_line_batch_range(3, 64, 32768).unwrap())
+			.unwrap(),
+		units("last")
+	);
+	assert_eq!(
+		long.slice(long.backward_line_batch_range(2, 64, 32768).unwrap())
+			.unwrap(),
+		vec![120; 40000]
+	);
+	assert_eq!(
+		long.slice(
+			long.backward_line_batch_range(3, usize::MAX, usize::MAX)
+				.unwrap()
+		)
+		.unwrap(),
+		units(&text)
+	);
+}
+
+#[test]
 fn range_snapshots_start_and_stop_inside_compact_wide_and_split_surrogate_leaves() {
 	let mut text = vec![65; 8192];
 	for offset in [1023, 3071, 6143] {

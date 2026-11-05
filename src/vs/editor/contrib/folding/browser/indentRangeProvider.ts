@@ -125,7 +125,6 @@ const foldingRangesLimitDefault: FoldingLimitReporter = {
 
 export function computeRanges(model: ITextModel, offSide: boolean, markers?: FoldingMarkers, foldingRangesLimit: FoldingLimitReporter = foldingRangesLimitDefault): FoldingRegions {
 	const tabSize = model.getOptions().tabSize;
-	const result = new RangesCollector(foldingRangesLimit);
 
 	let pattern: RegExp | undefined = undefined;
 	let startPattern: RegExp | undefined = undefined;
@@ -138,6 +137,33 @@ export function computeRanges(model: ITextModel, offSide: boolean, markers?: Fol
 			endPattern = markers.end;
 		}
 	}
+
+	const getMarker = (lineContent: string): number => {
+		if (pattern) {
+			pattern.lastIndex = 0;
+			const match = pattern.exec(lineContent);
+			return match ? (match[1] ? 1 : 2) : 0;
+		}
+		if (startPattern) {
+			startPattern.lastIndex = 0;
+			if (startPattern.test(lineContent)) {
+				return 1;
+			}
+		}
+		if (endPattern) {
+			endPattern.lastIndex = 0;
+			if (endPattern.test(lineContent)) {
+				return 2;
+			}
+		}
+		return 0;
+	};
+	const native = model.getTextBuffer().getIndentationFoldingRanges?.(tabSize, offSide, foldingRangesLimit.limit, markers ? line => getMarker(model.getLineContent(line)) : undefined);
+	if (native) {
+		foldingRangesLimit.update(native.computed, native.computed > foldingRangesLimit.limit ? foldingRangesLimit.limit : false);
+		return new FoldingRegions(native.startLineNumbers, native.endLineNumbers);
+	}
+	const result = new RangesCollector(foldingRangesLimit);
 
 	const previousRegions: PreviousRegion[] = [];
 	const line = model.getLineCount() + 1;
@@ -156,28 +182,10 @@ export function computeRanges(model: ITextModel, offSide: boolean, markers?: Fol
 			}
 			continue; // only whitespace
 		}
-		let isStartMatch = false;
-		let isEndMatch = false;
-		let m;
-		if (pattern) {
-			pattern.lastIndex = 0;
-			if ((m = pattern.exec(lineContent))) {
-				isStartMatch = !!m[1];
-				isEndMatch = !isStartMatch;
-			}
-		} else {
-			if (startPattern) {
-				startPattern.lastIndex = 0;
-				isStartMatch = startPattern.test(lineContent);
-			}
-			if (!isStartMatch && endPattern) {
-				endPattern.lastIndex = 0;
-				isEndMatch = endPattern.test(lineContent);
-			}
-		}
-		if (isStartMatch || isEndMatch) {
+		const marker = getMarker(lineContent);
+		if (marker !== 0) {
 			// folding pattern match
-			if (isStartMatch) { // start pattern match
+			if (marker === 1) { // start pattern match
 				// discard all regions until the folding pattern
 				let i = previousRegions.length - 1;
 				while (i > 0 && previousRegions[i].indent !== -2) {

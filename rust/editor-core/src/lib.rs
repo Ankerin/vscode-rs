@@ -5,6 +5,7 @@
 
 //! Platform-independent editor algorithms. Text coordinates use UTF-16 code units.
 
+mod folding;
 mod indentation;
 mod model_edits;
 mod search;
@@ -14,6 +15,7 @@ mod text_change;
 mod text_chunk;
 mod tree;
 
+pub use folding::{IndentationFoldingRanges, compute_indentation_folding};
 pub use indentation::{GuessedIndentation, guess_indentation};
 pub use model_edits::{
 	MAX_MODEL_EDIT_UNITS, MAX_MODEL_EDITS, ModelEdit, ModelEditOptions, ModelTextFlags,

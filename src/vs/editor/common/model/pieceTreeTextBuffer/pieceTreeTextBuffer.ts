@@ -7,7 +7,7 @@ import { Emitter, Event } from '../../../../base/common/event.js';
 import * as strings from '../../../../base/common/strings.js';
 import { Position } from '../../core/position.js';
 import { Range } from '../../core/range.js';
-import { ApplyEditsResult, EndOfLinePreference, FindMatch, IInternalModelContentChange, ISingleEditOperationIdentifier, ITextBuffer, ITextSnapshot, ValidAnnotatedEditOperation, IValidEditOperation, SearchData } from '../../model.js';
+import { ApplyEditsResult, EndOfLinePreference, FindMatch, IIndentationFoldingRanges, IInternalModelContentChange, ISingleEditOperationIdentifier, ITextBuffer, ITextSnapshot, ValidAnnotatedEditOperation, IValidEditOperation, SearchData } from '../../model.js';
 import { PieceTreeBase, StringBuffer } from './pieceTreeBase.js';
 import { countEOL, StringEOL } from '../../core/misc/eolCounter.js';
 import { TextChange } from '../../core/textChange.js';
@@ -252,6 +252,10 @@ export class PieceTreeTextBuffer extends Disposable implements ITextBuffer {
 
 	public getGuessedIndentation(defaultTabSize: number, defaultInsertSpaces: boolean): IGuessedIndentation | undefined {
 		return this._pieceTree.getGuessedIndentation?.(defaultTabSize, defaultInsertSpaces);
+	}
+
+	public getIndentationFoldingRanges(tabSize: number, offSide: boolean, limit: number, getMarker?: (lineNumber: number) => number): IIndentationFoldingRanges | undefined {
+		return this._pieceTree.getIndentationFoldingRanges?.(tabSize, offSide, limit, getMarker);
 	}
 
 	private _getEndOfLine(eol: EndOfLinePreference): string {

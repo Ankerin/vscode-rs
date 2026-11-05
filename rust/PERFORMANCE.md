@@ -452,3 +452,27 @@ The first native implementation repeatedly resolved line coordinates and was slo
 | Whitespace-heavy source | 58.87 | 66.99 | 1.75 |
 
 Process peak RSS remains higher with Rust. These figures include setup, warm-up, all query workloads, and checksum construction; they do not isolate the indentation algorithm's live allocations. Application startup/input latency and whole-editor resource improvements remain unverified. Final runs are ignored in `.build/rust/queries-benchmark.json`; the initial coordinate-based traversal is retained in `.build/rust/queries-benchmark-indentation-initial.json`.
+
+## Indentation folding observation
+
+Measured on November 6, 2026, Windows x64, Node `24.22.1`, Rust `1.99.1`, and release storage ABI 7 bindings. The dedicated `--folding` runner alternates three fresh processes per engine. Each workload computes 100 folding results, alternating off-side handling, with/without regex markers and limits 5,000/32. Two computations per workload warm the model before timing. Model setup and the final complete endpoint checksum are outside the timer; result creation and the original limit-report callback remain inside. Checksums match across engines. Times are medians in milliseconds.
+
+| Fixture | Existing plain, limit 5,000 | Rust plain, limit 5,000 | Existing plain, limit 32 | Rust plain, limit 32 | Existing markers, limit 5,000 | Rust markers, limit 5,000 | Existing markers, limit 32 | Rust markers, limit 32 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Short lines | 41.66 | 22.47 | 49.16 | 20.65 | 68.98 | 125.90 | 79.35 | 119.23 |
+| Unicode lines | 42.55 | 24.99 | 51.45 | 22.05 | 74.12 | 343.79 | 82.51 | 330.32 |
+| Long mixed prefixes | 41.20 | 23.81 | 35.67 | 24.43 | 69.73 | 84.53 | 69.85 | 84.98 |
+| Deep indentation | 142.17 | 93.43 | 213.74 | 93.99 | 291.50 | 378.71 | 361.98 | 365.06 |
+
+Short/Unicode fixtures repeat 2,048 five-line blocks, including region markers, blank lines, and lone/paired surrogate units. The long fixture contains 65,536 space/tab pairs in one prefix. Deep indentation repeats 128 blocks with 1,500–1,504 spaces. Native plain folding borrows source leaves and avoids the original line decoding and second limit-selection pass; it improves in every fixture. Marker folding retains regressions from lossless text transfer, JavaScript regex evaluation, and whitespace classification.
+
+Initial per-line callbacks took 592.11 milliseconds on short-line markers and 716.77 on Unicode, while floating-point tab modulo took 140.55 on plain long prefixes. Bounded backward line transfer reduced callbacks' text cost; batches of marker bytes then reduced cross-boundary calls. Checked integer tab arithmetic reduced the long-prefix path. The final marker results remain slower than the original, and intermediate deep/long marker timings varied substantially. The final within-capture comparisons are the relevant evidence; the stage remains opt-in.
+
+| Fixture | Existing process peak RSS MiB | Rust process peak RSS MiB | Rust linear memory MiB |
+| --- | ---: | ---: | ---: |
+| Short lines | 80.21 | 78.14 | 1.31 |
+| Unicode lines | 80.75 | 78.46 | 1.44 |
+| Long mixed prefixes | 67.68 | 73.57 | 1.56 |
+| Deep indentation | 73.22 | 77.14 | 2.69 |
+
+Peak RSS is slightly lower for the short/Unicode fixtures and higher for long/deep prefixes. These process observations include setup, all four workloads, warm-up, and endpoint checksum work; they do not establish whole-editor memory savings. Temporary native candidate/region storage is released on return or callback failure, and one decoded line cache remains in the existing adapter. Raw runs are ignored in `.build/rust/folding-benchmark.json`; earlier captures remain in `.build/rust/folding-benchmark-initial.json` and `.build/rust/folding-benchmark-backward-cache.json`.

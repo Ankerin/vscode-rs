@@ -7,7 +7,7 @@ import { DisposableStore, IDisposable, toDisposable } from '../../../../base/com
 import { decodeUTF16 as fromUnits, encodeUTF16 as toUnits } from '../../core/utf16Transfer.js';
 import { Position } from '../../core/position.js';
 import { Range } from '../../core/range.js';
-import { FindMatch, ITextSnapshot, SearchData, ValidAnnotatedEditOperation } from '../../model.js';
+import { FindMatch, IIndentationFoldingRanges, ITextSnapshot, SearchData, ValidAnnotatedEditOperation } from '../../model.js';
 import { Searcher, createFindMatch, isValidMatch } from '../textModelSearch.js';
 import { StringBuffer } from '../pieceTreeTextBuffer/pieceTreeBase.js';
 import { ITextBufferFlags, ITextBufferModelEditsResult, ITextBufferStorage, ITextBufferStorageEdit, registerTextBufferStorageFactory } from './textBufferStorage.js';
@@ -33,7 +33,9 @@ export interface IRustTextBuffer {
 	last_non_whitespace_column(lineNumber: number): number;
 	character_count(startLine: number, startColumn: number, endLine: number, endColumn: number, eolLength: number): number | undefined;
 	guess_indentation(defaultTabSize: number, defaultInsertSpaces: boolean): Float64Array;
+	indentation_folding(tabSize: number, offSide: boolean, limit: number, getMarker?: (lineNumber: number) => number | Uint8Array): Uint32Array | undefined;
 	line_batch(startLine: number, maxLines: number, maxUnits: number): string | Uint16Array;
+	backward_line_batch(endLine: number, maxLines: number, maxUnits: number): string | Uint16Array;
 	find_literal(startLine: number, startColumn: number, endLine: number, endColumn: number, needle: Uint16Array, limit: number): Uint32Array;
 	line_length(lineNumber: number): number;
 	char_code(offset: number): number;
@@ -114,6 +116,31 @@ class RustTextBufferStorage implements ITextBufferStorage, IDisposable {
 			throw new Error('The Rust indentation result does not match the current model contract');
 		}
 		return { tabSize: result[0], insertSpaces: result[1] !== 0 };
+	}
+	public getIndentationFoldingRanges(tabSize: number, offSide: boolean, limit: number, getMarker?: (lineNumber: number) => number): IIndentationFoldingRanges | undefined {
+		const result = this._buffer.indentation_folding(tabSize, offSide, limit, getMarker ? line => {
+			if (this.getCachedLine(line) === undefined) {
+				const lines = fromUnits(this._buffer.backward_line_batch(line, 64, 32768)).split(/\r\n|\r|\n/);
+				this._cachedLines = { startLine: line - lines.length + 1, lines };
+			}
+			const cached = this._cachedLines!;
+			const count = line - cached.startLine + 1;
+			const markers = new Uint8Array(count);
+			for (let index = count - 1; index >= 0; index--) {
+				if (!/^[\t ]*$/.test(cached.lines[index])) {
+					markers[index] = getMarker(cached.startLine + index);
+				}
+			}
+			return markers;
+		} : undefined);
+		if (!result) {
+			return undefined;
+		}
+		if (result.length % 2 !== 1 || result[0] < (result.length - 1) / 2) {
+			throw new Error('The Rust folding result does not match the current model contract');
+		}
+		const length = (result.length - 1) / 2;
+		return { startLineNumbers: result.subarray(1, 1 + length), endLineNumbers: result.subarray(1 + length), computed: result[0] };
 	}
 	public getOffsetAt(lineNumber: number, column: number): number { return this._buffer.offset_at(lineNumber, column); }
 	public getNearestChunk(offset: number): string { return fromUnits(this._buffer.nearest_chunk(offset)); }
@@ -301,7 +328,7 @@ class RustTextBufferStorage implements ITextBufferStorage, IDisposable {
 
 /** Installs an initialized Rust module for new models. Dispose the registration to restore defaults. */
 export function registerRustTextBuffer(module: IRustTextBufferModule, initialization?: IRustTextBufferInitialization): IDisposable {
-	if (typeof module.text_buffer_abi_version !== 'function' || module.text_buffer_abi_version() !== 6) {
+	if (typeof module.text_buffer_abi_version !== 'function' || module.text_buffer_abi_version() !== 7) {
 		throw new Error('The Rust text buffer bindings do not match the current storage contract');
 	}
 	const registration = new DisposableStore();

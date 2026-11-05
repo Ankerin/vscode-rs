@@ -1593,11 +1593,22 @@ export class SearchData {
 /**
  * @internal
  */
+export interface IIndentationFoldingRanges {
+	readonly startLineNumbers: Uint32Array;
+	readonly endLineNumbers: Uint32Array;
+	readonly computed: number;
+}
+
+/**
+ * @internal
+ */
 export interface ITextBuffer extends IReadonlyTextBuffer, IDisposable {
 	setEOL(newEOL: '\r\n' | '\n'): void;
 	applyEdits(rawOperations: ValidAnnotatedEditOperation[], recordTrimAutoWhitespace: boolean, computeUndoEdits: boolean): ApplyEditsResult;
 	/** Returns native indentation settings when the buffer supports complete source inspection. */
 	getGuessedIndentation?(defaultTabSize: number, defaultInsertSpaces: boolean): IGuessedIndentation | undefined;
+	/** Computes indentation folding while the caller retains its regular-expression marker semantics. */
+	getIndentationFoldingRanges?(tabSize: number, offSide: boolean, limit: number, getMarker?: (lineNumber: number) => number): IIndentationFoldingRanges | undefined;
 }
 
 /**

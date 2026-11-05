@@ -25,7 +25,8 @@ const sequenceDiff = process.argv.includes('--diff');
 const textChanges = process.argv.includes('--undo');
 const modelEdits = process.argv.includes('--edits');
 const modelQueries = process.argv.includes('--queries');
-const benchmark = sequenceDiff ? 'sequenceDiffBenchmark' : textChanges ? 'textChangeBenchmark' : modelEdits ? 'modelEditsBenchmark' : modelQueries ? 'modelQueriesBenchmark' : 'textBufferBenchmark';
+const indentationFolding = process.argv.includes('--folding');
+const benchmark = sequenceDiff ? 'sequenceDiffBenchmark' : textChanges ? 'textChangeBenchmark' : modelEdits ? 'modelEditsBenchmark' : modelQueries ? 'modelQueriesBenchmark' : indentationFolding ? 'foldingBenchmark' : 'textBufferBenchmark';
 const output = resolve(root, `.build/rust/${benchmark}.mjs`);
 await build({
 	entryPoints: [resolve(root, `test/rust/${benchmark}.ts`)],
@@ -38,12 +39,12 @@ await build({
 });
 
 const runs: BenchmarkResult[] = [];
-const fixtures = sequenceDiff ? ['small', 'medium', 'large', 'unicode'] : textChanges || modelEdits ? ['typing', 'multicursor', 'fragmented', 'unicode'] : modelQueries ? ['shortLines', 'unicode', 'longLine', 'whitespace'] : ['ascii', 'latin1', 'unicode', 'longLine'];
+const fixtures = sequenceDiff ? ['small', 'medium', 'large', 'unicode'] : textChanges || modelEdits ? ['typing', 'multicursor', 'fragmented', 'unicode'] : modelQueries ? ['shortLines', 'unicode', 'longLine', 'whitespace'] : indentationFolding ? ['shortLines', 'unicode', 'longPrefixes', 'deepIndent'] : ['ascii', 'latin1', 'unicode', 'longLine'];
 for (const fixture of fixtures) {
 	for (let iteration = 0; iteration < 3; iteration++) {
 		const engines = modelEdits ? ['existing', 'storage', 'rust'] : ['existing', 'rust'];
 		for (const engine of iteration % 2 === 0 ? engines : engines.reverse()) {
-			const result = spawnSync(process.execPath, [...(sequenceDiff || textChanges || modelEdits || modelQueries ? ['--expose-gc'] : []), output, engine, fixture], { cwd: root, encoding: 'utf8', windowsHide: true });
+			const result = spawnSync(process.execPath, [...(sequenceDiff || textChanges || modelEdits || modelQueries || indentationFolding ? ['--expose-gc'] : []), output, engine, fixture], { cwd: root, encoding: 'utf8', windowsHide: true });
 			if (result.error) {
 				throw result.error;
 			}
@@ -70,7 +71,7 @@ const rows = fixtures.flatMap(fixture => Object.keys(runs[0].measurements).map(w
 	const storage = modelEdits ? median(runs.filter(run => run.fixture === fixture && run.engine === 'storage').map(run => run.measurements[workload])) : undefined;
 	return { fixture, workload, existingMs: existing.toFixed(2), ...(storage === undefined ? {} : { storageMs: storage.toFixed(2) }), rustMs: rust.toFixed(2), rustOverExisting: (rust / existing).toFixed(2) };
 }));
-const resultsFile = `.build/rust/${sequenceDiff ? 'diff-benchmark' : textChanges ? 'undo-benchmark' : modelEdits ? 'edits-benchmark' : modelQueries ? 'queries-benchmark' : 'benchmark'}.json`;
+const resultsFile = `.build/rust/${sequenceDiff ? 'diff-benchmark' : textChanges ? 'undo-benchmark' : modelEdits ? 'edits-benchmark' : modelQueries ? 'queries-benchmark' : indentationFolding ? 'folding-benchmark' : 'benchmark'}.json`;
 await writeFile(resolve(root, resultsFile), JSON.stringify({ node: process.version, platform: process.platform, architecture: process.arch, runs }, null, '\t') + '\n');
 console.table(rows);
 console.log(`Raw runs and process memory observations: ${resultsFile}`);

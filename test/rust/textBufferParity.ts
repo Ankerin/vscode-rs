@@ -97,7 +97,7 @@ function compareBuffers(reference: PieceTreeTextBuffer, actual: PieceTreeTextBuf
 }
 
 test('Rust storage rejects stale bindings before registering a model factory', () => {
-	for (const version of [1, 2, 3, 4, 5]) {
+	for (const version of [1, 2, 3, 4, 5, 6]) {
 		assert.throws(() => registerRustTextBuffer({ ...rust, text_buffer_abi_version: () => version }), /storage contract/);
 	}
 	const registration = registerRustTextBuffer(rust);
