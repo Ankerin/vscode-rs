@@ -6,6 +6,7 @@
 import { IDisposable, toDisposable } from '../../../base/common/lifecycle.js';
 import { IRange, Range } from '../core/range.js';
 import type { SparseLineTokens, SparseMultilineTokens } from './sparseMultilineTokens.js';
+import type { ContiguousMultilineTokens } from './contiguousMultilineTokens.js';
 
 /** Generated metadata composition bindings; source arrays retain their existing ownership. */
 export interface IRustTokensModule {
@@ -16,6 +17,10 @@ export interface IRustTokensModule {
 	update_contiguous_tokens(tokens: Uint32Array, operation: number, first: number, second: number): number | undefined;
 	append_contiguous_tokens(first: Uint32Array, second: Uint32Array): Uint32Array | undefined;
 	edit_contiguous_tokens_block(start: number, lines: (Uint32Array | ArrayBuffer | null)[], empty: ArrayBuffer, parameters: Float64Array): [number, (Uint32Array | ArrayBuffer | null)[]] | undefined;
+	contiguous_token_blocks_size(blocks: ContiguousMultilineTokens[], standardSize: () => number, standardWrite: (destination: Uint8Array, offset: number) => number, includeCount: boolean): number | undefined;
+	serialize_contiguous_token_blocks(blocks: ContiguousMultilineTokens[], standardSize: () => number, standardWrite: (destination: Uint8Array, offset: number) => number, destination: Uint8Array, offset: number, includeCount: boolean): number | undefined;
+	encode_contiguous_token_blocks(blocks: ContiguousMultilineTokens[], standardSize: () => number, standardWrite: (destination: Uint8Array, offset: number) => number): Uint8Array | undefined;
+	decode_contiguous_token_blocks(source: Uint8Array, offset: number, includeCount: boolean): [number, [number, Uint32Array[]][]] | undefined;
 	WasmContiguousTokensStore: { new(empty: ArrayBuffer): IRustContiguousTokensStore };
 	WasmSparseTokensStore: { new(standardEdit?: SparseMultilineTokens['acceptEdit']): IRustSparseTokensStore };
 }
@@ -48,7 +53,7 @@ let registeredModule: IRustTokensModule | undefined;
 
 /** Installs token composition for the initialized core's disposable scope. */
 export function registerRustTokens(module: IRustTokensModule): IDisposable {
-	if (typeof module.tokens_abi_version !== 'function' || module.tokens_abi_version() !== 6 || typeof module.merge_semantic_tokens !== 'function' || typeof module.update_sparse_tokens !== 'function' || typeof module.split_sparse_tokens !== 'function' || typeof module.update_contiguous_tokens !== 'function' || typeof module.append_contiguous_tokens !== 'function' || typeof module.edit_contiguous_tokens_block !== 'function' || typeof module.WasmContiguousTokensStore !== 'function' || typeof module.WasmSparseTokensStore !== 'function') {
+	if (typeof module.tokens_abi_version !== 'function' || module.tokens_abi_version() !== 7 || typeof module.merge_semantic_tokens !== 'function' || typeof module.update_sparse_tokens !== 'function' || typeof module.split_sparse_tokens !== 'function' || typeof module.update_contiguous_tokens !== 'function' || typeof module.append_contiguous_tokens !== 'function' || typeof module.edit_contiguous_tokens_block !== 'function' || typeof module.contiguous_token_blocks_size !== 'function' || typeof module.serialize_contiguous_token_blocks !== 'function' || typeof module.encode_contiguous_token_blocks !== 'function' || typeof module.decode_contiguous_token_blocks !== 'function' || typeof module.WasmContiguousTokensStore !== 'function' || typeof module.WasmSparseTokensStore !== 'function') {
 		throw new Error('The Rust token bindings do not match the current metadata contract');
 	}
 	if (registeredModule) { throw new Error('A Rust token module is already registered'); }
@@ -73,6 +78,36 @@ export function tryEditRustContiguousTokenBlock(start: number, lines: (Uint32Arr
 	if (!registeredModule) { return undefined; }
 	const result = registeredModule.edit_contiguous_tokens_block(start, lines, empty, new Float64Array([range.startLineNumber, range.startColumn, range.endLineNumber, range.endColumn, eolCount, firstLength]));
 	if (result && (result.length !== 2 || !Number.isSafeInteger(result[0]) || !Array.isArray(result[1]))) { throw new Error('The Rust contiguous token block result does not match the editor contract'); }
+	return result;
+}
+
+/** Retains original errors and subview behavior when native serialization is unsupported. */
+export function trySizeRustTokenBlocks(blocks: ContiguousMultilineTokens[], size: () => number, write: (destination: Uint8Array, offset: number) => number, includeCount: boolean): number | undefined {
+	const result = registeredModule?.contiguous_token_blocks_size(blocks, size, write, includeCount);
+	if (result !== undefined && (!Number.isSafeInteger(result) || result < 0)) { throw new Error('The Rust token serialization size does not match the editor contract'); }
+	return result;
+}
+
+/** Writes directly into the existing destination after preflighting the complete supported stream. */
+export function trySerializeRustTokenBlocks(blocks: ContiguousMultilineTokens[], size: () => number, write: (destination: Uint8Array, offset: number) => number, destination: Uint8Array, offset: number, includeCount: boolean): number | undefined {
+	const result = registeredModule?.serialize_contiguous_token_blocks(blocks, size, write, destination, offset, includeCount);
+	if (result !== undefined && (!Number.isSafeInteger(result) || result < offset || result > destination.length)) { throw new Error('The Rust token serialization result does not match the editor contract'); }
+	return result;
+}
+
+/** Produces the existing serialized byte array without a second persistent/native encoded copy. */
+export function tryEncodeRustTokenBlocks(blocks: ContiguousMultilineTokens[], size: () => number, write: (destination: Uint8Array, offset: number) => number): Uint8Array | undefined {
+	const result = registeredModule?.encode_contiguous_token_blocks(blocks, size, write);
+	if (result && !(result instanceof Uint8Array)) { throw new Error('The Rust token serialization bytes do not match the editor contract'); }
+	return result;
+}
+
+/** Returns existing source views; malformed/subview streams keep the original permissive decoder. */
+export function tryDecodeRustTokenBlocks(source: Uint8Array, offset: number, includeCount: boolean): [number, [number, Uint32Array[]][]] | undefined {
+	const result = registeredModule?.decode_contiguous_token_blocks(source, offset, includeCount);
+	if (result && (result.length !== 2 || !Number.isSafeInteger(result[0]) || result[0] < offset || result[0] > source.length || !Array.isArray(result[1]) || (!includeCount && result[1].length !== 1) || result[1].some(block => !Array.isArray(block) || block.length !== 2 || !Number.isSafeInteger(block[0]) || block[0] < 0 || block[0] > 0xFFFFFFFF || !Array.isArray(block[1])))) {
+		throw new Error('The Rust token deserialization result does not match the editor contract');
+	}
 	return result;
 }
 

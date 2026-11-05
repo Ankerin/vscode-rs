@@ -16,6 +16,10 @@ Preserve UTF-16 coordinates across every boundary. Do not use lossy decoding for
 
 ## Validation
 
+Complete the Rust core migration before extensive performance engineering. During Phase 1, implement and integrate each applicable core subsystem, preserve strict behavior/API/extension parity, run its canonical tests, and immediately continue to the next subsystem once it is operational. Fix correctness defects, critical performance regressions, and memory safety issues immediately. Record non-critical regressions and optimization opportunities in [Performance](PERFORMANCE.md); do not repeatedly benchmark, polish, or micro-optimize working modules. Keep the application functional throughout.
+
+Begin Phase 2 only after all targeted core subsystems are integrated, validated, and operational. Profile whole-application CPU, memory, allocations, latency, and throughput under representative workloads, compare against the original implementation in identical conditions, and prioritize measurable end-to-end improvements. Continue while useful opportunities remain without unacceptable correctness, stability, or compatibility trade-offs.
+
 From `rust/`, run the smallest applicable native tests, formatting, and Clippy checks. For changes to this workspace, the normal commands are:
 
 ```sh

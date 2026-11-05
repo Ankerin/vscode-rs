@@ -10,8 +10,9 @@ import { test } from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { Range } from '../../src/vs/editor/common/core/range.js';
 import { ContiguousMultilineTokens } from '../../src/vs/editor/common/tokens/contiguousMultilineTokens.js';
+import { ContiguousMultilineTokensBuilder } from '../../src/vs/editor/common/tokens/contiguousMultilineTokensBuilder.js';
 import { EMPTY_LINE_TOKENS, toUint32Array } from '../../src/vs/editor/common/tokens/contiguousTokensEditing.js';
-import { IRustTokensModule, registerRustTokens, tryEditRustContiguousTokenBlock } from '../../src/vs/editor/common/tokens/rustTokens.js';
+import { IRustTokensModule, registerRustTokens, tryDecodeRustTokenBlocks, tryEditRustContiguousTokenBlock, trySerializeRustTokenBlocks, trySizeRustTokenBlocks } from '../../src/vs/editor/common/tokens/rustTokens.js';
 
 interface IRustModule extends IRustTokensModule {
 	default(options: { module_or_path: Uint8Array }): Promise<object>;
@@ -149,4 +150,144 @@ test('Rust contiguous block fallback is atomic and validates the result contract
 		assert.throws(() => tryEditRustContiguousTokenBlock(1, lines, EMPTY_LINE_TOKENS, range, 0, 1), /block result/);
 	}, { ...rust, edit_contiguous_tokens_block: () => [Number.NaN, lines] });
 	assert.throws(() => registerRustTokens({ ...rust, tokens_abi_version: () => 5 }), /metadata contract/);
+});
+
+test('Rust token serialization preserves seeded complete streams, grouping, headers, and provider aliases', () => {
+	let seed = 17291;
+	const random = (limit: number) => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed % limit; };
+	for (let trace = 0; trace < 512; trace++) {
+		const reference = new ContiguousMultilineTokensBuilder();
+		const actual = new ContiguousMultilineTokensBuilder();
+		const inputs: Uint32Array[] = [];
+		const before: Uint32Array[] = [];
+		let line = random(0x100000000);
+		for (let index = 0, count = random(32); index < count; index++) {
+			line += random(4);
+			const words = new Uint32Array(Array.from({ length: random(64) }, () => random(0x100000000)));
+			const native = words.slice();
+			reference.add(line, words);
+			actual.add(line, native);
+			inputs.push(native); before.push(words.slice());
+		}
+		const expectedBytes = reference.serialize();
+		const actualBytes = withRust(() => actual.serialize());
+		assert.deepStrictEqual({ bytes: actualBytes, inputs }, { bytes: expectedBytes, inputs: before }, `Encoded stream ${trace}`);
+		const expectedBlocks = ContiguousMultilineTokensBuilder.deserialize(expectedBytes);
+		const actualBlocks = withRust(() => ContiguousMultilineTokensBuilder.deserialize(actualBytes));
+		assert.deepStrictEqual(decodedState(actualBlocks, actualBytes), decodedState(expectedBlocks, expectedBytes));
+		expectedBytes[expectedBytes.length - 1] ^= 0x7F;
+		actualBytes[actualBytes.length - 1] ^= 0x7F;
+		assert.deepStrictEqual(decodedState(actualBlocks, actualBytes), decodedState(expectedBlocks, expectedBytes), 'Decoded records retain mutable source views');
+		for (const offset of [0, 3, 17]) {
+			for (let index = 0; index < actual.finalize().length; index++) {
+				const expectedPiece = reference.finalize()[index];
+				const piece = actual.finalize()[index];
+				const expected = new Uint8Array(expectedPiece.serializeSize() + offset + 5).fill(0xA5);
+				const bytes = expected.slice();
+				assert.deepStrictEqual({ size: withRust(() => piece.serializeSize()), offset: withRust(() => piece.serialize(bytes, offset)), bytes }, { size: expectedPiece.serializeSize(), offset: expectedPiece.serialize(expected, offset), bytes: expected });
+			}
+		}
+	}
+});
+
+function decodedState(blocks: ContiguousMultilineTokens[], source: Uint8Array) {
+	return blocks.map(block => ({
+		start: block.startLineNumber, end: block.endLineNumber,
+		lines: Array.from({ length: block.endLineNumber - block.startLineNumber + 1 }, (_, index) => {
+			const value = block.getLineTokens(block.startLineNumber + index);
+			assert.ok(value instanceof Uint32Array);
+			return { words: value, offset: value.byteOffset, source: value.buffer === source.buffer };
+		})
+	}));
+}
+
+test('Rust token deserialization preserves single-block offsets and original malformed/subview behavior', () => {
+	const block = new ContiguousMultilineTokens(7, [new Uint32Array([3, 7, 6, 9]), new Uint32Array([4, 0xFFFFFFFF])]);
+	const expected = new Uint8Array(block.serializeSize() + 4).fill(0xA5);
+	block.serialize(expected, 4);
+	const bytes = expected.slice();
+	const first = [new ContiguousMultilineTokens(1, [])];
+	const second = [new ContiguousMultilineTokens(1, [])];
+	assert.deepStrictEqual({ offset: withRust(() => ContiguousMultilineTokens.deserialize(bytes, 4, second)), blocks: decodedState(second, bytes) }, { offset: ContiguousMultilineTokens.deserialize(expected, 4, first), blocks: decodedState(first, expected) });
+	const builder = new ContiguousMultilineTokensBuilder();
+	builder.add(7, new Uint32Array([3, 7, 6, 9]));
+	const valid = builder.serialize();
+	const padded = new Uint8Array(valid.length + 8);
+	padded.set(valid, 8);
+	const oddByteCount = valid.slice();
+	oddByteCount.set([0, 0, 0, 3], 12);
+	for (const malformed of [valid.subarray(0, valid.length - 1), valid.slice(0, valid.length - 4), padded.subarray(8), oddByteCount, new Uint8Array()]) {
+		assert.deepStrictEqual(decodedState(withRust(() => ContiguousMultilineTokensBuilder.deserialize(malformed)), malformed), decodedState(ContiguousMultilineTokensBuilder.deserialize(malformed), malformed));
+	}
+	assert.strictEqual(rust.decode_contiguous_token_blocks(valid, 1.5, true), undefined);
+	assert.strictEqual(rust.decode_contiguous_token_blocks(valid, 1, true), undefined);
+	assert.strictEqual(rust.decode_contiguous_token_blocks(padded.subarray(8), 0, true), undefined);
+	assert.strictEqual(rust.decode_contiguous_token_blocks(new Uint8Array(16 * 1024 * 1024 + 4), 0, true), undefined);
+	withRust(() => assert.throws(() => tryDecodeRustTokenBlocks(valid, 0, true), /deserialization result/), { ...rust, decode_contiguous_token_blocks: () => [Number.NaN, []] });
+});
+
+test('Rust token serialization retains unsupported subviews and original partial writes on short or aliased destinations', () => {
+	const failure = (piece: ContiguousMultilineTokens, destination: Uint8Array) => {
+		let error: { name: string; message: string } | null = null;
+		try { piece.serialize(destination, 1); } catch (value) {
+			assert.ok(value instanceof Error);
+			error = { name: value.name, message: value.message };
+		}
+		return { error, backing: new Uint8Array(destination.buffer) };
+	};
+	for (const subview of [false, true]) {
+		for (const length of [0, 3, 9, 20]) {
+			const source = new Uint32Array([0xDEADBEEF, 3, 7, 6, 9, 0xDEADBEEF]);
+			const native = source.slice();
+			const reference = new ContiguousMultilineTokens(2, [subview ? source.subarray(1, 5) : source]);
+			const actual = new ContiguousMultilineTokens(2, [subview ? native.subarray(1, 5) : native]);
+			const expected = new Uint8Array(length + 7).fill(0xA5);
+			const bytes = expected.slice();
+			assert.deepStrictEqual(withRust(() => failure(actual, bytes.subarray(3, 3 + length))), failure(reference, expected.subarray(3, 3 + length)));
+		}
+	}
+	const source = new Uint32Array([3, 7, 6, 9]);
+	const native = source.slice();
+	assert.deepStrictEqual(withRust(() => failure(new ContiguousMultilineTokens(2, [native]), new Uint8Array(native.buffer))), failure(new ContiguousMultilineTokens(2, [source]), new Uint8Array(source.buffer)));
+});
+
+test('Rust token serialization preserves overridden callbacks, unsupported tokens, capacity fallback, and validation', () => {
+	const failure = new Error('Original token serialization callback failure');
+	class CustomSize extends ContiguousMultilineTokens {
+		public override serializeSize(): number { throw failure; }
+	}
+	class CustomWrite extends ContiguousMultilineTokens {
+		public override serialize(): number { throw failure; }
+	}
+	for (const piece of [new CustomSize(1, [new Uint32Array([3, 7])]), new CustomWrite(1, [new Uint32Array([3, 7])])]) {
+		const builder = new ContiguousMultilineTokensBuilder();
+		builder.finalize().push(piece);
+		assert.throws(() => withRust(() => builder.serialize()), error => error === failure);
+	}
+	const accessor = new ContiguousMultilineTokens(1, [new Uint32Array([3, 7])]);
+	let accessorReads = 0;
+	Object.defineProperty(accessor, 'serialize', { get: () => { accessorReads++; throw failure; } });
+	assert.deepStrictEqual(withRust(() => ({ size: accessor.serializeSize(), accessorReads })), { size: 20, accessorReads: 0 });
+	const accessorBuilder = new ContiguousMultilineTokensBuilder();
+	accessorBuilder.finalize().push(accessor);
+	assert.throws(() => withRust(() => accessorBuilder.serialize()), error => error === failure);
+	assert.strictEqual(accessorReads, 1, 'Native preflight must not invoke the overridden accessor');
+	const source = [new Uint32Array([3, 7])];
+	const external: (Uint32Array | ArrayBuffer | null)[] = source;
+	const piece = new ContiguousMultilineTokens(1, source);
+	for (const value of [null, EMPTY_LINE_TOKENS, new ArrayBuffer(8)]) {
+		external[0] = value;
+		assert.throws(() => withRust(() => piece.serializeSize()), /Not supported/);
+	}
+	const size = ContiguousMultilineTokens.prototype.serializeSize;
+	const write = ContiguousMultilineTokens.prototype.serialize;
+	const huge = new ContiguousMultilineTokens(1, [new Uint32Array(4 * 1024 * 1024)]);
+	assert.strictEqual(rust.contiguous_token_blocks_size([huge], size, write, true), undefined);
+	const count = new ContiguousMultilineTokens(1, Array.from({ length: 262145 }, () => new Uint32Array()));
+	const bytes = new Uint8Array(32).fill(0xA5);
+	assert.strictEqual(rust.serialize_contiguous_token_blocks([count], size, write, bytes, 0, true), undefined);
+	assert.deepStrictEqual(bytes, new Uint8Array(32).fill(0xA5));
+	withRust(() => assert.throws(() => trySizeRustTokenBlocks([], size, write, true), /serialization size/), { ...rust, contiguous_token_blocks_size: () => -1 });
+	withRust(() => assert.throws(() => trySerializeRustTokenBlocks([], size, write, bytes, 0, true), /serialization result/), { ...rust, serialize_contiguous_token_blocks: () => Number.NaN });
+	assert.throws(() => registerRustTokens({ ...rust, tokens_abi_version: () => 6 }), /metadata contract/);
 });

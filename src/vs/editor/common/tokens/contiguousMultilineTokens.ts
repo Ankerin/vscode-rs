@@ -10,13 +10,18 @@ import { IRange } from '../core/range.js';
 import { countEOL } from '../core/misc/eolCounter.js';
 import { ContiguousTokensEditing, EMPTY_LINE_TOKENS } from './contiguousTokensEditing.js';
 import { LineRange } from '../core/ranges/lineRange.js';
-import { tryEditRustContiguousTokenBlock } from './rustTokens.js';
+import { tryDecodeRustTokenBlocks, tryEditRustContiguousTokenBlock, trySerializeRustTokenBlocks, trySizeRustTokenBlocks } from './rustTokens.js';
 
 /**
  * Represents contiguous tokens over a contiguous range of lines.
  */
 export class ContiguousMultilineTokens {
 	public static deserialize(buff: Uint8Array, offset: number, result: ContiguousMultilineTokens[]): number {
+		const native = tryDecodeRustTokenBlocks(buff, offset, false);
+		if (native) {
+			result.push(new ContiguousMultilineTokens(native[1][0][0], native[1][0][1]));
+			return native[0];
+		}
 		const view32 = new Uint32Array(buff.buffer);
 		const startLineNumber = readUInt32BE(buff, offset); offset += 4;
 		const count = readUInt32BE(buff, offset); offset += 4;
@@ -81,6 +86,8 @@ export class ContiguousMultilineTokens {
 	}
 
 	public serializeSize(): number {
+		const native = trySizeRustTokenBlocks([this], ContiguousMultilineTokens.prototype.serializeSize, ContiguousMultilineTokens.prototype.serialize, false);
+		if (native !== undefined) { return native; }
 		let result = 0;
 		result += 4; // 4 bytes for the start line number
 		result += 4; // 4 bytes for the line count
@@ -96,6 +103,8 @@ export class ContiguousMultilineTokens {
 	}
 
 	public serialize(destination: Uint8Array, offset: number): number {
+		const native = trySerializeRustTokenBlocks([this], ContiguousMultilineTokens.prototype.serializeSize, ContiguousMultilineTokens.prototype.serialize, destination, offset, false);
+		if (native !== undefined) { return native; }
 		writeUInt32BE(destination, this._startLineNumber, offset); offset += 4;
 		writeUInt32BE(destination, this._tokens.length, offset); offset += 4;
 		for (let i = 0; i < this._tokens.length; i++) {

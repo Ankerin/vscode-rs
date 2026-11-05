@@ -5,10 +5,13 @@
 
 import { readUInt32BE, writeUInt32BE } from '../../../base/common/buffer.js';
 import { ContiguousMultilineTokens } from './contiguousMultilineTokens.js';
+import { tryDecodeRustTokenBlocks, tryEncodeRustTokenBlocks } from './rustTokens.js';
 
 export class ContiguousMultilineTokensBuilder {
 
 	public static deserialize(buff: Uint8Array): ContiguousMultilineTokens[] {
+		const native = tryDecodeRustTokenBlocks(buff, 0, true);
+		if (native) { return native[1].map(([start, lines]) => new ContiguousMultilineTokens(start, lines)); }
 		let offset = 0;
 		const count = readUInt32BE(buff, offset); offset += 4;
 		const result: ContiguousMultilineTokens[] = [];
@@ -41,6 +44,8 @@ export class ContiguousMultilineTokensBuilder {
 	}
 
 	public serialize(): Uint8Array {
+		const native = tryEncodeRustTokenBlocks(this._tokens, ContiguousMultilineTokens.prototype.serializeSize, ContiguousMultilineTokens.prototype.serialize);
+		if (native) { return native; }
 		const size = this._serializeSize();
 		const result = new Uint8Array(size);
 		this._serialize(result);

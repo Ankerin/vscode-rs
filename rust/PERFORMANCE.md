@@ -1,5 +1,11 @@
 # Rust Editor Performance
 
+## Phase 1 implementation policy
+
+Complete the integrated Rust core migration before extensive profiling or performance optimization. During Phase 1, fix correctness defects, memory safety issues, and critical performance regressions immediately, but continue to the next subsystem after successful functional and canonical validation. Retain existing measurements as historical evidence; do not repeatedly benchmark or micro-optimize functioning modules. Phase 2 will compare representative whole-application CPU, memory, allocation, latency, and throughput workloads against the original implementation under identical conditions, prioritize measurable end-to-end improvements, and continue while useful opportunities remain without unacceptable compatibility trade-offs.
+
+Tokens ABI 7 serializes directly into one JavaScript output byte array and retains no persistent native serialization handle. Its supported decoder still copies the input byte stream temporarily for header parsing, retains temporary descriptors, and creates source-view objects across the boundary. Size calculation and writing retain per-block/per-line object property access. These are Phase 2 profiling and optimization opportunities; no new performance or resource improvement is claimed for this migration. Existing subview and unsupported-state fallbacks remain necessary for behavioral compatibility.
+
 ## Method
 
 Run `pnpm run build-rust-editor` followed by `pnpm run benchmark-rust-editor`. The benchmark alternates the original and Rust implementations in three fresh Node processes per fixture each. Both use the actual existing `PieceTreeTextBuffer` wrapper and its model construction path. Rust uses a release WebAssembly build; the reference uses the current TypeScript sources bundled with the same esbuild recipe. Eight construction/disposal iterations warm the adapter and allocator before timing. The runner verifies matching workload checksums within each fixture. Keep other builds and workload-heavy processes stopped during measurement.
