@@ -8,6 +8,7 @@
 mod search;
 mod sequence_diff;
 mod text_buffer;
+mod text_change;
 mod text_chunk;
 mod tree;
 
@@ -20,4 +21,5 @@ pub use sequence_diff::{
 	refine_line_diff,
 };
 pub use text_buffer::{BufferError, Position, TextBuffer, TextEdit, TextSnapshot};
+pub use text_change::{CompressedTextChange, TextChange, compress_text_changes};
 pub use text_chunk::{TextChunk, TextChunkIter};

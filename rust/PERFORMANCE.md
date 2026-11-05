@@ -313,3 +313,25 @@ Process peak RSS and final WASM linear memory are medians in MiB.
 | unicode | 172.21 | 64.19 | 1.50 |
 
 The paired pipeline is faster and uses lower process peak RSS in these fixtures. Untimed display/raw computation is also faster in this capture than the preceding native move stage, consistent with removing repeated source packing and transfers; cross-capture comparisons remain diagnostic because reference timings vary. Timed workloads retain the original cell/frontier deadline frequency and still spend substantial time crossing to the clock. These observations do not establish whole-product memory savings, startup/rendering latency, exact visual parity, or legacy-diff performance. Current raw runs are in `.build/rust/diff-benchmark.json`; ABI 7 runs are retained in `.build/rust/diff-benchmark-moves.json`. Both remain ignored.
+
+## Undo composition observation
+
+Measured on November 5, 2026 with Node `24.22.1`, Rust `1.99.1`, and release undo-change ABI 1 bindings. The runner alternates three fresh processes per engine and verifies identical complete result checksums. Each operation composes two existing JavaScript change arrays; the Rust path packs their UTF-16 text and position/slice tuples, performs native composition with borrowed fragments, and decodes existing result objects. The fragmented fixtures insert 98,304 units and subsequently replace 512 separated six-unit ranges. Times are medians in milliseconds.
+
+| Fixture | Repetitions | Existing | Rust/WASM |
+| --- | ---: | ---: | ---: |
+| Small typing batch | 10,000 | 3.61 | 23.31 |
+| 1,024 cursors | 100 | 6.49 | 56.37 |
+| Fragmented ASCII insertion | 30 | 4.69 | 32.36 |
+| Fragmented Unicode insertion | 30 | 4.99 | 93.07 |
+
+Process peak RSS and final WASM linear memory are medians in MiB.
+
+| Fixture | Existing process peak RSS | Rust process peak RSS | Rust linear memory at completion |
+| --- | ---: | ---: | ---: |
+| Small typing batch | 50.85 | 62.97 | 1.13 |
+| 1,024 cursors | 52.58 | 67.36 | 1.31 |
+| Fragmented ASCII insertion | 54.21 | 65.20 | 1.63 |
+| Fragmented Unicode insertion | 55.49 | 84.54 | 1.63 |
+
+This boundary is slower in every measured workload. Borrowed native fragments avoid copied substring payloads inside Rust, but repeated source packing, result serialization, and lossless JavaScript decoding outweigh that work. The fragmented Unicode case also spends time preserving dense lone surrogates. Do not present this migration stage as an undo performance improvement or promote it by default. The next undo boundary must retain owning native history between appends and transfer only new changes, deferring complete result conversion until an existing consumer needs it. Raw runs remain ignored in `.build/rust/undo-benchmark.json`.

@@ -11,7 +11,7 @@ import { build } from 'esbuild';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const outputDirectory = resolve(root, '.build/rust');
 const browserTests = process.argv.includes('--browser');
-const tests = browserTests ? ['browserWorkerParity'] : ['textBufferParity', 'mirrorModelParity', 'sequenceDiffParity'];
+const tests = browserTests ? ['browserWorkerParity'] : ['textBufferParity', 'mirrorModelParity', 'sequenceDiffParity', 'textChangeParity'];
 await build({
 	entryPoints: (browserTests ? tests : [...tests, 'editorWorkerRealm']).map(file => resolve(root, `test/rust/${file}.ts`)),
 	outdir: outputDirectory,

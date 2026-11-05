@@ -8,12 +8,13 @@ See [Architecture](ARCHITECTURE.md) for the complete target, subsystem boundarie
 
 | Directory | Responsibility | Status |
 | --- | --- | --- |
-| `editor-core/` | Platform-independent UTF-16 storage, positions, edits, literal search, immutable snapshots, and the advanced document diff pipeline | Implemented and tested natively |
+| `editor-core/` | Platform-independent UTF-16 storage, positions, edits, literal search, immutable snapshots, advanced document diff, and undo-change composition | Implemented and tested natively |
 | `editor-wasm/` | Typed WebAssembly bindings for the same Rust core | Implemented and tested against existing editor models |
 | `../src/vs/editor/common/model/rustTextBuffer/` | Storage adapter beneath `PieceTreeTextBuffer` | Implemented; opt-in |
 | `../src/vs/editor/browser/model/` | Browser resource loading of generated bindings | Implemented for desktop startup |
 | `../src/vs/editor/common/services/textModelSync/` | Rust-backed editor worker mirror storage and lifecycle | Implemented; follows the renderer's opt-in initialization |
 | `../src/vs/editor/common/diff/defaultLinesDiffComputer/` | Complete native advanced diff with display ranges, moves, and raw edits | Implemented; follows the core registration |
+| `../src/vs/editor/common/core/rustTextChanges.ts` | Native composition of consecutive undo batches | Implemented; follows the core registration |
 | `../build/rust/` | Binding generation and compatibility test runner | Implemented |
 | `../test/rust/` | Tests against the existing buffer and text model | Implemented |
 | `../.github/workflows/rust-editor.yml` | Native OS matrix and WebAssembly compatibility CI | Configured; remote runs not verified locally |
@@ -41,7 +42,7 @@ From the repository root:
 pnpm run build-rust-editor
 ```
 
-The command builds a release WebAssembly module and generates JavaScript bindings and declarations under `out/vs/editor/common/model/rustTextBuffer/`. Generated files are ignored by Git. The generator must exactly match the pinned `wasm-bindgen` crate version. Registration validates storage ABI version 3 and sequence diff ABI version 8; stale assets are rejected atomically, and desktop startup retains the existing implementations. Run this command after any client build that replaces `out/`.
+The command builds a release WebAssembly module and generates JavaScript bindings and declarations under `out/vs/editor/common/model/rustTextBuffer/`. Generated files are ignored by Git. The generator must exactly match the pinned `wasm-bindgen` crate version. Registration validates storage ABI version 3, sequence diff ABI version 8, and undo-change ABI version 1; stale assets are rejected atomically, and desktop startup retains the existing implementations. Run this command after any client build that replaces `out/`.
 
 From `rust/`, a native build of the core is also available:
 
@@ -106,6 +107,8 @@ Move checks directly compare native results for 512 seeded block permutations, r
 
 Document checks directly compare the complete native result for all 58 fixtures, both whitespace modes, 1,024 seeded document pairs, and the line-algorithm transition. They check that one call owns line alignment, whitespace scanning, character refinement, detailed line grouping, move detection, and refinement inside moves, with no separate source transfers. Native tests reconstruct lossless UTF-16 text from display and raw changes, verify first/last-line insertion/deletion coordinates, retain empty-document shortcuts, and preserve the existing document timeout flag when expiration occurs only during move detection.
 
+Undo composition checks compare exact results over 2,048 seeded pairs of real edit batches, then apply each composed batch forward and backward to reconstruct both versions. They compare existing binary serialization bytes, retain empty-batch array identity, preserve BOM and unpaired surrogates through shared lossless UTF-16 decoding, and check malformed packets, invalid offsets, unsupported-state fallback, and atomic registration rollback. Native split and merge stages retain borrowed text fragments, concatenating only during result serialization. The canonical runner includes the unchanged `TextChange` and `TextChangeCompressor` suites as well as edit-stack tests.
+
 The initial November 5, 2026 desktop attempt exited before workbench restoration because existing native bindings were missing and MSBuild reported `MSB8040` for required Spectre libraries. After installing the matching Visual Studio component and rebuilding native dependencies for the repository-pinned Electron `43.8.6`, isolated Rust and reference windows restored successfully with Node `24.22.1`. The Rust renderer logged successful core initialization. UI-driven typing, undo, redo, and save passed, and the saved file contained the expected text. Screenshots were opened and inspected; editor text, syntax colors, icons, and layout rendered. A normalized 1,200 by 800 Windows capture retained 1,176 differing pixels within the editor region, concentrated in outlines and scrollbar state after cursor-guide state was aligned. This limited comparison is not a passed exact-visual-parity gate. Remaining focus/animation normalization, other UI surfaces, composition/accessibility, and other platforms still need validation. Local screenshots and launch evidence remain ignored under `.agent-validation/`.
 
 To run the existing model, search, edit, undo, decoration, and editor worker suites through the canonical Node unit runner with both storage implementations:
@@ -136,6 +139,14 @@ pnpm run benchmark-rust-editor -- --diff
 
 This mode alternates three fresh processes per engine and fixture, checks identical results, and records raw timings and process peak RSS in `.build/rust/diff-benchmark.json`. It includes real deadlines; deadline checks stay at the original cell/frontier frequency. Custom timeout implementations keep their callback contract.
 
+For consecutive undo-change composition:
+
+```sh
+pnpm run benchmark-rust-editor -- --undo
+```
+
+This mode compares small typing batches, 1,024 cursor changes, a large inserted payload with 512 later replacements, and the same fragmented shape with Unicode and unpaired surrogates. It alternates three fresh processes per engine, verifies identical complete result checksums, and stores timings and process memory observations in `.build/rust/undo-benchmark.json`. The current stateless boundary is slower than the reference in these fixtures; owning native undo state is required before claiming a performance gain or default promotion.
+
 ## Current limits
 
 - The Rust rope uses one-byte Latin-1 leaves when all units fit, and two-byte UTF-16 leaves otherwise. Split leaves share their backing and line-ending indexes. The compact encoding reduces that leaf's text payload by half compared with the previous Rust representation; node, index, allocator, snapshot, and application overhead must still be measured before making total-memory claims.
@@ -143,5 +154,6 @@ This mode alternates three fresh processes per engine and fixture, checks identi
 - Drained snapshots explicitly release their Rust version. An abandoned snapshot is retained until its generated binding is collected through `FinalizationRegistry`, because the existing `ITextSnapshot` contract has no disposal method.
 - Rust performs the storage adapter's plain literal search without copying lines, with nonoverlapping matches and existing start-column range semantics. The core uses KMP across leaf boundaries and the `memchr` safe API to skip compact-leaf prefixes. The model submits validated replacement batches in one binding call; Rust validates all original ranges before committing. Single edits use one replacement instead of separate deletion/insertion calls. Case folding, word boundaries, capture groups, public regex/multiline search, inverse edit generation, notifications, and undo orchestration remain in their existing JavaScript implementations.
 - `getPieceTree()` is an existing implementation-specific test helper. It is available only for the original storage; Rust models expose the normal `ITextBuffer` API instead.
+- Consecutive undo composition uses native split/rebase/merge/no-op processing while preserving existing change objects and serialized bytes. Native text fragments borrow input payloads until serialization. Each call still packs the existing JavaScript batches and decodes its composed output; persistent undo history, stack grouping, inverse edit generation, cursor restoration, notifications, and workspace undo ownership remain in TypeScript. Unsupported offset/allocation domains retain the existing compressor.
 - The advanced document diff runs line alignment, whitespace scanning, character refinement, detailed line grouping, move detection, and refinement inside moves in one native call. Source lines cross the boundary once, and native stages share borrowed UTF-16 source views and line identities. Character slices own compact elements and metadata only for their refinement scope. Rust preserves boundary classification, ECMAScript trimming, word/subword expansion, short-match removal, document-edge range translation, stable move selection, and separate raw edits. JavaScript supplies logarithmic equality weights to preserve its numeric semantics and constructs the existing result objects. The legacy diff algorithm remains in TypeScript. Arbitrary dynamic equality-score callbacks, custom refinement timeout orchestration, and sequences without a strong-identity contract retain the existing path. Native directions, frontiers, path arenas, character slices, and move candidates are bounded; unsupported full-document states retain the staged implementations. Input/output conversion still allocates typed arrays. Models/worker callers still extract source line arrays before diffing; sharing immutable storage versions directly with diff remains future work.
 - Tauri is not introduced. Changing the rendering engine is a separate decision that must pass the cross-platform visual and interaction gates.

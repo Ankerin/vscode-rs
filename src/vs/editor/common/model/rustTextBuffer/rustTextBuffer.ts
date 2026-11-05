@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { DisposableStore, IDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
+import { decodeUTF16 as fromUnits, encodeUTF16 as toUnits } from '../../core/utf16Transfer.js';
 import { Position } from '../../core/position.js';
 import { Range } from '../../core/range.js';
 import { FindMatch, ITextSnapshot, SearchData } from '../../model.js';
@@ -11,6 +12,7 @@ import { Searcher, createFindMatch, isValidMatch } from '../textModelSearch.js';
 import { StringBuffer } from '../pieceTreeTextBuffer/pieceTreeBase.js';
 import { ITextBufferStorage, ITextBufferStorageEdit, registerTextBufferStorageFactory } from './textBufferStorage.js';
 import { IRustSequenceDiffModule, registerRustSequenceDiff } from '../../diff/defaultLinesDiffComputer/algorithms/rustSequenceDiff.js';
+import { IRustTextChangeModule, registerRustTextChanges } from '../../core/rustTextChanges.js';
 
 /** The generated binding surface; UTF-16 arrays preserve JavaScript string semantics. */
 export interface IRustTextBuffer {
@@ -39,7 +41,7 @@ interface IRustTextSnapshot {
 	free(): void;
 }
 
-export interface IRustTextBufferModule extends IRustSequenceDiffModule {
+export interface IRustTextBufferModule extends IRustSequenceDiffModule, IRustTextChangeModule {
 	text_buffer_abi_version(): number;
 	WasmTextBuffer: {
 		new(units: Uint16Array): IRustTextBuffer;
@@ -60,60 +62,8 @@ export function getRustTextBufferInitialization(): IRustTextBufferInitialization
 	return registeredInitialization;
 }
 
-function toUnits(text: string): Uint16Array {
-	const units = new Uint16Array(text.length);
-	for (let index = 0; index < text.length; index++) {
-		units[index] = text.charCodeAt(index);
-	}
-	return units;
-}
-
-const utf16Decoder = new TextDecoder('utf-16le', { fatal: true, ignoreBOM: true });
-const isLittleEndian = new Uint8Array(new Uint16Array([0x0102]).buffer)[0] === 0x02;
-// UTF-8 bindings replace lone surrogates. Keep all surrogate-bearing input on the code-unit path.
+// UTF-8 bindings replace lone surrogates. Keep surrogate-bearing input on the code-unit path.
 const containsSurrogates = /[\uD800-\uDFFF]/;
-
-function fromUnits(units: string | Uint16Array): string {
-	if (typeof units === 'string') {
-		return units;
-	}
-	if (isLittleEndian) {
-		try {
-			return utf16Decoder.decode(new Uint8Array(units.buffer, units.byteOffset, units.byteLength));
-		} catch {
-			// Decode valid spans separately when lone surrogates are sparse, preserving every code unit.
-			const offsets: number[] = [];
-			for (let index = 0; index < units.length && offsets.length <= 1024; index++) {
-				const unit = units[index];
-				if (unit >= 0xD800 && unit <= 0xDBFF && units[index + 1] >= 0xDC00 && units[index + 1] <= 0xDFFF) {
-					index++;
-				} else if (unit >= 0xD800 && unit <= 0xDFFF) {
-					offsets.push(index);
-				}
-			}
-			if (offsets.length <= 1024) {
-				const chunks: string[] = [];
-				let start = 0;
-				for (const offset of offsets) {
-					if (offset > start) {
-						chunks.push(utf16Decoder.decode(new Uint8Array(units.buffer, units.byteOffset + start * 2, (offset - start) * 2)));
-					}
-					chunks.push(String.fromCharCode(units[offset]));
-					start = offset + 1;
-				}
-				if (start < units.length) {
-					chunks.push(utf16Decoder.decode(new Uint8Array(units.buffer, units.byteOffset + start * 2, (units.length - start) * 2)));
-				}
-				return chunks.join('');
-			}
-		}
-	}
-	const chunks: string[] = [];
-	for (let offset = 0; offset < units.length; offset += 8192) {
-		chunks.push(String.fromCharCode(...units.subarray(offset, offset + 8192)));
-	}
-	return chunks.join('');
-}
 
 /** Keeps rendering, edit validation, notifications, and undo in their existing implementation. */
 class RustTextBufferStorage implements ITextBufferStorage, IDisposable {
@@ -328,6 +278,7 @@ export function registerRustTextBuffer(module: IRustTextBufferModule, initializa
 	try {
 		registration.add(registerTextBufferStorageFactory((chunks, eol, eolNormalized) => new RustTextBufferStorage(module, chunks, eol, eolNormalized)));
 		registration.add(registerRustSequenceDiff(module));
+		registration.add(registerRustTextChanges(module));
 	} catch (error) {
 		registration.dispose();
 		throw error;

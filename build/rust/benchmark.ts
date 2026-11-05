@@ -22,7 +22,8 @@ interface BenchmarkResult {
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const sequenceDiff = process.argv.includes('--diff');
-const benchmark = sequenceDiff ? 'sequenceDiffBenchmark' : 'textBufferBenchmark';
+const textChanges = process.argv.includes('--undo');
+const benchmark = sequenceDiff ? 'sequenceDiffBenchmark' : textChanges ? 'textChangeBenchmark' : 'textBufferBenchmark';
 const output = resolve(root, `.build/rust/${benchmark}.mjs`);
 await build({
 	entryPoints: [resolve(root, `test/rust/${benchmark}.ts`)],
@@ -35,11 +36,11 @@ await build({
 });
 
 const runs: BenchmarkResult[] = [];
-const fixtures = sequenceDiff ? ['small', 'medium', 'large', 'unicode'] : ['ascii', 'latin1', 'unicode', 'longLine'];
+const fixtures = sequenceDiff ? ['small', 'medium', 'large', 'unicode'] : textChanges ? ['typing', 'multicursor', 'fragmented', 'unicode'] : ['ascii', 'latin1', 'unicode', 'longLine'];
 for (const fixture of fixtures) {
 	for (let iteration = 0; iteration < 3; iteration++) {
 		for (const engine of iteration % 2 === 0 ? ['existing', 'rust'] : ['rust', 'existing']) {
-			const result = spawnSync(process.execPath, [...(sequenceDiff ? ['--expose-gc'] : []), output, engine, fixture], { cwd: root, encoding: 'utf8', windowsHide: true });
+			const result = spawnSync(process.execPath, [...(sequenceDiff || textChanges ? ['--expose-gc'] : []), output, engine, fixture], { cwd: root, encoding: 'utf8', windowsHide: true });
 			if (result.error) {
 				throw result.error;
 			}
@@ -65,7 +66,7 @@ const rows = fixtures.flatMap(fixture => Object.keys(runs[0].measurements).map(w
 	const rust = median(runs.filter(run => run.fixture === fixture && run.engine === 'rust').map(run => run.measurements[workload]));
 	return { fixture, workload, existingMs: existing.toFixed(2), rustMs: rust.toFixed(2), rustOverExisting: (rust / existing).toFixed(2) };
 }));
-const resultsFile = `.build/rust/${sequenceDiff ? 'diff-benchmark' : 'benchmark'}.json`;
+const resultsFile = `.build/rust/${sequenceDiff ? 'diff-benchmark' : textChanges ? 'undo-benchmark' : 'benchmark'}.json`;
 await writeFile(resolve(root, resultsFile), JSON.stringify({ node: process.version, platform: process.platform, architecture: process.arch, runs }, null, '\t') + '\n');
 console.table(rows);
 console.log(`Raw runs and process memory observations: ${resultsFile}`);

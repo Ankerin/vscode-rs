@@ -5,6 +5,7 @@
 
 import * as buffer from '../../../base/common/buffer.js';
 import { decodeUTF16LE } from './stringBuilder.js';
+import { tryCompressRustTextChanges } from './rustTextChanges.js';
 
 function escapeNewLine(str: string): string {
 	return (
@@ -99,6 +100,10 @@ export class TextChange {
 export function compressConsecutiveTextChanges(prevEdits: TextChange[] | null, currEdits: TextChange[]): TextChange[] {
 	if (prevEdits === null || prevEdits.length === 0) {
 		return currEdits;
+	}
+	const native = tryCompressRustTextChanges(prevEdits, currEdits);
+	if (native) {
+		return native.map(change => new TextChange(change.oldPosition, change.oldText, change.newPosition, change.newText));
 	}
 	const compressor = new TextChangeCompressor(prevEdits, currEdits);
 	return compressor.compress();

@@ -17,6 +17,7 @@ const tests = [
 	'textModelSearch.test.ts',
 	'editableTextModel.test.ts',
 	'editStack.test.ts',
+	'textChange.test.ts',
 	'modelEditOperation.test.ts',
 	'modelDecorations.test.ts'
 ];

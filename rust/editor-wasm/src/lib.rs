@@ -9,6 +9,7 @@ use vscode_editor_core::{BufferError, Position, TextBuffer, TextEdit, TextSnapsh
 use wasm_bindgen::prelude::*;
 
 mod sequence_diff;
+mod text_change;
 mod text_transfer;
 
 /// Identifies the storage contract independently of the binding generator's version.
