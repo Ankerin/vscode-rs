@@ -12,6 +12,7 @@ See [Architecture](ARCHITECTURE.md) for the complete target, subsystem boundarie
 | `editor-wasm/` | Typed WebAssembly bindings for the same Rust core | Implemented and tested against existing editor models |
 | `../src/vs/editor/common/model/rustTextBuffer/` | Storage adapter beneath `PieceTreeTextBuffer` | Implemented; opt-in |
 | `../src/vs/editor/browser/model/` | Browser resource loading of generated bindings | Implemented for desktop startup |
+| `../src/vs/editor/common/services/textModelSync/` | Rust-backed editor worker mirror storage and lifecycle | Implemented; follows the renderer's opt-in initialization |
 | `../build/rust/` | Binding generation and compatibility test runner | Implemented |
 | `../test/rust/` | Tests against the existing buffer and text model | Implemented |
 | `../.github/workflows/rust-editor.yml` | Native OS matrix and WebAssembly compatibility CI | Configured; remote runs not verified locally |
@@ -63,7 +64,7 @@ On Linux or macOS:
 
 Desktop startup initializes the module before restoring editor documents. Successfully initialized windows log `Rust text buffer initialized`. If loading fails, the existing storage remains available and the error is logged. Without the flag, no WebAssembly asset is loaded and the current storage is used. This change does not add settings, commands, menus, or alter CSS, fonts, themes, or layout.
 
-The flag currently applies to desktop renderer models. Editor workers, web startup, the server, and extension-host models are not switched. Existing models keep their storage after registration is disposed. Generated assets are not yet integrated into distributable release packaging.
+The flag applies to desktop renderer models and their editor worker mirrors. The worker client initializes the same generated core before synchronizing documents; a failed initialization retains the existing mirror storage. Synchronous worker fallback reuses the renderer's registration. Web startup, the server, extension-host models, and TextMate mirror subclasses are not switched. Existing models keep their storage after registration is disposed. Generated assets are not yet integrated into distributable release packaging.
 
 ## Test
 
@@ -85,9 +86,18 @@ The compatibility runner bundles the current TypeScript sources with the reposit
 
 These checks establish compatibility for the covered scenarios. They do not establish complete feature parity, desktop visual parity, or an application-wide performance improvement. Those remain migration gates in [Architecture](ARCHITECTURE.md).
 
+Mirror checks cover sequential dependent events, real-model edit traces with EOL changes and undo/redo, word/regex consumers, nonstandard input compatibility, and native allocation release on replacement, removal, and worker disposal. An isolated Node worker loads the actual generated module and uses the existing worker protocol. To verify the production browser transport and bootstrap in Chromium:
+
+```sh
+pnpm exec playwright install chromium
+pnpm run test-rust-editor -- --browser
+```
+
+The browser fixture checks model synchronization, UTF-16 coordinates, failed WASM loading, and disposal during initialization with real browser APIs. It does not launch the workbench or establish visual parity.
+
 The November 5, 2026 desktop validation attempt used the repository-pinned Node `24.22.1` and Electron `43.8.6` after building the client and built-in extensions. The application exited before workbench restoration because its existing `@vscode/policy-watcher` native binding was missing. Rebuilding the native dependencies reported MSBuild `MSB8040`: the selected MSVC toolset lacks its required Spectre libraries. No desktop screenshot or live editing result was obtained. Prepare the required Visual Studio components and native dependencies through the existing repository setup before repeating this gate.
 
-To run the existing model, search, edit, undo, and decoration suites through the canonical Node unit runner with both storage implementations:
+To run the existing model, search, edit, undo, decoration, and editor worker suites through the canonical Node unit runner with both storage implementations:
 
 ```sh
 pnpm run build-fast --client-only

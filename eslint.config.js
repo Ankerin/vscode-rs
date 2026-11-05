@@ -2407,6 +2407,9 @@ export default defineConfig(
 						'vs/base/common/**',
 						'vs/editor/common/**',
 						'vs/editor/test/common/testTextModel.js',
+						'vs/platform/webWorker/browser/webWorkerDescriptor.js',
+						'vs/platform/webWorker/browser/webWorkerServiceImpl.js',
+						'@playwright/*',
 						'node:*',
 						'node:*/**',
 						'*' // node modules

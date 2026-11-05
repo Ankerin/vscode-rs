@@ -86,12 +86,14 @@ The adapter detects consecutive line reads and prefetches one cache of up to 64 
 
 Before promoting this implementation, measure persistent-node and shared-index overhead, ASCII/Latin-1/Unicode storage, leaf sizing, fragmented editing, random and sequential line reads, save/snapshot cost, and string conversion across the WebAssembly boundary. Compact payload size alone does not establish application resource savings. Worker, browser, packaging, and cross-platform gates remain required.
 
+Editor worker mirrors use the registered Rust storage without retaining a second decoded line array or prefix-sum index. Model events replay sequentially, normalize inserted line endings, and preserve the existing mirror coordinate and version contracts. Nonstandard line arrays or EOL values retain the original path. Worker model removal, replacement, and disposal explicitly free storage. The renderer passes generated asset locations to isolated workers before synchronization; load failure retains the existing implementation, and synchronous fallback reuses the renderer registration. Node worker and Chromium fixtures exercise the actual protocol and browser bootstrap, including initialization failure and late disposal. Extension-host and TextMate mirrors and full web startup remain separate migration boundaries.
+
 ## Migration sequence
 
 | Stage | Scope | Required result before advancing | Current status |
 | --- | --- | --- | --- |
 | 0 | Baselines, architecture, toolchain, formatting, validation commands | Reproducible native/WASM builds and explicit compatibility gates | Architecture and build/test foundation implemented; complete application baselines pending |
-| 1 | Text storage | Differential tests against real buffer/model operations, resource lifetime checks, workload benchmarks, worker/web parity | Desktop storage adapter implemented behind an internal flag; promotion gates pending |
+| 1 | Text storage | Differential tests against real buffer/model operations, resource lifetime checks, workload benchmarks, worker/web parity | Desktop and editor worker storage implemented behind an internal flag; Node/Chromium worker parity checked; full web, packaging, and promotion gates pending |
 | 2 | Remaining editor model | Undo/redo, edits, selections, decorations, search, diff, bracket/folding state, tokens, Unicode behavior ported with existing contracts | Plain storage-level literal search and model batch application implemented; remaining model algorithms planned |
 | 3 | Native platform services | Files/encoding/watchers, workspace search, storage/configuration, process management, clipboard, dialogs, trust, lifecycle migrated individually | Planned |
 | 4 | Terminal and development tools | PTY/ConPTY, shell integration, terminal state, tasks, Git/SCM, LSP/DAP, debug sessions, diagnostics retain behavior | Planned |

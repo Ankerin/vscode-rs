@@ -57,7 +57,7 @@ suite('EditorWebWorker', () => {
 	}
 
 	setup(() => {
-		worker = new WorkerWithModels();
+		worker = store.add(new WorkerWithModels());
 		model = worker.addModel([
 			'This is line one', //16
 			'and this is line number two', //27

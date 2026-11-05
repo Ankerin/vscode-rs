@@ -37,7 +37,10 @@ await build({
 	tsconfig: resolve(root, 'src/tsconfig.json')
 });
 
-const testArgs = tests.flatMap(file => ['--run', `src/vs/editor/test/common/model/${file}`]);
+const testArgs = [
+	...tests.flatMap(file => ['--run', `src/vs/editor/test/common/model/${file}`]),
+	'--run', 'src/vs/editor/test/common/services/editorWebWorker.test.ts'
+];
 for (const engine of ['existing', 'rust']) {
 	const args = engine === 'rust' ? ['--import', pathToFileURL(output).href] : [];
 	const result = spawnSync(process.execPath, [

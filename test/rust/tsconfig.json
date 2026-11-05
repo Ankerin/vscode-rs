@@ -11,7 +11,8 @@
 		]
 	},
 	"files": [
-		"../../node_modules/@types/node/index.d.ts"
+		"../../node_modules/@types/node/index.d.ts",
+		"../../src/vs/monaco.d.ts"
 	],
 	"include": [
 		"./*.ts",

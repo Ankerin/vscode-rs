@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { timeout } from '../../../base/common/async.js';
-import { Disposable, IDisposable } from '../../../base/common/lifecycle.js';
+import { Disposable, IDisposable, MutableDisposable } from '../../../base/common/lifecycle.js';
 import { URI } from '../../../base/common/uri.js';
 import { logOnceWebWorkerWarning, IWebWorkerClient, Proxied } from '../../../base/common/worker/webWorker.js';
 import { WebWorkerDescriptor } from '../../../platform/webWorker/browser/webWorkerDescriptor.js';
@@ -38,6 +38,7 @@ import { StringEdit } from '../../common/core/edits/stringEdit.js';
 import { OffsetRange } from '../../common/core/ranges/offsetRange.js';
 import { FileAccess } from '../../../base/common/network.js';
 import { isCompletionsEnabledWithTextResourceConfig } from '../../common/services/completionsEnablement.js';
+import { getRustTextBufferInitialization } from '../../common/model/rustTextBuffer/rustTextBuffer.js';
 
 /**
  * Stop the worker if it was not needed for 5 min.
@@ -445,8 +446,9 @@ export class EditorWorkerClient extends Disposable implements IEditorWorkerClien
 	private readonly _modelService: IModelService;
 	private readonly _webWorkerService: IWebWorkerService;
 	private readonly _keepIdleModels: boolean;
-	private _worker: IWebWorkerClient<EditorWorker> | null;
-	private _modelManager: WorkerTextModelSyncClient | null;
+	private readonly _modelManager = this._register(new MutableDisposable<WorkerTextModelSyncClient>());
+	private readonly _worker = this._register(new MutableDisposable<IWebWorkerClient<EditorWorker>>());
+	private _rustInitialization: Promise<void> | undefined;
 	private _disposed = false;
 
 	constructor(
@@ -459,8 +461,6 @@ export class EditorWorkerClient extends Disposable implements IEditorWorkerClien
 		this._modelService = modelService;
 		this._webWorkerService = webWorkerService;
 		this._keepIdleModels = keepIdleModels;
-		this._worker = null;
-		this._modelManager = null;
 	}
 
 	// foreign host request
@@ -469,27 +469,42 @@ export class EditorWorkerClient extends Disposable implements IEditorWorkerClien
 	}
 
 	private _getOrCreateWorker(): IWebWorkerClient<EditorWorker> {
-		if (!this._worker) {
+		if (!this._worker.value) {
 			try {
-				this._worker = this._register(this._webWorkerService.createWorkerClient<EditorWorker>(this._workerDescriptorOrWorker));
-				EditorWorkerHost.setChannel(this._worker, this._createEditorWorkerHost());
+				this._worker.value = this._webWorkerService.createWorkerClient<EditorWorker>(this._workerDescriptorOrWorker);
+				EditorWorkerHost.setChannel(this._worker.value, this._createEditorWorkerHost());
 			} catch (err) {
 				logOnceWebWorkerWarning(err);
-				this._worker = this._createFallbackLocalWorker();
+				this._worker.value = this._createFallbackLocalWorker();
 			}
 		}
-		return this._worker;
+		return this._worker.value;
 	}
 
 	protected async _getProxy(): Promise<Proxied<EditorWorker>> {
 		try {
 			const proxy = this._getOrCreateWorker().proxy;
 			await proxy.$ping();
+			if (this._disposed) {
+				throw canceled();
+			}
+			const initialization = getRustTextBufferInitialization();
+			if (initialization) {
+				this._rustInitialization ??= proxy.$initializeRustTextBuffer(initialization).catch(error => {
+					console.warn('Unable to initialize the Rust text buffer in the editor worker; using the existing storage', error);
+				});
+				await this._rustInitialization;
+			}
 			return proxy;
 		} catch (err) {
+			if (this._disposed) {
+				throw canceled();
+			}
 			logOnceWebWorkerWarning(err);
-			this._worker = this._createFallbackLocalWorker();
-			return this._worker.proxy;
+			this._modelManager.clear();
+			this._rustInitialization = undefined;
+			this._worker.value = this._createFallbackLocalWorker();
+			return this._worker.value.proxy;
 		}
 	}
 
@@ -504,10 +519,10 @@ export class EditorWorkerClient extends Disposable implements IEditorWorkerClien
 	}
 
 	private _getOrCreateModelManager(proxy: Proxied<EditorWorker>): WorkerTextModelSyncClient {
-		if (!this._modelManager) {
-			this._modelManager = this._register(new WorkerTextModelSyncClient(proxy, this._modelService, this._keepIdleModels));
+		if (!this._modelManager.value) {
+			this._modelManager.value = new WorkerTextModelSyncClient(proxy, this._modelService, this._keepIdleModels);
 		}
-		return this._modelManager;
+		return this._modelManager.value;
 	}
 
 	public async workerWithSyncedResources(resources: URI[], forceLargeModels: boolean = false): Promise<Proxied<EditorWorker>> {
@@ -515,6 +530,9 @@ export class EditorWorkerClient extends Disposable implements IEditorWorkerClien
 			return Promise.reject(canceled());
 		}
 		const proxy = await this._getProxy();
+		if (this._disposed) {
+			throw canceled();
+		}
 		this._getOrCreateModelManager(proxy).ensureSyncedResources(resources, forceLargeModels);
 		return proxy;
 	}
@@ -527,7 +545,7 @@ export class EditorWorkerClient extends Disposable implements IEditorWorkerClien
 	}
 
 	override dispose(): void {
-		super.dispose();
 		this._disposed = true;
+		super.dispose();
 	}
 }

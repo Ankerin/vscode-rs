@@ -9,10 +9,12 @@ import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
-const output = resolve(root, '.build/rust/textBufferParity.mjs');
+const outputDirectory = resolve(root, '.build/rust');
+const browserTests = process.argv.includes('--browser');
 await build({
-	entryPoints: [resolve(root, 'test/rust/textBufferParity.ts')],
-	outfile: output,
+	entryPoints: (browserTests ? ['browserWorkerParity'] : ['textBufferParity', 'mirrorModelParity', 'editorWorkerRealm']).map(file => resolve(root, `test/rust/${file}.ts`)),
+	outdir: outputDirectory,
+	outExtension: { '.js': '.mjs' },
 	bundle: true,
 	platform: 'node',
 	format: 'esm',
@@ -20,7 +22,19 @@ await build({
 	tsconfig: resolve(root, 'src/tsconfig.json')
 });
 
-const result = spawnSync(process.execPath, ['--expose-gc', '--test', output], { cwd: root, stdio: 'inherit', windowsHide: true });
+if (browserTests) {
+	await build({
+		entryPoints: ['browserWorkerFixture', 'browserEditorWorkerRealm'].map(file => resolve(root, `test/rust/${file}.ts`)),
+		outdir: outputDirectory,
+		outExtension: { '.js': '.mjs' },
+		bundle: true,
+		platform: 'browser',
+		format: 'esm',
+		tsconfig: resolve(root, 'src/tsconfig.json')
+	});
+}
+
+const result = spawnSync(process.execPath, ['--expose-gc', '--test', ...(browserTests ? ['browserWorkerParity'] : ['textBufferParity', 'mirrorModelParity']).map(file => resolve(outputDirectory, `${file}.mjs`))], { cwd: root, stdio: 'inherit', windowsHide: true });
 if (result.error) {
 	throw result.error;
 }

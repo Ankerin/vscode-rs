@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { IDisposable } from '../../../../base/common/lifecycle.js';
+import { IDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
 import { Position } from '../../core/position.js';
 import { Range } from '../../core/range.js';
 import { FindMatch, ITextSnapshot, SearchData } from '../../model.js';
@@ -44,6 +44,19 @@ export interface IRustTextBufferModule {
 		new(units: Uint16Array): IRustTextBuffer;
 		from_text(text: string): IRustTextBuffer;
 	};
+}
+
+/** Generated asset locations passed to isolated editor workers before synchronizing documents. */
+export interface IRustTextBufferInitialization {
+	readonly moduleUrl: string;
+	readonly wasmUrl: string;
+}
+
+let registeredInitialization: IRustTextBufferInitialization | undefined;
+
+/** Returns initialization data only while the renderer's Rust factory is installed. */
+export function getRustTextBufferInitialization(): IRustTextBufferInitialization | undefined {
+	return registeredInitialization;
 }
 
 function toUnits(text: string): Uint16Array {
@@ -306,9 +319,16 @@ class RustTextBufferStorage implements ITextBufferStorage, IDisposable {
 }
 
 /** Installs an initialized Rust module for new models. Dispose the registration to restore defaults. */
-export function registerRustTextBuffer(module: IRustTextBufferModule): IDisposable {
+export function registerRustTextBuffer(module: IRustTextBufferModule, initialization?: IRustTextBufferInitialization): IDisposable {
 	if (typeof module.text_buffer_abi_version !== 'function' || module.text_buffer_abi_version() !== 3) {
 		throw new Error('The Rust text buffer bindings do not match the current storage contract');
 	}
-	return registerTextBufferStorageFactory((chunks, eol, eolNormalized) => new RustTextBufferStorage(module, chunks, eol, eolNormalized));
+	const registration = registerTextBufferStorageFactory((chunks, eol, eolNormalized) => new RustTextBufferStorage(module, chunks, eol, eolNormalized));
+	registeredInitialization = initialization;
+	return toDisposable(() => {
+		registration.dispose();
+		if (registeredInitialization === initialization) {
+			registeredInitialization = undefined;
+		}
+	});
 }

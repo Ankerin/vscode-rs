@@ -9,6 +9,9 @@ on:
       - 'test/rust/**'
       - 'src/vs/editor/common/model/**'
       - 'src/vs/editor/browser/model/**'
+      - 'src/vs/editor/common/services/**'
+      - 'src/vs/editor/browser/services/**'
+      - 'src/vs/editor/test/common/services/editorWebWorker.test.ts'
       - 'src/vs/workbench/electron-browser/desktop.main.ts'
       - 'src/vs/platform/environment/**/argv.ts'
       - 'package.json'
@@ -74,6 +77,10 @@ jobs:
         run: pnpm exec tsc --project test/rust/tsconfig.json --noEmit --skipLibCheck
       - name: Compare existing and Rust models
         run: pnpm run test-rust-editor
+      - name: Install Chromium for browser worker compatibility
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Verify browser worker loading and lifecycle
+        run: pnpm run test-rust-editor -- --browser
       - name: Build current client for canonical model suites
         run: pnpm run build-fast --client-only
       - name: Restore generated bindings after client build

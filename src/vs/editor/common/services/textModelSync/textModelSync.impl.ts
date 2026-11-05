@@ -13,6 +13,7 @@ import { ensureValidWordDefinition, getWordAtText, IWordAtPosition } from '../..
 import { IDocumentColorComputerTarget } from '../../languages/defaultDocumentColorsComputer.js';
 import { ILinkComputerTarget } from '../../languages/linkComputer.js';
 import { MirrorTextModel as BaseMirrorModel, IModelChangedEvent } from '../../model/mirrorTextModel.js';
+import { createRegisteredTextBufferStorageFromLines, ITextBufferStorage } from '../../model/rustTextBuffer/textBufferStorage.js';
 import { IMirrorModel, IWordRange } from '../editorWebWorker.js';
 import { IModelService } from '../model.js';
 import { IRawModelData, IWorkerTextModelSyncChannelServer } from './textModelSync.protocol.js';
@@ -128,12 +129,18 @@ export class WorkerTextModelSyncClient extends Disposable {
 	}
 }
 
-export class WorkerTextModelSyncServer implements IWorkerTextModelSyncChannelServer {
+export class WorkerTextModelSyncServer implements IWorkerTextModelSyncChannelServer, IDisposable {
 
 	private readonly _models: { [uri: string]: MirrorModel };
 
 	constructor() {
 		this._models = Object.create(null);
+	}
+
+	public dispose(): void {
+		for (const uri of Object.keys(this._models)) {
+			this.$acceptRemovedModel(uri);
+		}
 	}
 
 	public bindToServer(workerServer: IWebWorkerServer): void {
@@ -151,6 +158,7 @@ export class WorkerTextModelSyncServer implements IWorkerTextModelSyncChannelSer
 	}
 
 	$acceptNewModel(data: IRawModelData): void {
+		this.$acceptRemovedModel(data.url);
 		this._models[data.url] = new MirrorModel(URI.parse(data.url), data.lines, data.EOL, data.versionId);
 	}
 
@@ -166,11 +174,72 @@ export class WorkerTextModelSyncServer implements IWorkerTextModelSyncChannelSer
 		if (!this._models[uri]) {
 			return;
 		}
+		this._models[uri].dispose();
 		delete this._models[uri];
 	}
 }
 
 export class MirrorModel extends BaseMirrorModel implements ICommonModel {
+
+	private _storage: (ITextBufferStorage & IDisposable) | undefined;
+	private _cachedStorageText: string | null = null;
+
+	constructor(uri: URI, lines: string[], eol: string, versionId: number) {
+		const storage = eol === '\n' || eol === '\r\n' ? createRegisteredTextBufferStorageFromLines(lines, eol) : undefined;
+		super(uri, storage ? [] : lines, eol, versionId);
+		this._storage = storage;
+	}
+
+	public override dispose(): void {
+		this._storage?.dispose();
+		this._storage = undefined;
+		this._cachedStorageText = null;
+		super.dispose();
+	}
+
+	public override getText(): string {
+		if (!this._storage) {
+			return super.getText();
+		}
+		if (this._cachedStorageText === null) {
+			const lineCount = this.getLineCount();
+			this._cachedStorageText = this._storage.getValueInRange(new Range(1, 1, lineCount, this._storage.getLineLength(lineCount) + 1));
+		}
+		return this._cachedStorageText;
+	}
+
+	public override onEvents(event: IModelChangedEvent): void {
+		if (!this._storage) {
+			super.onEvents(event);
+			return;
+		}
+		if (event.eol && event.eol !== this._eol) {
+			if (event.eol !== '\n' && event.eol !== '\r\n') {
+				this._lines = this._storage.getLinesContent();
+				this._storage.dispose();
+				this._storage = undefined;
+				this._cachedStorageText = null;
+				super.onEvents(event);
+				return;
+			}
+			this._storage.setEOL(event.eol);
+			this._eol = event.eol;
+		}
+		// Mirror events are replayed sequentially, including events with dependent ranges.
+		for (const change of event.changes) {
+			const start = this._storage.getOffsetAt(change.range.startLineNumber, change.range.startColumn);
+			const end = this._storage.getOffsetAt(change.range.endLineNumber, change.range.endColumn);
+			const text = change.text.replace(/\r\n|\r|\n/g, this._eol);
+			if (this._storage.applyEdits) {
+				this._storage.applyEdits([{ rangeOffset: start, rangeLength: end - start, text }]);
+			} else {
+				this._storage.delete(start, end - start);
+				this._storage.insert(start, text, true);
+			}
+		}
+		this._versionId = event.versionId;
+		this._cachedStorageText = null;
+	}
 
 	public get uri(): URI {
 		return this._uri;
@@ -186,8 +255,8 @@ export class MirrorModel extends BaseMirrorModel implements ICommonModel {
 
 	public findMatches(regex: RegExp): RegExpMatchArray[] {
 		const matches = [];
-		for (let i = 0; i < this._lines.length; i++) {
-			const line = this._lines[i];
+		for (let i = 0; i < this.getLineCount(); i++) {
+			const line = this.getLineContent(i + 1);
 			const offsetToAdd = this.offsetAt(new Position(i + 1, 1));
 			const iteratorOverMatches = line.matchAll(regex);
 			for (const match of iteratorOverMatches) {
@@ -201,15 +270,15 @@ export class MirrorModel extends BaseMirrorModel implements ICommonModel {
 	}
 
 	public getLinesContent(): string[] {
-		return this._lines.slice(0);
+		return this._storage ? this._storage.getLinesContent() : this._lines.slice(0);
 	}
 
 	public getLineCount(): number {
-		return this._lines.length;
+		return this._storage ? this._storage.getLineCount() : this._lines.length;
 	}
 
 	public getLineContent(lineNumber: number): string {
-		return this._lines[lineNumber - 1];
+		return this._storage && Number.isInteger(lineNumber) && lineNumber >= 1 && lineNumber <= this.getLineCount() ? this._storage.getLineContent(lineNumber) : this._lines[lineNumber - 1];
 	}
 
 	public getWordAtPosition(position: IPosition, wordDefinition: RegExp): Range | null {
@@ -217,7 +286,7 @@ export class MirrorModel extends BaseMirrorModel implements ICommonModel {
 		const wordAtText = getWordAtText(
 			position.column,
 			ensureValidWordDefinition(wordDefinition),
-			this._lines[position.lineNumber - 1],
+			this.getLineContent(position.lineNumber),
 			0
 		);
 
@@ -238,7 +307,7 @@ export class MirrorModel extends BaseMirrorModel implements ICommonModel {
 			};
 		}
 		return {
-			word: this._lines[position.lineNumber - 1].substring(wordAtPosition.startColumn - 1, position.column - 1),
+			word: this.getLineContent(position.lineNumber).substring(wordAtPosition.startColumn - 1, position.column - 1),
 			startColumn: wordAtPosition.startColumn,
 			endColumn: position.column
 		};
@@ -247,8 +316,8 @@ export class MirrorModel extends BaseMirrorModel implements ICommonModel {
 
 	public words(wordDefinition: RegExp): Iterable<string> {
 
-		const lines = this._lines;
-		const wordenize = this._wordenize.bind(this);
+		const model = this;
+		const wordenize = (content: string) => this._wordenize(content, wordDefinition);
 
 		let lineNumber = 0;
 		let lineText = '';
@@ -263,9 +332,9 @@ export class MirrorModel extends BaseMirrorModel implements ICommonModel {
 						wordRangesIdx += 1;
 						yield value;
 					} else {
-						if (lineNumber < lines.length) {
-							lineText = lines[lineNumber];
-							wordRanges = wordenize(lineText, wordDefinition);
+						if (lineNumber < model.getLineCount()) {
+							lineText = model.getLineContent(lineNumber + 1);
+							wordRanges = wordenize(lineText);
 							wordRangesIdx = 0;
 							lineNumber += 1;
 						} else {
@@ -278,7 +347,7 @@ export class MirrorModel extends BaseMirrorModel implements ICommonModel {
 	}
 
 	public getLineWords(lineNumber: number, wordDefinition: RegExp): IWordAtPosition[] {
-		const content = this._lines[lineNumber - 1];
+		const content = this.getLineContent(lineNumber);
 		const ranges = this._wordenize(content, wordDefinition);
 		const words: IWordAtPosition[] = [];
 		for (const range of ranges) {
@@ -309,9 +378,12 @@ export class MirrorModel extends BaseMirrorModel implements ICommonModel {
 
 	public getValueInRange(range: IRange): string {
 		range = this._validateRange(range);
+		if (this._storage && Number.isFinite(range.startColumn) && Number.isFinite(range.endColumn) && (range.startLineNumber < range.endLineNumber || (range.startLineNumber === range.endLineNumber && range.startColumn <= range.endColumn))) {
+			return this._storage.getValueInRange(Range.lift(range));
+		}
 
 		if (range.startLineNumber === range.endLineNumber) {
-			return this._lines[range.startLineNumber - 1].substring(range.startColumn - 1, range.endColumn - 1);
+			return this.getLineContent(range.startLineNumber).substring(range.startColumn - 1, range.endColumn - 1);
 		}
 
 		const lineEnding = this._eol;
@@ -319,17 +391,20 @@ export class MirrorModel extends BaseMirrorModel implements ICommonModel {
 		const endLineIndex = range.endLineNumber - 1;
 		const resultLines: string[] = [];
 
-		resultLines.push(this._lines[startLineIndex].substring(range.startColumn - 1));
+		resultLines.push(this.getLineContent(startLineIndex + 1).substring(range.startColumn - 1));
 		for (let i = startLineIndex + 1; i < endLineIndex; i++) {
-			resultLines.push(this._lines[i]);
+			resultLines.push(this.getLineContent(i + 1));
 		}
-		resultLines.push(this._lines[endLineIndex].substring(0, range.endColumn - 1));
+		resultLines.push(this.getLineContent(endLineIndex + 1).substring(0, range.endColumn - 1));
 
 		return resultLines.join(lineEnding);
 	}
 
 	public offsetAt(position: IPosition): number {
 		position = this._validatePosition(position);
+		if (this._storage) {
+			return this._storage.getOffsetAt(position.lineNumber, 1) + (position.column - 1);
+		}
 		this._ensureLineStarts();
 		return this._lineStarts!.getPrefixSum(position.lineNumber - 2) + (position.column - 1);
 	}
@@ -337,6 +412,14 @@ export class MirrorModel extends BaseMirrorModel implements ICommonModel {
 	public positionAt(offset: number): IPosition {
 		offset = Math.floor(offset);
 		offset = Math.max(0, offset);
+		if (this._storage) {
+			if (Number.isNaN(offset)) {
+				// Preserve the prefix-sum reference's invalid-offset result instead of coercing NaN to zero.
+				return { lineNumber: 1 + Math.floor((this.getLineCount() - 1) / 2), column: Number.NaN };
+			}
+			const position = this._storage.getPositionAt(offset);
+			return { lineNumber: position.lineNumber, column: Math.min(position.column, this._storage.getLineLength(position.lineNumber) + 1) };
+		}
 
 		this._ensureLineStarts();
 		const out = this._lineStarts!.getIndexOf(offset);
@@ -382,13 +465,13 @@ export class MirrorModel extends BaseMirrorModel implements ICommonModel {
 			column = 1;
 			hasChanged = true;
 
-		} else if (lineNumber > this._lines.length) {
-			lineNumber = this._lines.length;
-			column = this._lines[lineNumber - 1].length + 1;
+		} else if (lineNumber > this.getLineCount()) {
+			lineNumber = this.getLineCount();
+			column = this.getLineContent(lineNumber).length + 1;
 			hasChanged = true;
 
 		} else {
-			const maxCharacter = this._lines[lineNumber - 1].length + 1;
+			const maxCharacter = this.getLineContent(lineNumber).length + 1;
 			if (column < 1) {
 				column = 1;
 				hasChanged = true;

@@ -7,7 +7,7 @@ import { IDisposable, toDisposable } from '../../../../base/common/lifecycle.js'
 import { Position } from '../../core/position.js';
 import { Range } from '../../core/range.js';
 import { FindMatch, ITextSnapshot, SearchData } from '../../model.js';
-import { StringBuffer } from '../pieceTreeTextBuffer/pieceTreeBase.js';
+import { createLineStartsFast, StringBuffer } from '../pieceTreeTextBuffer/pieceTreeBase.js';
 
 /** A replacement in the original document's UTF-16 coordinates, ordered from bottom to top. */
 export interface ITextBufferStorageEdit {
@@ -58,4 +58,13 @@ export function registerTextBufferStorageFactory(factory: TextBufferStorageFacto
 
 export function createRegisteredTextBufferStorage(chunks: StringBuffer[], eol: '\r\n' | '\n', eolNormalized: boolean): (ITextBufferStorage & IDisposable) | undefined {
 	return storageFactory?.(chunks, eol, eolNormalized);
+}
+
+/** Constructs mirror storage lazily, retaining the original path for nonstandard line arrays. */
+export function createRegisteredTextBufferStorageFromLines(lines: string[], eol: '\r\n' | '\n'): (ITextBufferStorage & IDisposable) | undefined {
+	if (!storageFactory || lines.length === 0 || lines.some(line => /\r|\n/.test(line))) {
+		return undefined;
+	}
+	const text = lines.join(eol);
+	return storageFactory([new StringBuffer(text, createLineStartsFast(text))], eol, true);
 }

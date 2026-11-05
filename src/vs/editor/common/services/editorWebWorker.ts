@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { stringDiff } from '../../../base/common/diff/diff.js';
-import { IDisposable } from '../../../base/common/lifecycle.js';
+import { Disposable } from '../../../base/common/lifecycle.js';
 import { isHighSurrogate } from '../../../base/common/strings.js';
 import { URI } from '../../../base/common/uri.js';
 import { IWebWorkerServerRequestHandler } from '../../../base/common/worker/webWorker.js';
@@ -33,6 +33,8 @@ import { ICommonModel, WorkerTextModelSyncServer } from './textModelSync/textMod
 import { ISerializedStringEdit, StringEdit } from '../core/edits/stringEdit.js';
 import { StringText } from '../core/text/abstractText.js';
 import { ensureDependenciesAreSet } from '../core/text/positionToOffset.js';
+import { getRustTextBufferInitialization, IRustTextBufferInitialization } from '../model/rustTextBuffer/rustTextBuffer.js';
+import { loadAndRegisterRustTextBuffer } from '../model/rustTextBuffer/rustTextBufferLoader.js';
 
 export interface IMirrorModel extends IMirrorTextModel {
 	readonly uri: URI;
@@ -69,16 +71,30 @@ export interface IWordRange {
 /**
  * @internal
  */
-export class EditorWorker implements IDisposable, IWorkerTextModelSyncChannelServer, IWebWorkerServerRequestHandler {
+export class EditorWorker extends Disposable implements IWorkerTextModelSyncChannelServer, IWebWorkerServerRequestHandler {
 	_requestHandlerBrand: void = undefined;
 
-	private readonly _workerTextModelSyncServer = new WorkerTextModelSyncServer();
+	private readonly _workerTextModelSyncServer = this._register(new WorkerTextModelSyncServer());
+	private _rustInitialization: Promise<void> | undefined;
 
 	constructor(
 		private readonly _foreignModule: unknown | null = null
-	) { }
+	) { super(); }
 
-	dispose(): void {
+	/** Initializes one core per worker realm before accepting mirrored model data. */
+	public async $initializeRustTextBuffer(initialization: IRustTextBufferInitialization): Promise<void> {
+		if (getRustTextBufferInitialization()) {
+			return;
+		}
+		this._rustInitialization ??= (async () => {
+			const registration = await loadAndRegisterRustTextBuffer(initialization);
+			if (this._store.isDisposed) {
+				registration.dispose();
+				return;
+			}
+			this._register(registration);
+		})();
+		await this._rustInitialization;
 	}
 
 	public async $ping() {
