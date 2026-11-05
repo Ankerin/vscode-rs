@@ -6,48 +6,75 @@
 import * as arrays from '../../../base/common/arrays.js';
 import { IRange, Range } from '../core/range.js';
 import { LineTokens } from './lineTokens.js';
-import { SparseMultilineTokens } from './sparseMultilineTokens.js';
+import { SparseLineTokens, SparseMultilineTokens } from './sparseMultilineTokens.js';
 import { ILanguageIdCodec } from '../languages.js';
 import { MetadataConsts } from '../encodedTokenAttributes.js';
 import { ITextModel } from '../model.js';
-import { tryMergeRustSemanticTokens } from './rustTokens.js';
+import { createRustSparseTokensStore, IRustSparseTokensStore, tryMergeRustSemanticTokens } from './rustTokens.js';
+import { Disposable, toDisposable } from '../../../base/common/lifecycle.js';
 
 /**
  * Represents sparse tokens in a text model.
  */
-export class SparseTokensStore {
+export class SparseTokensStore extends Disposable {
 
 	private _pieces: SparseMultilineTokens[];
 	private _isComplete: boolean;
 	private readonly _languageIdCodec: ILanguageIdCodec;
+	private _native: IRustSparseTokensStore | undefined;
 
 	constructor(languageIdCodec: ILanguageIdCodec) {
+		super();
 		this._pieces = [];
 		this._isComplete = false;
 		this._languageIdCodec = languageIdCodec;
+		this._native = createRustSparseTokensStore(SparseMultilineTokens.prototype.acceptEdit);
+		this._register(toDisposable(() => {
+			this._native?.free();
+			this._native = undefined;
+			this._pieces = [];
+		}));
+	}
+
+	/** Retains the original aliased array when an unsupported operation needs the existing path. */
+	private _retainExistingState(): void {
+		if (!this._native) { return; }
+		this._pieces = this._native.export_pieces();
+		this._isComplete = this._native.is_complete();
+		this._native.free();
+		this._native = undefined;
 	}
 
 	public flush(): void {
+		this._native?.flush();
 		this._pieces = [];
 		this._isComplete = false;
 	}
 
 	public isEmpty(): boolean {
+		if (this._native) { return this._native.is_empty(); }
 		return (this._pieces.length === 0);
 	}
 
 	public set(pieces: SparseMultilineTokens[] | null, isComplete: boolean, textModel: ITextModel | undefined = undefined): void {
-		this._pieces = pieces || [];
+		const value = pieces || [];
+		if (this._native && !this._native.set_pieces(value, isComplete)) { this._retainExistingState(); }
+		if (!this._native) { this._pieces = value; }
 		this._isComplete = isComplete;
 
 		if (textModel) {
-			for (const p of this._pieces) {
+			for (const p of value) {
 				p.reportIfInvalid(textModel);
 			}
 		}
 	}
 
 	public setPartial(_range: Range, pieces: SparseMultilineTokens[]): Range {
+		if (this._native) {
+			const result = this._native.set_partial(_range, pieces);
+			if (result !== undefined) { return result; }
+			this._retainExistingState();
+		}
 		// console.log(`setPartial ${_range} ${pieces.map(p => p.toString()).join(', ')}`);
 
 		let range = _range;
@@ -128,6 +155,7 @@ export class SparseTokensStore {
 	}
 
 	public isComplete(): boolean {
+		if (this._native) { return this._native.is_complete(); }
 		return this._isComplete;
 	}
 
@@ -137,14 +165,15 @@ export class SparseTokensStore {
 			return aTokens;
 		}
 
-		const pieces = this._pieces;
-
-		if (pieces.length === 0) {
-			return aTokens;
+		let bTokens: SparseLineTokens | null;
+		if (this._native) {
+			bTokens = this._native.get_line_tokens(lineNumber);
+		} else {
+			const pieces = this._pieces;
+			if (pieces.length === 0) { return aTokens; }
+			const pieceIndex = SparseTokensStore._findFirstPieceWithLine(pieces, lineNumber);
+			bTokens = pieces[pieceIndex].getLineTokens(lineNumber);
 		}
-
-		const pieceIndex = SparseTokensStore._findFirstPieceWithLine(pieces, lineNumber);
-		const bTokens = pieces[pieceIndex].getLineTokens(lineNumber);
 
 		if (!bTokens) {
 			return aTokens;
@@ -252,6 +281,10 @@ export class SparseTokensStore {
 	}
 
 	public acceptEdit(range: IRange, eolCount: number, firstLineLength: number, lastLineLength: number, firstCharCode: number): void {
+		if (this._native) {
+			if (this._native.accept_edit(range, eolCount, firstLineLength, lastLineLength, firstCharCode)) { return; }
+			this._retainExistingState();
+		}
 		for (let i = 0; i < this._pieces.length; i++) {
 			const piece = this._pieces[i];
 			piece.acceptEdit(range, eolCount, firstLineLength, lastLineLength, firstCharCode);

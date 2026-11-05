@@ -105,7 +105,7 @@ export class TokenizationTextModelPart extends TextModelPart implements ITokeniz
 			hadTokens = true;
 		});
 
-		this._semanticTokens = new SparseTokensStore(this._languageService.languageIdCodec);
+		this._semanticTokens = this._register(new SparseTokensStore(this._languageService.languageIdCodec));
 		this._onDidChangeLanguage = this._register(new Emitter<IModelLanguageChangedEvent>());
 		this.onDidChangeLanguage = this._onDidChangeLanguage.event;
 		this._onDidChangeLanguageConfiguration = this._register(new Emitter<IModelLanguageConfigurationChangedEvent>());

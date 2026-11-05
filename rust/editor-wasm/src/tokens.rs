@@ -8,7 +8,7 @@ use wasm_bindgen::prelude::*;
 /// Identifies token metadata composition independently of storage and diff contracts.
 #[wasm_bindgen]
 pub fn tokens_abi_version() -> u32 {
-	4
+	5
 }
 
 /// Copies edits back to the source view; -1 represents the editor's shared empty-line sentinel.

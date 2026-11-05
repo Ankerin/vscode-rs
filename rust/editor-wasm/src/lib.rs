@@ -14,6 +14,7 @@ use wasm_bindgen::prelude::*;
 mod contiguous_tokens_store;
 mod model_edits;
 mod sequence_diff;
+mod sparse_tokens_store;
 mod text_change;
 mod text_transfer;
 mod tokens;

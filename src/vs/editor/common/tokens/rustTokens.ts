@@ -4,7 +4,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { IDisposable, toDisposable } from '../../../base/common/lifecycle.js';
-import { IRange } from '../core/range.js';
+import { IRange, Range } from '../core/range.js';
+import type { SparseLineTokens, SparseMultilineTokens } from './sparseMultilineTokens.js';
 
 /** Generated metadata composition bindings; source arrays retain their existing ownership. */
 export interface IRustTokensModule {
@@ -15,6 +16,20 @@ export interface IRustTokensModule {
 	update_contiguous_tokens(tokens: Uint32Array, operation: number, first: number, second: number): number | undefined;
 	append_contiguous_tokens(first: Uint32Array, second: Uint32Array): Uint32Array | undefined;
 	WasmContiguousTokensStore: { new(empty: ArrayBuffer): IRustContiguousTokensStore };
+	WasmSparseTokensStore: { new(standardEdit?: SparseMultilineTokens['acceptEdit']): IRustSparseTokensStore };
+}
+
+/** Owns sparse piece orchestration while retaining the original array and piece objects. */
+export interface IRustSparseTokensStore {
+	flush(): void;
+	is_empty(): boolean;
+	is_complete(): boolean;
+	set_pieces(pieces: SparseMultilineTokens[], complete: boolean): boolean;
+	export_pieces(): SparseMultilineTokens[];
+	get_line_tokens(line: number): SparseLineTokens | null;
+	set_partial(range: Range, pieces: SparseMultilineTokens[]): Range | undefined;
+	accept_edit(range: IRange, eolCount: number, firstLength: number, lastLength: number, firstCode: number): boolean;
+	free(): void;
 }
 
 /** Owns the line index; encoded buffers retain existing externally mutable references. */
@@ -32,7 +47,7 @@ let registeredModule: IRustTokensModule | undefined;
 
 /** Installs token composition for the initialized core's disposable scope. */
 export function registerRustTokens(module: IRustTokensModule): IDisposable {
-	if (typeof module.tokens_abi_version !== 'function' || module.tokens_abi_version() !== 4 || typeof module.merge_semantic_tokens !== 'function' || typeof module.update_sparse_tokens !== 'function' || typeof module.split_sparse_tokens !== 'function' || typeof module.update_contiguous_tokens !== 'function' || typeof module.append_contiguous_tokens !== 'function' || typeof module.WasmContiguousTokensStore !== 'function') {
+	if (typeof module.tokens_abi_version !== 'function' || module.tokens_abi_version() !== 5 || typeof module.merge_semantic_tokens !== 'function' || typeof module.update_sparse_tokens !== 'function' || typeof module.split_sparse_tokens !== 'function' || typeof module.update_contiguous_tokens !== 'function' || typeof module.append_contiguous_tokens !== 'function' || typeof module.WasmContiguousTokensStore !== 'function' || typeof module.WasmSparseTokensStore !== 'function') {
 		throw new Error('The Rust token bindings do not match the current metadata contract');
 	}
 	if (registeredModule) { throw new Error('A Rust token module is already registered'); }
@@ -45,6 +60,11 @@ export function registerRustTokens(module: IRustTokensModule): IDisposable {
 /** The caller immediately registers the owning store's generated free method for disposal. */
 export function createRustContiguousTokensStore(empty: ArrayBuffer): IRustContiguousTokensStore | undefined {
 	return registeredModule ? new registeredModule.WasmContiguousTokensStore(empty) : undefined;
+}
+
+/** The caller registers the generated native owner for its own disposable scope. */
+export function createRustSparseTokensStore(standardEdit: SparseMultilineTokens['acceptEdit']): IRustSparseTokensStore | undefined {
+	return registeredModule ? new registeredModule.WasmSparseTokensStore(standardEdit) : undefined;
 }
 
 /** Retains source identity while returning the native surviving length or shared-empty sentinel. */

@@ -586,3 +586,25 @@ Tokens span eight UTF-16 units. Positions cycle through 32 preconstructed interi
 | Many short lines | 78.45 | 89.39 | 1.81 |
 
 Process peak RSS remains higher with Rust in every fixture. The owner replaces the JavaScript line-reference index with a Rust vector and generated external references; encoded buffers retain JavaScript ownership, and temporary native streams still copy for mutation. Flush and disposal release references/index capacity without invalidating held buffers. Observations include loading, population, warm-up, all workloads, and checksum consumption; they do not establish whole-editor improvement. Final raw runs remain ignored in `.build/rust/token-store-benchmark.json`, with the initial capture in `.build/rust/token-store-benchmark-initial.json`.
+
+## Sparse piece-orchestration observation
+
+Measured on November 6, 2026 with Windows x64, Node `24.22.1`, Rust `1.99.1`, and release tokens ABI 5 bindings. The `--sparse-store` runner alternates three fresh processes per engine, warms 32 edit/partial-update pairs, and times 200 insert/delete pairs, 200 partial replacements, and 10,000 merged line reads through actual `SparseTokensStore` methods. Provider inputs and replacement pieces are constructed outside timing. Every merged word and returned partial range contributes to matching checksums inside timing; retained input arrays and remaining block records also contribute to the final checksum. Times are medians in milliseconds.
+
+| Fixture | Initial pieces | Lines per piece | Tokens per line | Existing edit pairs | Rust edit pairs | Existing partial updates | Rust partial updates | Existing line reads | Rust line reads |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Small store | 8 | 4 | 4 | 1.72 | 7.32 | 0.96 | 2.75 | 9.98 | 16.95 |
+| Dense store | 64 | 8 | 32 | 2.73 | 18.08 | 1.56 | 4.47 | 29.96 | 32.77 |
+| Multiline edits | 64 | 8 | 4 | 3.05 | 17.67 | 1.39 | 4.36 | 10.16 | 16.69 |
+| Many pieces | 4,096 | 1 | 1 | 21.27 | 509.12 | 3.68 | 44.98 | 4.76 | 14.35 |
+
+Positions cycle through 32 preconstructed interior ranges. Single-line insertion/deletion preserves topology; multiline insertion joins back through the existing token-adjustment behavior. Each partial update replaces one complete line and can split a piece. The owner keeps original arrays and piece objects; semantic merging and affected piece edits use their native kernels. Initial edits nested a JavaScript piece callback and a second native call for every block; the many-piece median was 1,298.57 milliseconds. Direct standard-piece editing now runs within the owner and avoids copying unaffected record streams, reducing that median to 509.12 milliseconds. It remains roughly 24 times slower than the reference, because numerous generated object-property accesses still cross the boundary for each piece. Partial updates retain a large many-piece regression, and reads also regress. Persistent native piece state and a coarser object boundary remain necessary before promotion.
+
+| Fixture | Existing process peak RSS MiB | Rust process peak RSS MiB | Rust linear memory MiB |
+| --- | ---: | ---: | ---: |
+| Small store | 55.32 | 63.36 | 1.13 |
+| Dense store | 56.15 | 64.44 | 1.13 |
+| Multiline edits | 54.58 | 63.80 | 1.13 |
+| Many pieces | 60.94 | 78.28 | 1.13 |
+
+Process peak RSS is higher with Rust in every fixture. The owner keeps the original JavaScript array, objects, and encoded buffers, preserving existing external aliases without retaining a second persistent encoding. Temporary streams are copied only for affected standard pieces. Flush/disposal release the owner references, and unsupported-state fallback exports the same array before freeing the native owner. Observations include loading, population, warm-up, all workloads, and checksum consumption; they do not establish application resource improvements. Final raw runs remain ignored in `.build/rust/sparse-store-benchmark.json`, with the initial capture in `.build/rust/sparse-store-benchmark-initial.json`.

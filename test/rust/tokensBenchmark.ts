@@ -57,4 +57,7 @@ try {
 		memory: { rssDeltaBytes: observed.rss - baseline.rss, heapUsedDeltaBytes: observed.heapUsed - baseline.heapUsed, peakRssBytes: process.resourceUsage().maxRSS * 1024, wasmLinearMemoryBytes: memory?.buffer.byteLength ?? 0 },
 		checksum
 	}));
-} finally { registration?.dispose(); }
+} finally {
+	store.dispose();
+	registration?.dispose();
+}

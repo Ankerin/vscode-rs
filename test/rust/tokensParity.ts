@@ -67,9 +67,11 @@ test('Rust semantic overlays preserve seeded boundaries, all presentation masks,
 			const semantic = offsetView(Array.from({ length: 1 + random(16) }, () => [3, random(text.length * 2), random(text.length * 2), (random(0x100000000) & ~63) | mask]).flat());
 			const beforeSemantic = new Uint32Array(semantic.buffer.slice(0));
 			const store = createStore(semantic);
-			const reference = store.addSparseTokens(4, syntax);
-			const actual = withRust(() => store.addSparseTokens(4, syntax));
-			assert.deepStrictEqual({ tokens: actual.getEncodedTokens(), text: actual.getLineContent(), syntax: new Uint32Array(contiguous.buffer), sparse: new Uint32Array(semantic.buffer) }, { tokens: reference.getEncodedTokens(), text, syntax: beforeSyntax, sparse: beforeSemantic }, `Semantic overlay ${iteration}/${mask}`);
+			try {
+				const reference = store.addSparseTokens(4, syntax);
+				const actual = withRust(() => store.addSparseTokens(4, syntax));
+				assert.deepStrictEqual({ tokens: actual.getEncodedTokens(), text: actual.getLineContent(), syntax: new Uint32Array(contiguous.buffer), sparse: new Uint32Array(semantic.buffer) }, { tokens: reference.getEncodedTokens(), text, syntax: beforeSyntax, sparse: beforeSemantic }, `Semantic overlay ${iteration}/${mask}`);
+			} finally { store.dispose(); }
 		}
 	}
 });
@@ -78,34 +80,36 @@ test('Rust semantic overlays preserve identity shortcuts, unsupported fallback, 
 	const syntax = new LineTokens(new Uint32Array([4, 0xFF010407]), 'text', new LanguageIdCodec());
 	const sparse = new Uint32Array([0, 1, 3, 0x8028803F]);
 	const store = createStore(sparse);
-	const reference = store.addSparseTokens(1, syntax).getEncodedTokens();
-	assert.deepStrictEqual(withRust(() => store.addSparseTokens(1, syntax).getEncodedTokens(), { ...rust, merge_semantic_tokens: () => undefined }), reference);
-	withRust(() => {
-		const empty = new LineTokens(new Uint32Array([0, 7]), '', new LanguageIdCodec());
-		assert.strictEqual(store.addSparseTokens(1, empty), empty);
-		assert.strictEqual(store.addSparseTokens(2, syntax), syntax);
-		store.flush();
-		assert.strictEqual(store.addSparseTokens(1, syntax), syntax);
-	}, { ...rust, merge_semantic_tokens: () => { throw new Error('Unexpected identity-shortcut call'); } });
-	assert.throws(() => registerRustTextBuffer({ ...rust, tokens_abi_version: () => 0 }), /metadata contract/);
-	const registration = registerRustTextBuffer(rust);
-	try { assert.throws(() => registerRustTokens(rust), /already registered/); } finally { registration.dispose(); }
-	assert.strictEqual(tryMergeRustSemanticTokens(syntax.getEncodedTokens(), sparse, 4), undefined);
-	withRust(() => {
-		for (const length of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 0x100000000]) {
-			assert.strictEqual(tryMergeRustSemanticTokens(syntax.getEncodedTokens(), sparse, length), undefined);
+	try {
+		const reference = store.addSparseTokens(1, syntax).getEncodedTokens();
+		assert.deepStrictEqual(withRust(() => store.addSparseTokens(1, syntax).getEncodedTokens(), { ...rust, merge_semantic_tokens: () => undefined }), reference);
+		withRust(() => {
+			const empty = new LineTokens(new Uint32Array([0, 7]), '', new LanguageIdCodec());
+			assert.strictEqual(store.addSparseTokens(1, empty), empty);
+			assert.strictEqual(store.addSparseTokens(2, syntax), syntax);
+			store.flush();
+			assert.strictEqual(store.addSparseTokens(1, syntax), syntax);
+		}, { ...rust, merge_semantic_tokens: () => { throw new Error('Unexpected identity-shortcut call'); } });
+		assert.throws(() => registerRustTextBuffer({ ...rust, tokens_abi_version: () => 0 }), /metadata contract/);
+		const registration = registerRustTextBuffer(rust);
+		try { assert.throws(() => registerRustTokens(rust), /already registered/); } finally { registration.dispose(); }
+		assert.strictEqual(tryMergeRustSemanticTokens(syntax.getEncodedTokens(), sparse, 4), undefined);
+		withRust(() => {
+			for (const length of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 0x100000000]) {
+				assert.strictEqual(tryMergeRustSemanticTokens(syntax.getEncodedTokens(), sparse, length), undefined);
+			}
+			assert.strictEqual(tryMergeRustSemanticTokens(new Uint32Array([1]), sparse, 4), undefined);
+			assert.strictEqual(tryMergeRustSemanticTokens(syntax.getEncodedTokens(), new Uint32Array([1]), 4), undefined);
+		});
+		for (const result of [new Uint32Array([4]), new Uint32Array([3, 0]), new Uint32Array()]) {
+			assert.throws(() => withRust(() => tryMergeRustSemanticTokens(syntax.getEncodedTokens(), sparse, 4), { ...rust, merge_semantic_tokens: () => result }), /token result/);
 		}
-		assert.strictEqual(tryMergeRustSemanticTokens(new Uint32Array([1]), sparse, 4), undefined);
-		assert.strictEqual(tryMergeRustSemanticTokens(syntax.getEncodedTokens(), new Uint32Array([1]), 4), undefined);
-	});
-	for (const result of [new Uint32Array([4]), new Uint32Array([3, 0]), new Uint32Array()]) {
-		assert.throws(() => withRust(() => tryMergeRustSemanticTokens(syntax.getEncodedTokens(), sparse, 4), { ...rust, merge_semantic_tokens: () => result }), /token result/);
-	}
-	assert.throws(() => rust.merge_semantic_tokens(new Uint32Array([1]), sparse, 4), /encoding|contract/);
-	assert.throws(() => rust.merge_semantic_tokens(syntax.getEncodedTokens(), new Uint32Array([1]), 4), /encoding|contract/);
-	for (const tokens of [[], [3, 0], [3, 0, 1, 0]]) {
-		assert.strictEqual(rust.merge_semantic_tokens(new Uint32Array(tokens), sparse, 4), undefined);
-	}
+		assert.throws(() => rust.merge_semantic_tokens(new Uint32Array([1]), sparse, 4), /encoding|contract/);
+		assert.throws(() => rust.merge_semantic_tokens(syntax.getEncodedTokens(), new Uint32Array([1]), 4), /encoding|contract/);
+		for (const tokens of [[], [3, 0], [3, 0, 1, 0]]) {
+			assert.strictEqual(rust.merge_semantic_tokens(new Uint32Array(tokens), sparse, 4), undefined);
+		}
+	} finally { store.dispose(); }
 });
 
 test('Rust semantic overlays preserve real model tokens through edits, partial updates, and language changes', () => {

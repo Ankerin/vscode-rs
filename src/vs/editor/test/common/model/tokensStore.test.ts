@@ -20,7 +20,7 @@ import { createModelServices, createTextModel, instantiateTextModel } from '../t
 
 suite('TokensStore', () => {
 
-	ensureNoDisposablesAreLeakedInTestSuite();
+	const storeDisposables = ensureNoDisposablesAreLeakedInTestSuite();
 
 	const SEMANTIC_COLOR = 5 as ColorId;
 
@@ -270,7 +270,7 @@ suite('TokensStore', () => {
 
 	test('partial tokens 1', () => {
 		const codec = new LanguageIdCodec();
-		const store = new SparseTokensStore(codec);
+		const store = storeDisposables.add(new SparseTokensStore(codec));
 
 		// setPartial: [1,1 -> 31,2], [(5,5-10),(10,5-10),(15,5-10),(20,5-10),(25,5-10),(30,5-10)]
 		store.setPartial(new Range(1, 1, 31, 2), [
@@ -313,7 +313,7 @@ suite('TokensStore', () => {
 
 	test('partial tokens 2', () => {
 		const codec = new LanguageIdCodec();
-		const store = new SparseTokensStore(codec);
+		const store = storeDisposables.add(new SparseTokensStore(codec));
 
 		// setPartial: [1,1 -> 31,2], [(5,5-10),(10,5-10),(15,5-10),(20,5-10),(25,5-10),(30,5-10)]
 		store.setPartial(new Range(1, 1, 31, 2), [
@@ -355,7 +355,7 @@ suite('TokensStore', () => {
 
 	test('partial tokens 3', () => {
 		const codec = new LanguageIdCodec();
-		const store = new SparseTokensStore(codec);
+		const store = storeDisposables.add(new SparseTokensStore(codec));
 
 		// setPartial: [1,1 -> 31,2], [(5,5-10),(10,5-10),(15,5-10),(20,5-10),(25,5-10),(30,5-10)]
 		store.setPartial(new Range(1, 1, 31, 2), [
@@ -383,7 +383,7 @@ suite('TokensStore', () => {
 
 	test('issue #94133: Semantic colors stick around when using (only) range provider', () => {
 		const codec = new LanguageIdCodec();
-		const store = new SparseTokensStore(codec);
+		const store = storeDisposables.add(new SparseTokensStore(codec));
 
 		// setPartial: [1,1 -> 1,20] [(1,9-11)]
 		store.setPartial(new Range(1, 1, 1, 20), [
@@ -422,7 +422,7 @@ suite('TokensStore', () => {
 		}
 
 		const codec = new LanguageIdCodec();
-		const store = new SparseTokensStore(codec);
+		const store = storeDisposables.add(new SparseTokensStore(codec));
 		// setPartial [36446,1 -> 36475,115] [(36448,24-29),(36448,33-46),(36448,47-54),(36450,25-35),(36450,36-50),(36451,28-33),(36451,36-49),(36451,50-57),(36452,35-53),(36452,54-62),(36454,33-38),(36454,41-54),(36454,55-60),(36455,35-53),(36455,54-62),(36457,33-44),(36457,45-49),(36457,50-56),(36457,62-83),(36457,84-88),(36458,35-53),(36458,54-62),(36460,33-37),(36460,38-42),(36460,47-57),(36460,58-67),(36461,35-53),(36461,54-62),(36463,34-38),(36463,39-45),(36463,46-51),(36463,54-63),(36463,64-71),(36463,76-80),(36463,81-87),(36463,88-92),(36463,97-107),(36463,108-119),(36464,35-53),(36464,54-62),(36466,33-71),(36466,72-76),(36467,35-53),(36467,54-62),(36469,24-29),(36469,33-46),(36469,47-54),(36470,24-35),(36470,38-46),(36473,25-35),(36473,36-51),(36474,28-33),(36474,36-49),(36474,50-58),(36475,35-53),(36475,54-62)]
 		store.setPartial(
 			new Range(36446, 1, 36475, 115),
@@ -469,7 +469,7 @@ suite('TokensStore', () => {
 		}
 
 		const codec = new LanguageIdCodec();
-		const store = new SparseTokensStore(codec);
+		const store = storeDisposables.add(new SparseTokensStore(codec));
 
 		store.set([
 			SparseMultilineTokens.create(1, new Uint32Array([
@@ -504,7 +504,7 @@ suite('TokensStore', () => {
 		 * - endLineNumber becomes 5 + (-1) = 4
 		 */
 		const codec = new LanguageIdCodec();
-		const store = new SparseTokensStore(codec);
+		const store = storeDisposables.add(new SparseTokensStore(codec));
 
 		// Set initial tokens on line 5
 		store.set([
@@ -526,7 +526,7 @@ suite('TokensStore', () => {
 
 	test('BUG: setPartial with split that creates empty first piece with invalid line numbers', () => {
 		const codec = new LanguageIdCodec();
-		const store = new SparseTokensStore(codec);
+		const store = storeDisposables.add(new SparseTokensStore(codec));
 
 		// Set initial tokens - token is on line 11
 		store.set([
@@ -554,7 +554,7 @@ suite('TokensStore', () => {
 		// The merge in `addSparseTokens` must not produce backward endOffset sequences,
 		// otherwise `LineTokens.withInserted` re-copies characters causing duplication.
 		const codec = new LanguageIdCodec();
-		const store = new SparseTokensStore(codec);
+		const store = storeDisposables.add(new SparseTokensStore(codec));
 
 		// Simulate overlapping semantic tokens after an edit:
 		// Original: f=1+2 with tokens at (0,1), (1,2), (2,3), (3,4), (4,5)
@@ -597,7 +597,7 @@ suite('TokensStore', () => {
 
 	test('piece with startLineNumber 0 and endLineNumber -1 after encompassing deletion', () => {
 		const codec = new LanguageIdCodec();
-		const store = new SparseTokensStore(codec);
+		const store = storeDisposables.add(new SparseTokensStore(codec));
 
 		// Set initial tokens on lines 5-10
 		const piece = SparseMultilineTokens.create(5, new Uint32Array([
