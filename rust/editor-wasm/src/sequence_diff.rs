@@ -7,14 +7,61 @@ use js_sys::Function;
 use vscode_editor_core::{
 	CharacterDiffOptions, CharacterSequence, LineEqualityScores, OptimizationSequence, Position,
 	SequenceDiff, SequenceDiffError, SequenceDiffResult, TextRange, dynamic_programming_diff,
-	myers_diff, optimize_sequence_diffs, refine_character_diff,
+	myers_diff, optimize_sequence_diffs, refine_character_diff, refine_line_diff,
 };
 use wasm_bindgen::prelude::*;
 
 /// Versions sequence alignment independently of the text storage contract.
 #[wasm_bindgen]
 pub fn sequence_diff_abi_version() -> u32 {
-	5
+	6
+}
+
+/// Returns timeout, line counts, trimmed identities, and optimized half-open line ranges.
+#[wasm_bindgen]
+pub fn diff_lines(
+	original: &[u16],
+	modified: &[u16],
+	original_offsets: &[u32],
+	modified_offsets: &[u32],
+	equality_scores: &[f64],
+	timeout: Option<Function>,
+	deadline: Option<f64>,
+) -> Result<Option<Vec<u32>>, JsValue> {
+	let first = unpack_lines(original, original_offsets).map_err(JsError::from)?;
+	let second = unpack_lines(modified, modified_offsets).map_err(JsError::from)?;
+	let mut callback_error = None;
+	let result = refine_line_diff(&first, &second, equality_scores, || {
+		check_timeout(&timeout, deadline, &mut callback_error)
+	});
+	if let Some(error) = callback_error {
+		return Err(error);
+	}
+	match result {
+		Ok(result) => {
+			let mut values = Vec::with_capacity(
+				3 + result.original_hashes.len()
+					+ result.modified_hashes.len()
+					+ result.result.diffs.len() * 4,
+			);
+			values.extend([
+				u32::from(result.result.hit_timeout),
+				result.original_hashes.len() as u32,
+				result.modified_hashes.len() as u32,
+			]);
+			values.extend(result.original_hashes);
+			values.extend(result.modified_hashes);
+			values.extend(encode_result(result.result).into_iter().skip(1));
+			Ok(Some(values))
+		}
+		Err(
+			SequenceDiffError::TooLarge
+			| SequenceDiffError::AllocationFailed
+			| SequenceDiffError::UnrepresentablePath
+			| SequenceDiffError::InvalidRanges,
+		) => Ok(None),
+		Err(error) => Err(JsError::from(error).into()),
+	}
 }
 
 /// Builds owning UTF-16 slices once and returns translated display and raw character mappings.

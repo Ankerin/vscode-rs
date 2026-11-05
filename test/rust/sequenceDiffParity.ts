@@ -11,9 +11,10 @@ import { pathToFileURL } from 'node:url';
 import { DateTimeout, DiffAlgorithmResult, InfiniteTimeout } from '../../src/vs/editor/common/diff/defaultLinesDiffComputer/algorithms/diffAlgorithm.js';
 import { DynamicProgrammingDiffing } from '../../src/vs/editor/common/diff/defaultLinesDiffComputer/algorithms/dynamicProgrammingDiffing.js';
 import { MyersDiffAlgorithm } from '../../src/vs/editor/common/diff/defaultLinesDiffComputer/algorithms/myersDiffAlgorithm.js';
-import { registerRustSequenceDiff, tryComputeRustCharacterDiff, tryComputeRustLineDiff } from '../../src/vs/editor/common/diff/defaultLinesDiffComputer/algorithms/rustSequenceDiff.js';
+import { registerRustSequenceDiff, tryComputeRustCharacterDiff, tryComputeRustLineAlignment, tryComputeRustLineDiff } from '../../src/vs/editor/common/diff/defaultLinesDiffComputer/algorithms/rustSequenceDiff.js';
 import { DefaultLinesDiffComputer } from '../../src/vs/editor/common/diff/defaultLinesDiffComputer/defaultLinesDiffComputer.js';
-import { extendDiffsToEntireWordIfAppropriate, optimizeSequenceDiffs, removeShortMatches, removeVeryShortMatchingTextBetweenLongDiffs } from '../../src/vs/editor/common/diff/defaultLinesDiffComputer/heuristicSequenceOptimizations.js';
+import { extendDiffsToEntireWordIfAppropriate, optimizeSequenceDiffs, removeShortMatches, removeVeryShortMatchingLinesBetweenDiffs, removeVeryShortMatchingTextBetweenLongDiffs } from '../../src/vs/editor/common/diff/defaultLinesDiffComputer/heuristicSequenceOptimizations.js';
+import { LineSequence } from '../../src/vs/editor/common/diff/defaultLinesDiffComputer/lineSequence.js';
 import { LinesSliceCharSequence } from '../../src/vs/editor/common/diff/defaultLinesDiffComputer/linesSliceCharSequence.js';
 import { Range } from '../../src/vs/editor/common/core/range.js';
 import { RangeMapping } from '../../src/vs/editor/common/diff/rangeMapping.js';
@@ -263,4 +264,61 @@ test('Rust character refinement validates packed boundaries and preserves timeou
 		assert.throws(() => rust.refine_diff(new Uint16Array([97]), new Uint16Array([98]), new Uint32Array(offsets), new Uint32Array([0, 1]), settings), /ranges/);
 	}
 	assert.throws(() => rust.refine_diff(new Uint16Array([97]), new Uint16Array([98]), new Uint32Array([0, 1]), new Uint32Array([0, 1]), settings, () => { throw new Error('Refinement timeout failure'); }), /Refinement timeout failure/);
+});
+
+function alignLinesReference(original: string[], modified: string[]) {
+	const identities = new Map<string, number>();
+	const hash = (line: string) => {
+		const trimmed = line.trim();
+		let value = identities.get(trimmed);
+		if (value === undefined) { value = identities.size; identities.set(trimmed, value); }
+		return value;
+	};
+	const originalHashes = original.map(hash);
+	const modifiedHashes = modified.map(hash);
+	const first = new LineSequence(originalHashes, original);
+	const second = new LineSequence(modifiedHashes, modified);
+	const alignment = original.length + modified.length < 1700
+		? new DynamicProgrammingDiffing().compute(first, second, InfiniteTimeout.instance, (one, two) => original[one] === modified[two] ? modified[two].length === 0 ? 0.1 : 1 + Math.log(1 + modified[two].length) : 0.99)
+		: new MyersDiffAlgorithm().compute(first, second);
+	const diffs = removeVeryShortMatchingLinesBetweenDiffs(first, second, optimizeSequenceDiffs(first, second, alignment.diffs));
+	return { diffs, hitTimeout: alignment.hitTimeout, originalHashes, modifiedHashes };
+}
+
+test('Rust line refinement preserves identity assignment, exact weights, indentation, and short matching lines', () => {
+	let seed = 41;
+	const random = (limit: number) => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed % limit; };
+	const alphabet = ['', ' ', '\t', ' a ', 'a', '\tb', 'b', '\uFEFFc\u2007', '\u0085', '\u180E', '\uD800', '\uDC00', '😀', ' '.repeat(1024) + 'longIndent'];
+	for (let iteration = 0; iteration < 512; iteration++) {
+		const original = Array.from({ length: 1 + random(64) }, () => alphabet[random(alphabet.length)]);
+		const modified = Array.from({ length: 1 + random(64) }, () => alphabet[random(alphabet.length)]);
+		assert.deepStrictEqual(withRust(() => tryComputeRustLineAlignment(original, modified, InfiniteTimeout.instance)), alignLinesReference(original, modified), `Line refinement ${iteration}`);
+	}
+	for (const count of [849, 850, 1200]) {
+		const original = Array.from({ length: count }, (_, index) => `line ${index}`);
+		const modified = original.slice();
+		modified.splice(12, 3, 'inserted one', 'inserted two');
+		assert.deepStrictEqual(withRust(() => tryComputeRustLineAlignment(original, modified, InfiniteTimeout.instance)), alignLinesReference(original, modified));
+	}
+});
+
+test('Rust line refinement validates weights and retains timeout latching and custom orchestration', () => {
+	const original = ['one', 'two'];
+	const modified = ['three', 'four'];
+	let checks = 0;
+	assert.strictEqual(withRust(() => tryComputeRustLineAlignment(original, modified, { isValid: () => { checks++; return true; } })), undefined);
+	assert.strictEqual(checks, 0);
+	const timeout = new DateTimeout(30000);
+	const registration = registerRustSequenceDiff({ ...rust, diff_lines: (...args) => { args[6] = Number.NEGATIVE_INFINITY; return rust.diff_lines(...args); } });
+	try {
+		const result = tryComputeRustLineAlignment(original, modified, timeout);
+		assert.deepStrictEqual({ hitTimeout: result?.hitTimeout, valid: timeout.isValid() }, { hitTimeout: true, valid: false });
+	} finally {
+		registration.dispose();
+	}
+	const units = new Uint16Array([97]);
+	const offsets = new Uint32Array([0, 1]);
+	assert.throws(() => rust.diff_lines(units, units, offsets, offsets, new Float64Array()), /scores/);
+	assert.throws(() => rust.diff_lines(units, units, new Uint32Array([0, 2]), offsets, new Float64Array([1])), /ranges/);
+	assert.throws(() => rust.diff_lines(units, units, offsets, offsets, new Float64Array([1]), () => { throw new Error('Line timeout failure'); }), /Line timeout failure/);
 });

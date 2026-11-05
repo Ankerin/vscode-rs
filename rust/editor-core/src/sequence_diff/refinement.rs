@@ -528,7 +528,7 @@ fn is_upper(unit: u16) -> bool {
 }
 
 /// ECMAScript WhiteSpace and LineTerminator; Rust's Unicode whitespace set differs.
-fn is_whitespace(unit: u16) -> bool {
+pub(super) fn is_whitespace(unit: u16) -> bool {
 	matches!(unit, 9..=13 | 32 | 160 | 0x1680 | 0x2000..=0x200A | 0x2028 | 0x2029 | 0x202F | 0x205F | 0x3000 | 0xFEFF)
 }
 
@@ -542,7 +542,7 @@ fn trim_end(units: &[u16]) -> &[u16] {
 	&units[..end]
 }
 
-fn trim(units: &[u16]) -> &[u16] {
+pub(super) fn trim(units: &[u16]) -> &[u16] {
 	let start = units
 		.iter()
 		.take_while(|&&unit| is_whitespace(unit))

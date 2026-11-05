@@ -19,7 +19,7 @@ import { computeMovedLines } from './computeMovedLines.js';
 import { extendDiffsToEntireWordIfAppropriate, optimizeSequenceDiffs, removeShortMatches, removeVeryShortMatchingLinesBetweenDiffs, removeVeryShortMatchingTextBetweenLongDiffs } from './heuristicSequenceOptimizations.js';
 import { LineSequence } from './lineSequence.js';
 import { LinesSliceCharSequence } from './linesSliceCharSequence.js';
-import { tryComputeRustCharacterDiff, tryComputeRustLineDiff } from './algorithms/rustSequenceDiff.js';
+import { tryComputeRustCharacterDiff, tryComputeRustLineAlignment, tryComputeRustLineDiff } from './algorithms/rustSequenceDiff.js';
 
 export class DefaultLinesDiffComputer implements ILinesDiffComputer {
 	private readonly dynamicProgrammingDiffing = new DynamicProgrammingDiffing();
@@ -59,49 +59,56 @@ export class DefaultLinesDiffComputer implements ILinesDiffComputer {
 		const timeout = options.maxComputationTimeMs === 0 ? InfiniteTimeout.instance : new DateTimeout(options.maxComputationTimeMs);
 		const considerWhitespaceChanges = !options.ignoreTrimWhitespace;
 
-		const perfectHashes = new Map<string, number>();
-		function getOrCreateHash(text: string): number {
-			let hash = perfectHashes.get(text);
-			if (hash === undefined) {
-				hash = perfectHashes.size;
-				perfectHashes.set(text, hash);
+		const lineAlignment = tryComputeRustLineAlignment(originalLines, modifiedLines, timeout) ?? (() => {
+			const perfectHashes = new Map<string, number>();
+			function getOrCreateHash(text: string): number {
+				let hash = perfectHashes.get(text);
+				if (hash === undefined) {
+					hash = perfectHashes.size;
+					perfectHashes.set(text, hash);
+				}
+				return hash;
 			}
-			return hash;
-		}
 
-		const originalLinesHashes = originalLines.map((l) => getOrCreateHash(l.trim()));
-		const modifiedLinesHashes = modifiedLines.map((l) => getOrCreateHash(l.trim()));
+			const originalLinesHashes = originalLines.map((l) => getOrCreateHash(l.trim()));
+			const modifiedLinesHashes = modifiedLines.map((l) => getOrCreateHash(l.trim()));
 
-		const sequence1 = new LineSequence(originalLinesHashes, originalLines);
-		const sequence2 = new LineSequence(modifiedLinesHashes, modifiedLines);
+			const sequence1 = new LineSequence(originalLinesHashes, originalLines);
+			const sequence2 = new LineSequence(modifiedLinesHashes, modifiedLines);
 
-		const lineAlignmentResult = (() => {
-			if (sequence1.length + sequence2.length < 1700) {
-				// Use the improved algorithm for small files
-				return tryComputeRustLineDiff(sequence1, sequence2, originalLines, modifiedLines, timeout) ?? this.dynamicProgrammingDiffing.compute(
+			const lineAlignmentResult = (() => {
+				if (sequence1.length + sequence2.length < 1700) {
+					// Use the improved algorithm for small files
+					return tryComputeRustLineDiff(sequence1, sequence2, originalLines, modifiedLines, timeout) ?? this.dynamicProgrammingDiffing.compute(
+						sequence1,
+						sequence2,
+						timeout,
+						(offset1, offset2) =>
+							originalLines[offset1] === modifiedLines[offset2]
+								? modifiedLines[offset2].length === 0
+									? 0.1
+									: 1 + Math.log(1 + modifiedLines[offset2].length)
+								: 0.99
+					);
+				}
+
+				return this.myersDiffingAlgorithm.compute(
 					sequence1,
 					sequence2,
-					timeout,
-					(offset1, offset2) =>
-						originalLines[offset1] === modifiedLines[offset2]
-							? modifiedLines[offset2].length === 0
-								? 0.1
-								: 1 + Math.log(1 + modifiedLines[offset2].length)
-							: 0.99
+					timeout
 				);
-			}
+			})();
 
-			return this.myersDiffingAlgorithm.compute(
-				sequence1,
-				sequence2,
-				timeout
-			);
+			let lineAlignments = lineAlignmentResult.diffs;
+			const hitTimeout = lineAlignmentResult.hitTimeout;
+			lineAlignments = optimizeSequenceDiffs(sequence1, sequence2, lineAlignments);
+			lineAlignments = removeVeryShortMatchingLinesBetweenDiffs(sequence1, sequence2, lineAlignments);
+			return { diffs: lineAlignments, hitTimeout, originalHashes: originalLinesHashes, modifiedHashes: modifiedLinesHashes };
 		})();
-
-		let lineAlignments = lineAlignmentResult.diffs;
-		let hitTimeout = lineAlignmentResult.hitTimeout;
-		lineAlignments = optimizeSequenceDiffs(sequence1, sequence2, lineAlignments);
-		lineAlignments = removeVeryShortMatchingLinesBetweenDiffs(sequence1, sequence2, lineAlignments);
+		const originalLinesHashes = lineAlignment.originalHashes;
+		const modifiedLinesHashes = lineAlignment.modifiedHashes;
+		const lineAlignments = lineAlignment.diffs;
+		let hitTimeout = lineAlignment.hitTimeout;
 
 		const alignments: RangeMapping[] = [];
 

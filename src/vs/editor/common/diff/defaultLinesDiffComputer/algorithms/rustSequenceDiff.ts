@@ -16,6 +16,7 @@ export interface IRustSequenceDiffModule {
 	diff_myers(original: Float64Array, modified: Float64Array, timeout?: () => boolean, deadline?: number): Uint32Array | undefined;
 	optimize_diff(original: Float64Array, modified: Float64Array, originalStrong: Uint32Array, modifiedStrong: Uint32Array, originalScores: Float64Array, modifiedScores: Float64Array, ranges: Uint32Array): Uint32Array | undefined;
 	refine_diff(original: Uint16Array, modified: Uint16Array, originalOffsets: Uint32Array, modifiedOffsets: Uint32Array, settings: Uint32Array, timeout?: () => boolean, deadline?: number): Uint32Array | undefined;
+	diff_lines(original: Uint16Array, modified: Uint16Array, originalOffsets: Uint32Array, modifiedOffsets: Uint32Array, equalityScores: Float64Array, timeout?: () => boolean, deadline?: number): Uint32Array | undefined;
 }
 
 const maxDynamicDiffCells = 4 * 1024 * 1024;
@@ -24,7 +25,7 @@ let registeredModule: IRustSequenceDiffModule | undefined;
 
 /** Registers algorithms only for the lifetime of the initialized editor core. */
 export function registerRustSequenceDiff(module: IRustSequenceDiffModule): IDisposable {
-	if (typeof module.sequence_diff_abi_version !== 'function' || module.sequence_diff_abi_version() !== 5) {
+	if (typeof module.sequence_diff_abi_version !== 'function' || module.sequence_diff_abi_version() !== 6) {
 		throw new Error('The Rust sequence diff bindings do not match the current algorithm contract');
 	}
 	if (registeredModule) {
@@ -104,9 +105,9 @@ function toElements(sequence: ISequence): Float64Array {
 	return elements;
 }
 
-function decodeResult(ranges: Uint32Array, timeout: ITimeout): DiffAlgorithmResult {
+function decodeResult(ranges: Uint32Array, timeout: ITimeout, start: number = 1): DiffAlgorithmResult {
 	const diffs: SequenceDiff[] = [];
-	for (let offset = 1; offset < ranges.length; offset += 4) {
+	for (let offset = start; offset < ranges.length; offset += 4) {
 		diffs.push(new SequenceDiff(new OffsetRange(ranges[offset], ranges[offset + 1]), new OffsetRange(ranges[offset + 2], ranges[offset + 3])));
 	}
 	const hitTimeout = ranges[0] === 1;
@@ -114,6 +115,35 @@ function decodeResult(ranges: Uint32Array, timeout: ITimeout): DiffAlgorithmResu
 		timeout.invalidate();
 	}
 	return new DiffAlgorithmResult(diffs, hitTimeout);
+}
+
+/** Builds line identities and performs alignment/refinement without repeated sequence transfers. */
+export function tryComputeRustLineAlignment(original: string[], modified: string[], timeout: ITimeout): { diffs: SequenceDiff[]; hitTimeout: boolean; originalHashes: number[]; modifiedHashes: number[] } | undefined {
+	if (!registeredModule || original.length === 0 || modified.length === 0) {
+		return undefined;
+	}
+	const { check, deadline } = getTimeout(timeout);
+	if (check) {
+		return undefined;
+	}
+	const first = encodeLines(original, new Range(1, 1, original.length, original[original.length - 1].length + 1));
+	const second = encodeLines(modified, new Range(1, 1, modified.length, modified[modified.length - 1].length + 1));
+	if (!first || !second) {
+		return undefined;
+	}
+	const scores = original.length + modified.length < 1700 ? Float64Array.from(modified, line => line.length === 0 ? 0.1 : 1 + Math.log(1 + line.length)) : new Float64Array();
+	const result = registeredModule.diff_lines(first.units, second.units, first.offsets, second.offsets, scores, undefined, deadline);
+	if (!result) {
+		return undefined;
+	}
+	const hashesEnd = 3 + result[1] + result[2];
+	const alignment = decodeResult(result, timeout, hashesEnd);
+	return {
+		diffs: alignment.diffs,
+		hitTimeout: alignment.hitTimeout,
+		originalHashes: Array.from(result.subarray(3, 3 + result[1])),
+		modifiedHashes: Array.from(result.subarray(3 + result[1], hashesEnd))
+	};
 }
 
 function getTimeout(timeout: ITimeout): { check: (() => boolean) | undefined; deadline: number | undefined } {

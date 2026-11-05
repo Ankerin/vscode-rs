@@ -223,3 +223,33 @@ Process peak RSS and final WASM linear memory are medians in MiB, using the same
 | unicode | 172.03 | 67.77 | 1.38 |
 
 The paired results support faster complete diff computation and lower process peak RSS for these workloads. Standalone tiny Myers calls still cost more than the reference because their input crosses the boundary; timed runs retain the original checkpoint frequency. Comparisons with historical stage timings are diagnostic because reference timings vary between runs. These measurements do not establish application-wide resource savings, rendering/input parity, or worst-case behavior. Current raw runs are in `.build/rust/diff-benchmark.json`; the preceding optimization-stage runs are retained in `.build/rust/diff-benchmark-optimization.json`. Both files remain ignored.
+
+## Line refinement observation
+
+Measured with the same fixtures and method on November 5, 2026. Sequence ABI 6 also constructs exact/trimmed line identities, indentation scores, and line-level short-match refinement in Rust. Borrowed UTF-16 slices avoid decoded native string copies; source lines cross the boundary once for line alignment and again for each separate character refinement. All output checksums matched. Times are medians of three fresh processes in milliseconds.
+
+| Fixture | Workload | Existing | Rust/WASM |
+| --- | --- | ---: | ---: |
+| small | Ten display diffs | 13.47 | 8.06 |
+| small | Ten timed display diffs | 38.15 | 28.30 |
+| small | Ten display diffs with raw edits | 27.64 | 9.70 |
+| medium | Ten display diffs | 150.71 | 66.07 |
+| medium | Ten timed display diffs | 501.08 | 418.68 |
+| medium | Ten display diffs with raw edits | 129.31 | 65.06 |
+| large | Ten display diffs | 141.24 | 81.75 |
+| large | Ten timed display diffs | 359.39 | 323.93 |
+| large | Ten display diffs with raw edits | 108.86 | 77.63 |
+| unicode | Ten display diffs | 55.77 | 31.58 |
+| unicode | Ten timed display diffs | 199.00 | 178.48 |
+| unicode | Ten display diffs with raw edits | 56.43 | 28.30 |
+
+Process peak RSS and final WASM linear memory are medians in MiB.
+
+| Fixture | Existing process peak RSS | Rust process peak RSS | Rust linear memory at completion |
+| --- | ---: | ---: | ---: |
+| small | 64.75 | 63.45 | 1.12 |
+| medium | 316.81 | 70.35 | 1.94 |
+| large | 105.88 | 81.81 | 2.12 |
+| unicode | 172.17 | 64.25 | 1.50 |
+
+The paired complete pipeline remains faster in these fixtures. This line migration does not establish an additional speed gain over the preceding character-refinement observation: full line input transfers and native identity hashing add work, while reference and standalone alignment timings also vary between captures. Shared owning document state across line alignment, character refinement, and move detection remains an optimization target. Current raw runs are in `.build/rust/diff-benchmark.json`; the preceding character-refinement runs are retained in `.build/rust/diff-benchmark-character.json`. These observations do not establish full-product resource savings or visual parity.

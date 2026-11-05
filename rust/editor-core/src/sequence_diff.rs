@@ -7,8 +7,10 @@
 
 use std::{error::Error, fmt, ops::Range};
 
+mod lines;
 mod optimization;
 mod refinement;
+pub use lines::{LineDiffResult, refine_line_diff};
 pub use optimization::{OptimizationSequence, optimize_sequence_diffs};
 pub use refinement::{
 	CharacterDiffOptions, CharacterDiffResult, CharacterSequence, TextRange, refine_character_diff,
