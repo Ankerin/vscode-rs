@@ -71,6 +71,7 @@ import { IDefaultAccountService } from '../../platform/defaultAccount/common/def
 import { DefaultAccountService } from '../services/accounts/browser/defaultAccount.js';
 import { AccountPolicyService, IAccountPolicyGateService } from '../services/policies/common/accountPolicyService.js';
 import { MultiplexPolicyService } from '../../platform/policy/common/multiplexPolicyService.js';
+import { loadRustTextBuffer } from '../../editor/browser/model/rustTextBuffer.js';
 
 export class DesktopMain extends Disposable {
 
@@ -121,6 +122,15 @@ export class DesktopMain extends Disposable {
 
 		// Init services and wait for DOM to be ready in parallel
 		const [services] = await Promise.all([this.initServices(), domContentLoaded(mainWindow)]);
+
+		if (this.configuration['enable-rust-text-buffer']) {
+			try {
+				this._register(await loadRustTextBuffer());
+				services.logService.info('Rust text buffer initialized');
+			} catch (error) {
+				services.logService.error('Unable to initialize the Rust text buffer; using the existing storage', error);
+			}
+		}
 
 		// Apply zoom level early once we have a configuration service
 		// and before the workbench is created to prevent flickering.

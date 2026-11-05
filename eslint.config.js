@@ -2401,6 +2401,18 @@ export default defineConfig(
 			'local/code-import-patterns': [
 				'warn',
 				{
+					'target': 'test/rust/**',
+					'restrictions': [
+						'test/rust/**',
+						'vs/base/common/**',
+						'vs/editor/common/**',
+						'vs/editor/test/common/testTextModel.js',
+						'node:*',
+						'node:*/**',
+						'*' // node modules
+					]
+				},
+				{
 					'target': 'test/smoke/**',
 					'restrictions': [
 						'test/automation',

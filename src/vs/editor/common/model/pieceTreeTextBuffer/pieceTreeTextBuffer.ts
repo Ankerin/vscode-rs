@@ -12,6 +12,7 @@ import { PieceTreeBase, StringBuffer } from './pieceTreeBase.js';
 import { countEOL, StringEOL } from '../../core/misc/eolCounter.js';
 import { TextChange } from '../../core/textChange.js';
 import { Disposable } from '../../../../base/common/lifecycle.js';
+import { createRegisteredTextBufferStorage, ITextBufferStorage } from '../rustTextBuffer/textBufferStorage.js';
 
 export interface IValidatedEditOperation {
 	sortIndex: number;
@@ -32,7 +33,7 @@ interface IReverseSingleEditOperation extends IValidEditOperation {
 }
 
 export class PieceTreeTextBuffer extends Disposable implements ITextBuffer {
-	private _pieceTree: PieceTreeBase;
+	private _pieceTree: ITextBufferStorage;
 	private readonly _BOM: string;
 	private _mightContainRTL: boolean;
 	private _mightContainUnusualLineTerminators: boolean;
@@ -47,7 +48,8 @@ export class PieceTreeTextBuffer extends Disposable implements ITextBuffer {
 		this._mightContainNonBasicASCII = !isBasicASCII;
 		this._mightContainRTL = containsRTL;
 		this._mightContainUnusualLineTerminators = containsUnusualLineTerminators;
-		this._pieceTree = new PieceTreeBase(chunks, eol, eolNormalized);
+		const storage = createRegisteredTextBufferStorage(chunks, eol, eolNormalized);
+		this._pieceTree = storage ? this._register(storage) : new PieceTreeBase(chunks, eol, eolNormalized);
 	}
 
 	// #region TextBuffer
@@ -61,7 +63,21 @@ export class PieceTreeTextBuffer extends Disposable implements ITextBuffer {
 		if (this.getEOL() !== other.getEOL()) {
 			return false;
 		}
-		return this._pieceTree.equal(other._pieceTree);
+		if (this._pieceTree instanceof PieceTreeBase && other._pieceTree instanceof PieceTreeBase) {
+			return this._pieceTree.equal(other._pieceTree);
+		}
+		if (this.getLength() !== other.getLength() || this.getLineCount() !== other.getLineCount()) {
+			return false;
+		}
+		for (let offset = 0; offset < this.getLength();) {
+			const chunk = this.getNearestChunk(offset);
+			const range = other.getRangeAt(offset, chunk.length);
+			if (chunk !== other._pieceTree.getValueInRange(range)) {
+				return false;
+			}
+			offset += chunk.length;
+		}
+		return true;
 	}
 	public mightContainRTL(): boolean {
 		return this._mightContainRTL;
@@ -526,6 +542,9 @@ export class PieceTreeTextBuffer extends Disposable implements ITextBuffer {
 	// #region helper
 	// testing purpose.
 	public getPieceTree(): PieceTreeBase {
+		if (!(this._pieceTree instanceof PieceTreeBase)) {
+			throw new Error('The model uses an alternative text buffer storage');
+		}
 		return this._pieceTree;
 	}
 

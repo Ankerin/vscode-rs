@@ -1,0 +1,17 @@
+[workspace]
+members = ["editor-core", "editor-wasm"]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+license = "MIT"
+publish = false
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[profile.release]
+strip = "debuginfo"
+lto = "thin"

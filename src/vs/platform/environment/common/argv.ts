@@ -148,6 +148,7 @@ export interface NativeParsedArgs {
 	'disable-chromium-sandbox'?: boolean;
 	sandbox?: boolean;
 	'enable-coi'?: boolean;
+	'enable-rust-text-buffer'?: boolean;
 	'unresponsive-sample-interval'?: string;
 	'unresponsive-sample-period'?: string;
 	'enable-rdp-display-tracking'?: boolean;

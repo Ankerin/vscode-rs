@@ -1,0 +1,20 @@
+{
+	"extends": "../../src/tsconfig.json",
+	"compilerOptions": {
+		"noEmit": true,
+		"rootDir": "../..",
+		"module": "esnext",
+		"moduleResolution": "bundler",
+		"types": [
+			"mocha",
+			"trusted-types"
+		]
+	},
+	"files": [
+		"../../node_modules/@types/node/index.d.ts"
+	],
+	"include": [
+		"./*.ts",
+		"../../src/typings/**/*.d.ts"
+	]
+}

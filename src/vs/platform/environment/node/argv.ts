@@ -218,6 +218,7 @@ export const OPTIONS: OptionDescriptions<Required<NativeParsedArgs>> = {
 	'editSessionId': { type: 'string' },
 	'continueOn': { type: 'string' },
 	'enable-coi': { type: 'boolean' },
+	'enable-rust-text-buffer': { type: 'boolean' },
 	'unresponsive-sample-interval': { type: 'string' },
 	'unresponsive-sample-period': { type: 'string' },
 	'enable-rdp-display-tracking': { type: 'boolean' },
