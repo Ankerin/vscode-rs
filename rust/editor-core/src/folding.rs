@@ -251,7 +251,7 @@ impl<'a> ReverseLines<'a> {
 	}
 }
 
-fn indent_level(
+pub(crate) fn indent_level(
 	buffer: &TextBuffer,
 	start: usize,
 	end: usize,

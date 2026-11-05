@@ -54,6 +54,11 @@ export class GuidesTextModelPart extends TextModelPart implements IGuidesTextMod
 			this.textModel.getLanguageId()
 		).foldingRules;
 		const offSide = Boolean(foldingRules && foldingRules.offSide);
+		const options = this.textModel.getOptions();
+		const native = this.textModel.getTextBuffer().getActiveIndentGuide?.(lineNumber, minLineNumber, maxLineNumber, options.tabSize, options.indentSize, offSide);
+		if (native) {
+			return native;
+		}
 
 		let up_aboveContentLineIndex =
 			-2; /* -2 is a marker for not having computed it */
@@ -488,6 +493,10 @@ export class GuidesTextModelPart extends TextModelPart implements IGuidesTextMod
 		).foldingRules;
 		const offSide = Boolean(foldingRules && foldingRules.offSide);
 
+		const native = this.textModel.getTextBuffer().getLinesIndentGuides?.(startLineNumber, endLineNumber, options.tabSize, options.indentSize, offSide);
+		if (native) {
+			return native;
+		}
 		const result: number[] = new Array<number>(
 			endLineNumber - startLineNumber + 1
 		);

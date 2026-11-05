@@ -15,6 +15,7 @@ import { IRustSequenceDiffModule, registerRustSequenceDiff } from '../../diff/de
 import { IRustTextChangeModule, registerRustTextChanges } from '../../core/rustTextChanges.js';
 import { applyRustModelEdits, isSupportedRustTextRange } from './modelEdits.js';
 import type { IGuessedIndentation } from '../indentationGuesser.js';
+import type { IActiveIndentGuideInfo } from '../../textModelGuides.js';
 
 /** The generated binding surface; UTF-16 arrays preserve JavaScript string semantics. */
 export interface IRustTextBuffer {
@@ -33,6 +34,8 @@ export interface IRustTextBuffer {
 	last_non_whitespace_column(lineNumber: number): number;
 	character_count(startLine: number, startColumn: number, endLine: number, endColumn: number, eolLength: number): number | undefined;
 	guess_indentation(defaultTabSize: number, defaultInsertSpaces: boolean): Float64Array;
+	indent_guides(startLineNumber: number, endLineNumber: number, tabSize: number, indentSize: number, offSide: boolean): Float64Array | undefined;
+	active_indent_guide(lineNumber: number, minLineNumber: number, maxLineNumber: number, tabSize: number, indentSize: number, offSide: boolean): Float64Array | undefined;
 	indentation_folding(tabSize: number, offSide: boolean, limit: number, getMarker?: (lineNumber: number) => number | Uint8Array): Uint32Array | undefined;
 	line_batch(startLine: number, maxLines: number, maxUnits: number): string | Uint16Array;
 	backward_line_batch(endLine: number, maxLines: number, maxUnits: number): string | Uint16Array;
@@ -116,6 +119,22 @@ class RustTextBufferStorage implements ITextBufferStorage, IDisposable {
 			throw new Error('The Rust indentation result does not match the current model contract');
 		}
 		return { tabSize: result[0], insertSpaces: result[1] !== 0 };
+	}
+	public getLinesIndentGuides(startLineNumber: number, endLineNumber: number, tabSize: number, indentSize: number, offSide: boolean): number[] | undefined {
+		const result = this._buffer.indent_guides(startLineNumber, endLineNumber, tabSize, indentSize, offSide);
+		if (!result) { return undefined; }
+		if (result.length !== endLineNumber - startLineNumber + 1) {
+			throw new Error('The Rust guide result does not match the current model contract');
+		}
+		return Array.from(result);
+	}
+	public getActiveIndentGuide(lineNumber: number, minLineNumber: number, maxLineNumber: number, tabSize: number, indentSize: number, offSide: boolean): IActiveIndentGuideInfo | undefined {
+		const result = this._buffer.active_indent_guide(lineNumber, minLineNumber, maxLineNumber, tabSize, indentSize, offSide);
+		if (!result) { return undefined; }
+		if (result.length !== 3) {
+			throw new Error('The Rust active guide result does not match the current model contract');
+		}
+		return { startLineNumber: result[0], endLineNumber: result[1], indent: result[2] };
 	}
 	public getIndentationFoldingRanges(tabSize: number, offSide: boolean, limit: number, getMarker?: (lineNumber: number) => number): IIndentationFoldingRanges | undefined {
 		const result = this._buffer.indentation_folding(tabSize, offSide, limit, getMarker ? line => {
@@ -328,7 +347,7 @@ class RustTextBufferStorage implements ITextBufferStorage, IDisposable {
 
 /** Installs an initialized Rust module for new models. Dispose the registration to restore defaults. */
 export function registerRustTextBuffer(module: IRustTextBufferModule, initialization?: IRustTextBufferInitialization): IDisposable {
-	if (typeof module.text_buffer_abi_version !== 'function' || module.text_buffer_abi_version() !== 7) {
+	if (typeof module.text_buffer_abi_version !== 'function' || module.text_buffer_abi_version() !== 8) {
 		throw new Error('The Rust text buffer bindings do not match the current storage contract');
 	}
 	const registration = new DisposableStore();

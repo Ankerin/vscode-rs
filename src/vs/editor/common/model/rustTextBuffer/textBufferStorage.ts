@@ -9,6 +9,7 @@ import { Range } from '../../core/range.js';
 import { ApplyEditsResult, FindMatch, IIndentationFoldingRanges, ITextSnapshot, SearchData, ValidAnnotatedEditOperation } from '../../model.js';
 import { createLineStartsFast, StringBuffer } from '../pieceTreeTextBuffer/pieceTreeBase.js';
 import type { IGuessedIndentation } from '../indentationGuesser.js';
+import type { IActiveIndentGuideInfo } from '../../textModelGuides.js';
 
 /** A replacement in the original document's UTF-16 coordinates, ordered from bottom to top. */
 export interface ITextBufferStorageEdit {
@@ -51,6 +52,8 @@ export interface ITextBufferStorage {
 	getCharacterCountInRange?(range: Range, eol: string): number | undefined;
 	getGuessedIndentation?(defaultTabSize: number, defaultInsertSpaces: boolean): IGuessedIndentation;
 	getIndentationFoldingRanges?(tabSize: number, offSide: boolean, limit: number, getMarker?: (lineNumber: number) => number): IIndentationFoldingRanges | undefined;
+	getLinesIndentGuides?(startLineNumber: number, endLineNumber: number, tabSize: number, indentSize: number, offSide: boolean): number[] | undefined;
+	getActiveIndentGuide?(lineNumber: number, minLineNumber: number, maxLineNumber: number, tabSize: number, indentSize: number, offSide: boolean): IActiveIndentGuideInfo | undefined;
 	insert(offset: number, value: string, eolNormalized?: boolean): void;
 	delete(offset: number, length: number): void;
 	/** Applies validated replacements together when the storage supports atomic batches. */

@@ -6,8 +6,8 @@
 //! Typed WebAssembly bindings. Text crosses the boundary as UTF-16, never a lossy Rust string.
 
 use vscode_editor_core::{
-	BufferError, Position, TextBuffer, TextEdit, TextSnapshot, compute_indentation_folding,
-	guess_indentation,
+	BufferError, Position, TextBuffer, TextEdit, TextSnapshot, compute_active_indent_guide,
+	compute_indent_guides, compute_indentation_folding, guess_indentation,
 };
 use wasm_bindgen::prelude::*;
 
@@ -19,7 +19,7 @@ mod text_transfer;
 /// Identifies the storage contract independently of the binding generator's version.
 #[wasm_bindgen]
 pub fn text_buffer_abi_version() -> u32 {
-	7
+	8
 }
 
 #[wasm_bindgen]
@@ -164,6 +164,57 @@ impl WasmTextBuffer {
 	) -> Result<Vec<f64>, JsError> {
 		let guess = guess_indentation(&self.buffer, default_tab_size, default_insert_spaces)?;
 		Ok(vec![guess.tab_size, f64::from(guess.insert_spaces)])
+	}
+
+	pub fn indent_guides(
+		&self,
+		start_line: f64,
+		end_line: f64,
+		tab_size: f64,
+		indent_size: f64,
+		off_side: bool,
+	) -> Result<Option<Vec<f64>>, JsError> {
+		if !is_line_number(start_line) || !is_line_number(end_line) {
+			return Ok(None);
+		}
+		Ok(compute_indent_guides(
+			&self.buffer,
+			start_line as usize,
+			end_line as usize,
+			tab_size,
+			indent_size,
+			off_side,
+		)?)
+	}
+
+	pub fn active_indent_guide(
+		&self,
+		line: f64,
+		min_line: f64,
+		max_line: f64,
+		tab_size: f64,
+		indent_size: f64,
+		off_side: bool,
+	) -> Result<Option<Vec<f64>>, JsError> {
+		if !is_line_number(line) {
+			return Ok(None);
+		}
+		let min_line = min_line.ceil() as usize;
+		let max_line = if max_line.is_nan() {
+			usize::MAX
+		} else {
+			max_line.floor() as usize
+		};
+		Ok(compute_active_indent_guide(
+			&self.buffer,
+			line as usize,
+			min_line,
+			max_line,
+			tab_size,
+			indent_size,
+			off_side,
+		)?
+		.map(|guide| vec![guide.start_line as f64, guide.end_line as f64, guide.indent]))
 	}
 
 	/// Computes indentation folding in one native scope; JavaScript retains regex semantics.
@@ -339,6 +390,10 @@ impl WasmTextBuffer {
 #[wasm_bindgen]
 pub struct WasmTextSnapshot {
 	snapshot: TextSnapshot,
+}
+
+fn is_line_number(value: f64) -> bool {
+	value.is_finite() && (1.0..=u32::MAX as f64).contains(&value) && value.fract() == 0.0
 }
 
 #[wasm_bindgen]

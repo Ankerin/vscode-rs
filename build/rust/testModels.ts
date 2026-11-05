@@ -14,6 +14,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const output = resolve(root, '.build/rust/registerTextBuffer.mjs');
 const tests = [
 	'textModel.test.ts',
+	'textModelWithTokens.test.ts',
 	'textModelSearch.test.ts',
 	'editableTextModel.test.ts',
 	'editStack.test.ts',

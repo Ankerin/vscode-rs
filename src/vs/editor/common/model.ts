@@ -21,7 +21,7 @@ import { ILanguageSelection } from './languages/language.js';
 import { IBracketPairsTextModelPart } from './textModelBracketPairs.js';
 import { IModelContentChangedEvent, IModelDecorationsChangedEvent, IModelLanguageChangedEvent, IModelLanguageConfigurationChangedEvent, IModelOptionsChangedEvent, IModelTokensChangedEvent, LineInjectedText, ModelFontChangedEvent, ModelLineHeightChangedEvent } from './textModelEvents.js';
 import { IModelContentChange } from './model/mirrorTextModel.js';
-import { IGuidesTextModelPart } from './textModelGuides.js';
+import { IActiveIndentGuideInfo, IGuidesTextModelPart } from './textModelGuides.js';
 import { ITokenizationTextModelPart } from './tokenizationTextModelPart.js';
 import { UndoRedoGroup } from '../../platform/undoRedo/common/undoRedo.js';
 import { TokenArray } from './tokens/lineTokens.js';
@@ -1609,6 +1609,10 @@ export interface ITextBuffer extends IReadonlyTextBuffer, IDisposable {
 	getGuessedIndentation?(defaultTabSize: number, defaultInsertSpaces: boolean): IGuessedIndentation | undefined;
 	/** Computes indentation folding while the caller retains its regular-expression marker semantics. */
 	getIndentationFoldingRanges?(tabSize: number, offSide: boolean, limit: number, getMarker?: (lineNumber: number) => number): IIndentationFoldingRanges | undefined;
+	/** Returns viewport indentation levels without transferring source lines when supported. */
+	getLinesIndentGuides?(startLineNumber: number, endLineNumber: number, tabSize: number, indentSize: number, offSide: boolean): number[] | undefined;
+	/** Returns the active scope with the existing whitespace, range, and cutoff rules. */
+	getActiveIndentGuide?(lineNumber: number, minLineNumber: number, maxLineNumber: number, tabSize: number, indentSize: number, offSide: boolean): IActiveIndentGuideInfo | undefined;
 }
 
 /**

@@ -2407,6 +2407,7 @@ export default defineConfig(
 						'vs/base/common/**',
 						'vs/editor/common/**',
 						'vs/editor/test/common/testTextModel.js',
+						'vs/editor/test/common/modes/testLanguageConfigurationService.js',
 						'vs/editor/contrib/folding/browser/indentRangeProvider.js',
 						'vs/platform/webWorker/browser/webWorkerDescriptor.js',
 						'vs/platform/webWorker/browser/webWorkerServiceImpl.js',

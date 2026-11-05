@@ -476,3 +476,25 @@ Initial per-line callbacks took 592.11 milliseconds on short-line markers and 71
 | Deep indentation | 73.22 | 77.14 | 2.69 |
 
 Peak RSS is slightly lower for the short/Unicode fixtures and higher for long/deep prefixes. These process observations include setup, all four workloads, warm-up, and endpoint checksum work; they do not establish whole-editor memory savings. Temporary native candidate/region storage is released on return or callback failure, and one decoded line cache remains in the existing adapter. Raw runs are ignored in `.build/rust/folding-benchmark.json`; earlier captures remain in `.build/rust/folding-benchmark-initial.json` and `.build/rust/folding-benchmark-backward-cache.json`.
+
+## Indentation guide observation
+
+Measured on November 6, 2026 with Windows x64, Node `24.22.1`, Rust `1.99.1`, and release storage ABI 8 bindings. The `--guides` runner alternates three fresh processes per engine. Viewport queries reuse twenty preconstructed windows of up to 128 lines for 100 calls; active queries use the same starting lines with full-document bounds. Twenty viewport/active pairs warm the model before timing. Model setup is outside the timer; result consumption contributes to the complete matching checksum inside the timer. Times are medians in milliseconds.
+
+| Fixture | Existing 100 viewports | Rust 100 viewports | Active queries | Existing active | Rust active |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Short lines | 1.62 | 1.56 | 1,000 | 1.07 | 3.02 |
+| Unicode lines | 1.31 | 1.51 | 1,000 | 0.94 | 2.67 |
+| Long mixed prefixes | 14.54 | 8.94 | 1,000 | 253.59 | 182.91 |
+| Long whitespace run | 27.53 | 14.57 | 100 | 80.03 | 45.52 |
+
+Short/Unicode fixtures repeat 2,048 four-line blocks, with blank lines and paired/lone surrogates. The long prefix contains 65,536 space/tab pairs; the whitespace fixture contains 8,192 blank tab/space lines between content. Initial native queries repeatedly resolved line bounds and regressed on whitespace: 75.43 milliseconds for viewports and 223.52 for active queries versus 25.76/76.84 existing. Scoped borrowed cursors now reuse adjacent line bounds and leaf text. The final capture improves both long-prefix and whitespace workloads. Short active queries remain slower because small scopes still allocate/transfer a result and cross the WASM boundary; short viewport timings are close, with a Unicode regression. No default promotion follows.
+
+| Fixture | Existing process peak RSS MiB | Rust process peak RSS MiB | Rust linear memory MiB |
+| --- | ---: | ---: | ---: |
+| Short lines | 70.00 | 72.17 | 1.19 |
+| Unicode lines | 69.98 | 72.31 | 1.38 |
+| Long mixed prefixes | 67.98 | 69.82 | 1.38 |
+| Long whitespace run | 75.55 | 70.73 | 1.19 |
+
+Peak RSS is lower for the whitespace fixture and higher for the others. These observations include setup, warm-up, both query workloads, and checksum consumption; they do not isolate guide allocations or establish whole-editor resource improvement. No persistent query state or decoded source line cache is added by native guides. Current raw runs stay ignored in `.build/rust/guides-benchmark.json`, with the initial capture in `.build/rust/guides-benchmark-initial.json`.

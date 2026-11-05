@@ -13,6 +13,7 @@ import { countEOL, StringEOL } from '../../core/misc/eolCounter.js';
 import { TextChange } from '../../core/textChange.js';
 import { Disposable } from '../../../../base/common/lifecycle.js';
 import { createRegisteredTextBufferStorage, ITextBufferStorage } from '../rustTextBuffer/textBufferStorage.js';
+import type { IActiveIndentGuideInfo } from '../../textModelGuides.js';
 import type { IGuessedIndentation } from '../indentationGuesser.js';
 
 export interface IValidatedEditOperation {
@@ -256,6 +257,14 @@ export class PieceTreeTextBuffer extends Disposable implements ITextBuffer {
 
 	public getIndentationFoldingRanges(tabSize: number, offSide: boolean, limit: number, getMarker?: (lineNumber: number) => number): IIndentationFoldingRanges | undefined {
 		return this._pieceTree.getIndentationFoldingRanges?.(tabSize, offSide, limit, getMarker);
+	}
+
+	public getLinesIndentGuides(startLineNumber: number, endLineNumber: number, tabSize: number, indentSize: number, offSide: boolean): number[] | undefined {
+		return this._pieceTree.getLinesIndentGuides?.(startLineNumber, endLineNumber, tabSize, indentSize, offSide);
+	}
+
+	public getActiveIndentGuide(lineNumber: number, minLineNumber: number, maxLineNumber: number, tabSize: number, indentSize: number, offSide: boolean): IActiveIndentGuideInfo | undefined {
+		return this._pieceTree.getActiveIndentGuide?.(lineNumber, minLineNumber, maxLineNumber, tabSize, indentSize, offSide);
 	}
 
 	private _getEndOfLine(eol: EndOfLinePreference): string {

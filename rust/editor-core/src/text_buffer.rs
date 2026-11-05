@@ -406,7 +406,7 @@ impl TextBuffer {
 			.line_break_end(line_number - 1))
 	}
 
-	fn line_range(&self, line_number: usize) -> Result<Range<usize>, BufferError> {
+	pub(crate) fn line_range(&self, line_number: usize) -> Result<Range<usize>, BufferError> {
 		let start = self.line_start(line_number)?;
 		let mut end = if line_number == self.line_count() {
 			self.len()
