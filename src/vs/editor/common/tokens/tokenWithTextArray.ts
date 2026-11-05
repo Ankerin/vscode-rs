@@ -6,7 +6,7 @@
 import { OffsetRange } from '../core/ranges/offsetRange.js';
 import { ILanguageIdCodec } from '../languages.js';
 import { LineTokens } from './lineTokens.js';
-import { tryReadRustTokenArray, trySliceRustTokenSequence } from './rustTokens.js';
+import { tryForEachRustTokenSequence, tryMapRustTokenSequence, tryReadRustTokenArray, trySliceRustTokenSequence } from './rustTokens.js';
 
 /**
  * This class represents a sequence of tokens.
@@ -44,6 +44,7 @@ export class TokenWithTextArray {
 	}
 
 	public forEach(cb: (range: OffsetRange, tokenInfo: TokenWithTextInfo) => void): void {
+		if (tryForEachRustTokenSequence(this._tokenInfo, true, cb)) { return; }
 		let lengthSum = 0;
 		for (const tokenInfo of this._tokenInfo) {
 			const range = new OffsetRange(lengthSum, lengthSum + tokenInfo.text.length);
@@ -53,6 +54,8 @@ export class TokenWithTextArray {
 	}
 
 	public map<T>(cb: (range: OffsetRange, tokenInfo: TokenWithTextInfo) => T): T[] {
+		const native = tryMapRustTokenSequence(this._tokenInfo, true, cb);
+		if (native) { return native; }
 		const result: T[] = [];
 		let lengthSum = 0;
 		for (const tokenInfo of this._tokenInfo) {

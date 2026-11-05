@@ -154,3 +154,126 @@ test('Rust token sequence bindings validate results and retain oversized and uns
 	withRust(() => assert.throws(() => tryCreateRustLineTokens(items), /token construction/), { ...rust, create_line_tokens: () => [new Uint32Array([2, 7]), 'abc'] });
 	assert.throws(() => registerRustTokens({ ...rust, tokens_abi_version: () => 8 }), /metadata contract/);
 });
+
+test('Rust token callback traversal preserves seeded live array mutations, callback values, and second length reads', () => {
+	let calls = 0;
+	const module: IRustTokensModule = {
+		...rust,
+		walk_token_array<T, U>(iterator: Iterator<T>, next: Iterator<T>['next'], readLength: (token: T) => number, visit: (start: number, end: number, token: T) => U, coercingAdd: (first: number, second: number) => number, mapping: boolean): U[] | true {
+			calls++;
+			return rust.walk_token_array(iterator, next, readLength, visit, coercingAdd, mapping);
+		}
+	};
+	for (let trace = 0; trace < 512; trace++) {
+		for (const text of [false, true]) {
+			for (const mapping of [false, true]) {
+				const run = () => {
+					const initial = Array.from({ length: 1 + trace % 8 }, (_, index) => text ? new TokenWithTextInfo('a\uD800'.repeat(index % 3), index) : new TokenInfo(index % 4 / 2, index));
+					const array = text ? TokenWithTextArray.create(initial as TokenWithTextInfo[]) : TokenArray.create(initial as TokenInfo[]);
+					const visited: { start: number; end: number; metadata: number; identity: number }[] = [];
+					const readLog: string[] = [];
+					const returns: object[] = [];
+					const callback = (range: OffsetRange, token: TokenInfo | TokenWithTextInfo) => {
+						const index = visited.length;
+						visited.push({ start: range.start, end: range.endExclusive, metadata: token.metadata, identity: initial.indexOf(token) });
+						if (index === 0) {
+							const property = text ? 'text' : 'length';
+							Object.defineProperty(token, property, { configurable: true, get: () => { readLog.push('current'); return text ? '\uDC00\uD83D\uDE00' : trace % 7 / 2; } });
+							if (trace % 3 === 0) { initial.push(text ? new TokenWithTextInfo('z', 42) : new TokenInfo(3, 42)); }
+							if (trace % 3 === 1) { initial.splice(1, 1); }
+							if (initial.length > 1) { Object.defineProperty(initial[1], property, { configurable: true, get: () => { readLog.push('next'); return text ? 'x\uD800' : 2.5; } }); }
+						}
+						const value = { token, index, range };
+						returns.push(value);
+						return value;
+					};
+					const result = mapping ? array.map(callback) : array.forEach(callback);
+					return { visited, readLog, resultCount: result?.length, returnIdentity: result?.every((value, index) => value === returns[index]) };
+				};
+				assert.deepStrictEqual(withRust(run, module), run());
+			}
+		}
+	}
+	assert.strictEqual(calls, 2048, 'Every initially supported traversal uses the native implementation');
+});
+
+test('Rust token traversal preserves callback-installed coercion, failures, recursion, and initial accessor fallback', () => {
+	const values = [0, -0, 2.5, -2, Number.NaN, Number.POSITIVE_INFINITY, '2', undefined, null, Symbol('length')];
+	for (const value of values) {
+		const run = () => {
+			const items = [new TokenInfo(3, 7), new TokenInfo(4, 9)];
+			const array = TokenArray.create(items);
+			const visited: { start: number; end: number }[] = [];
+			return {
+				result: capture(() => array.map((range, token) => {
+					visited.push({ start: range.start, end: range.endExclusive });
+					if (token === items[0]) { Object.defineProperty(token, 'length', { value }); }
+					return token;
+				})), visited
+			};
+		};
+		assert.deepStrictEqual(withRust(run), run());
+	}
+	const failure = new Error('Original token traversal callback failure');
+	const items = [new TokenInfo(3, 7), new TokenInfo(4, 9)];
+	const array = TokenArray.create(items);
+	assert.throws(() => withRust(() => array.map(() => { throw failure; })), error => error === failure);
+	const run = () => array.map((_range, token) => array.map((_range, nested) => nested.metadata + token.metadata));
+	assert.deepStrictEqual(withRust(run), run());
+	let reads = 0;
+	Object.defineProperty(items[0], 'length', { get: () => { reads++; return 3; } });
+	const expected = array.map((range, token) => ({ range, token }));
+	const count = reads; reads = 0;
+	assert.deepStrictEqual(withRust(() => ({ value: array.map((range, token) => ({ range, token })), reads })), { value: expected, reads: count });
+});
+
+test('Rust token iterator kernels preserve abrupt completion and iterator closing without masking original exceptions', () => {
+	const failure = new Error('Original token iterator failure');
+	for (const phase of ['next', 'done', 'value', 'before', 'callback', 'after', 'coercion']) {
+		for (const close of ['normal', 'getter', 'method', 'primitive']) {
+			const run = (native: boolean) => {
+				const log: string[] = [];
+				const token = new TokenInfo(3, 7);
+				let reads = 0;
+				const iterator: Iterator<TokenInfo> = {
+					next: () => {
+						log.push('next');
+						if (phase === 'next') { throw failure; }
+						return {
+							get done() { log.push('done'); if (phase === 'done') { throw failure; } return false; },
+							get value() { log.push('value'); if (phase === 'value') { throw failure; } return token; }
+						};
+					}
+				};
+				Object.defineProperty(iterator, 'return', {
+					get: () => {
+						log.push('return getter');
+						if (close === 'getter') { throw new Error('Ignored close getter failure'); }
+						return () => { log.push('return method'); if (close === 'method') { throw new Error('Ignored close method failure'); } return close === 'primitive' ? 1 : { done: true }; };
+					}
+				});
+				Object.defineProperty(token, 'length', {
+					get: () => {
+						log.push('length'); reads++;
+						if ((phase === 'before' && reads === 1) || (phase === 'after' && reads === 2)) { throw failure; }
+						return phase === 'coercion' ? { valueOf: () => { log.push('coercion'); throw failure; } } : 3;
+					}
+				});
+				const visit = (range: OffsetRange) => { log.push('callback'); if (phase === 'callback') { throw failure; } return range; };
+				const execute = () => {
+					if (native) { return rust.walk_token_array(iterator, iterator.next, token => token.length, (start, end) => visit(new OffsetRange(start, end)), (first, second) => first + second, true); }
+					const items = [token];
+					Object.defineProperty(items, Symbol.iterator, { value: () => iterator });
+					return TokenArray.create(items).map(visit);
+				};
+				assert.throws(execute, error => error === failure);
+				return log;
+			};
+			assert.deepStrictEqual(run(true), run(false), `${phase}/${close}`);
+		}
+	}
+	const iterator = [new TokenInfo(3, 7)][Symbol.iterator]();
+	assert.throws(() => rust.walk_token_array(iterator, () => 1 as never, token => token.length, () => undefined, (first, second) => first + second, false), /iterator result/);
+	withRust(() => assert.throws(() => TokenArray.create([new TokenInfo(3, 7)]).map((_range, token) => token), /token traversal/), { ...rust, walk_token_array: () => true });
+	assert.throws(() => registerRustTokens({ ...rust, tokens_abi_version: () => 9 }), /metadata contract/);
+});

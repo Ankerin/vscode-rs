@@ -34,6 +34,7 @@ export interface IRustTokensModule {
 	line_token_array(tokens: Uint32Array, textLength: number, text: boolean): Float64Array | undefined;
 	slice_token_array(lengths: Float64Array, start: number, end: number): Float64Array | undefined;
 	create_line_tokens(data: { text: string; metadata: number }[]): [Uint32Array, string] | undefined;
+	walk_token_array<T, U>(iterator: Iterator<T>, next: Iterator<T>['next'], readLength: (token: T) => number, visit: (start: number, end: number, token: T) => U, coercingAdd: (first: number, second: number) => number, mapping: boolean): U[] | true;
 	WasmContiguousTokensStore: { new(empty: ArrayBuffer): IRustContiguousTokensStore };
 	WasmSparseTokensStore: { new(standardEdit?: SparseMultilineTokens['acceptEdit']): IRustSparseTokensStore };
 }
@@ -64,10 +65,12 @@ export interface IRustContiguousTokensStore {
 
 let registeredModule: IRustTokensModule | undefined;
 const standardArrayIterator = Array.prototype[Symbol.iterator];
+const standardArrayIteratorPrototype = Object.getPrototypeOf([][Symbol.iterator]());
+const standardArrayNext = Object.getOwnPropertyDescriptor(standardArrayIteratorPrototype, 'next')?.value;
 
 /** Installs token composition for the initialized core's disposable scope. */
 export function registerRustTokens(module: IRustTokensModule): IDisposable {
-	if (typeof module.tokens_abi_version !== 'function' || module.tokens_abi_version() !== 9 || typeof module.merge_semantic_tokens !== 'function' || typeof module.update_sparse_tokens !== 'function' || typeof module.split_sparse_tokens !== 'function' || typeof module.update_contiguous_tokens !== 'function' || typeof module.append_contiguous_tokens !== 'function' || typeof module.edit_contiguous_tokens_block !== 'function' || typeof module.contiguous_token_blocks_size !== 'function' || typeof module.serialize_contiguous_token_blocks !== 'function' || typeof module.encode_contiguous_token_blocks !== 'function' || typeof module.decode_contiguous_token_blocks !== 'function' || typeof module.line_token_index !== 'function' || typeof module.line_token_slice_info !== 'function' || typeof module.convert_line_token_offsets !== 'function' || typeof module.line_tokens_equal !== 'function' || typeof module.line_tokens_in_range !== 'function' || typeof module.insert_line_tokens !== 'function' || typeof module.line_token_array !== 'function' || typeof module.slice_token_array !== 'function' || typeof module.create_line_tokens !== 'function' || typeof module.WasmContiguousTokensStore !== 'function' || typeof module.WasmSparseTokensStore !== 'function') {
+	if (typeof module.tokens_abi_version !== 'function' || module.tokens_abi_version() !== 10 || typeof module.merge_semantic_tokens !== 'function' || typeof module.update_sparse_tokens !== 'function' || typeof module.split_sparse_tokens !== 'function' || typeof module.update_contiguous_tokens !== 'function' || typeof module.append_contiguous_tokens !== 'function' || typeof module.edit_contiguous_tokens_block !== 'function' || typeof module.contiguous_token_blocks_size !== 'function' || typeof module.serialize_contiguous_token_blocks !== 'function' || typeof module.encode_contiguous_token_blocks !== 'function' || typeof module.decode_contiguous_token_blocks !== 'function' || typeof module.line_token_index !== 'function' || typeof module.line_token_slice_info !== 'function' || typeof module.convert_line_token_offsets !== 'function' || typeof module.line_tokens_equal !== 'function' || typeof module.line_tokens_in_range !== 'function' || typeof module.insert_line_tokens !== 'function' || typeof module.line_token_array !== 'function' || typeof module.slice_token_array !== 'function' || typeof module.create_line_tokens !== 'function' || typeof module.walk_token_array !== 'function' || typeof module.WasmContiguousTokensStore !== 'function' || typeof module.WasmSparseTokensStore !== 'function') {
 		throw new Error('The Rust token bindings do not match the current metadata contract');
 	}
 	if (registeredModule) { throw new Error('A Rust token module is already registered'); }
@@ -190,6 +193,28 @@ export function tryCreateRustLineTokens(data: { text: string; metadata: number }
 	if (!registeredModule || !standardTokenSequence(data, true)) { return undefined; }
 	const result = registeredModule.create_line_tokens(data);
 	if (result && (!Array.isArray(result) || result.length !== 2 || !(result[0] instanceof Uint32Array) || result[0].length !== data.length * 2 || typeof result[1] !== 'string' || (result[0].length > 1 ? result[0][result[0].length - 2] : 0) !== result[1].length)) { throw new Error('The Rust token construction does not match the editor contract'); }
+	return result;
+}
+
+/** Visits original provider objects while retaining live iteration and post-callback length reads. */
+export function tryForEachRustTokenSequence<T extends TokenInfo | TokenWithTextInfo>(items: T[], text: boolean, callback: (range: OffsetRange, token: T) => void): boolean {
+	return tryWalkRustTokenSequence(items, text, callback, false) !== undefined;
+}
+
+/** Maps original objects into the existing host result array without copying callback return values. */
+export function tryMapRustTokenSequence<T extends TokenInfo | TokenWithTextInfo, U>(items: T[], text: boolean, callback: (range: OffsetRange, token: T) => U): U[] | undefined {
+	const result = tryWalkRustTokenSequence(items, text, callback, true);
+	return Array.isArray(result) ? result : undefined;
+}
+
+function tryWalkRustTokenSequence<T extends TokenInfo | TokenWithTextInfo, U>(items: T[], text: boolean, callback: (range: OffsetRange, token: T) => U, mapping: boolean): U[] | true | undefined {
+	if (!registeredModule || !standardTokenSequence(items, text) || Object.getOwnPropertyDescriptor(standardArrayIteratorPrototype, 'next')?.value !== standardArrayNext) { return undefined; }
+	const iterator = items[Symbol.iterator]();
+	const result = registeredModule.walk_token_array(iterator, iterator.next,
+		token => text ? (token as TokenWithTextInfo).text.length : (token as TokenInfo).length,
+		(start, end, token) => callback(new OffsetRange(start, end), token),
+		(first, second) => first + second, mapping);
+	if (mapping ? !Array.isArray(result) : result !== true) { throw new Error('The Rust token traversal does not match the editor contract'); }
 	return result;
 }
 

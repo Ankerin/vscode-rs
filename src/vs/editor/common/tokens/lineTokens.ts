@@ -9,7 +9,7 @@ import { IPosition } from '../core/position.js';
 import { ITextModel } from '../model.js';
 import { OffsetRange } from '../core/ranges/offsetRange.js';
 import { onUnexpectedError } from '../../../base/common/errors.js';
-import { tryCompareRustLineTokens, tryConvertRustLineTokenOffsets, tryCreateRustLineTokens, tryExtractRustLineTokens, tryFindRustLineTokenIndex, tryInsertRustLineTokens, tryReadRustTokenArray, trySliceRustLineTokens, trySliceRustTokenSequence } from './rustTokens.js';
+import { tryCompareRustLineTokens, tryConvertRustLineTokenOffsets, tryCreateRustLineTokens, tryExtractRustLineTokens, tryFindRustLineTokenIndex, tryForEachRustTokenSequence, tryInsertRustLineTokens, tryMapRustTokenSequence, tryReadRustTokenArray, trySliceRustLineTokens, trySliceRustTokenSequence } from './rustTokens.js';
 
 
 export interface IViewLineTokens {
@@ -484,6 +484,7 @@ export class TokenArray {
 	}
 
 	public forEach(cb: (range: OffsetRange, tokenInfo: TokenInfo) => void): void {
+		if (tryForEachRustTokenSequence(this._tokenInfo, false, cb)) { return; }
 		let lengthSum = 0;
 		for (const tokenInfo of this._tokenInfo) {
 			const range = new OffsetRange(lengthSum, lengthSum + tokenInfo.length);
@@ -493,6 +494,8 @@ export class TokenArray {
 	}
 
 	public map<T>(cb: (range: OffsetRange, tokenInfo: TokenInfo) => T): T[] {
+		const native = tryMapRustTokenSequence(this._tokenInfo, false, cb);
+		if (native) { return native; }
 		const result: T[] = [];
 		let lengthSum = 0;
 		for (const tokenInfo of this._tokenInfo) {
