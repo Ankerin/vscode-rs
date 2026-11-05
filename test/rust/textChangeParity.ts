@@ -8,10 +8,14 @@ import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { test } from 'node:test';
-import { IRustTextChangeModule, registerRustTextChanges, tryCompressRustTextChanges } from '../../src/vs/editor/common/core/rustTextChanges.js';
+import { createRustUndoChangeBatch, decodeRustTextChanges, IRustTextChangeModule, registerRustTextChanges, tryCompressRustTextChanges } from '../../src/vs/editor/common/core/rustTextChanges.js';
 import { compressConsecutiveTextChanges, TextChange } from '../../src/vs/editor/common/core/textChange.js';
 import { decodeUTF16LELossless } from '../../src/vs/editor/common/core/utf16Transfer.js';
 import { IRustTextBufferModule, registerRustTextBuffer } from '../../src/vs/editor/common/model/rustTextBuffer/rustTextBuffer.js';
+import { SingleModelEditStackData } from '../../src/vs/editor/common/model/editStack.js';
+import { EndOfLineSequence } from '../../src/vs/editor/common/model.js';
+import { createTextModel } from '../../src/vs/editor/test/common/testTextModel.js';
+import { Range } from '../../src/vs/editor/common/core/range.js';
 
 interface IRustModule extends IRustTextBufferModule {
 	default(options: { module_or_path: Uint8Array }): Promise<object>;
@@ -69,7 +73,121 @@ test('Rust undo composition preserves exact seeded changes and reconstructs both
 		const reference = compressConsecutiveTextChanges(previous, current);
 		const actual = withRust(() => compressConsecutiveTextChanges(previous, current));
 		const direct = withRust(() => tryCompressRustTextChanges(previous, current));
-		assert.deepStrictEqual({ actual, direct, modified: applyChanges(original, actual), original: applyChanges(modified, actual, true) }, { actual: reference, direct: reference.map(change => ({ oldPosition: change.oldPosition, oldText: change.oldText, newPosition: change.newPosition, newText: change.newText })), modified, original }, `Undo composition ${iteration}`);
+		const owned = withRust(() => {
+			const batch = createRustUndoChangeBatch(previous);
+			assert.ok(batch);
+			try {
+				assert.ok(batch.append(current));
+				return decodeRustTextChanges(batch.serialize().bytes);
+			} finally {
+				batch.dispose();
+			}
+		});
+		const data = reference.map(change => ({ oldPosition: change.oldPosition, oldText: change.oldText, newPosition: change.newPosition, newText: change.newText }));
+		assert.deepStrictEqual({ actual, direct, owned, modified: applyChanges(original, actual), original: applyChanges(modified, actual, true) }, { actual: reference, direct: data, owned: data, modified, original }, `Undo composition ${iteration}`);
+		if (iteration % 8 === 0) {
+			const batch = withRust(() => createRustUndoChangeBatch(previous));
+			assert.ok(batch);
+			try {
+				let reference = previous;
+				let text = intermediate;
+				for (let append = 0; append < 16; append++) {
+					const changes = createChanges(text);
+					text = applyChanges(text, changes);
+					assert.ok(batch.append(changes));
+					const actual = decodeRustTextChanges(batch.serialize().bytes);
+					reference = compressConsecutiveTextChanges(reference, changes);
+					assert.deepStrictEqual(actual, reference.map(change => ({ oldPosition: change.oldPosition, oldText: change.oldText, newPosition: change.newPosition, newText: change.newText })), `Undo stream ${iteration}/${append}`);
+					assert.deepStrictEqual({ text: applyChanges(original, reference), original: applyChanges(text, reference, true) }, { text, original });
+				}
+			} finally {
+				batch.dispose();
+			}
+		}
+	}
+});
+
+test('Rust owning undo batches append only new text and release on serialization and materialization', () => {
+	const model = createTextModel('');
+	const create = () => new SingleModelEditStackData(1, 1, EndOfLineSequence.LF, EndOfLineSequence.LF, null, null, []);
+	let frees = 0;
+	let transfers = 0;
+	class CountedBatch extends rust.WasmUndoChangeBatch {
+		public override append(ranges: Uint32Array, units: Uint16Array): boolean { transfers += units.length; return super.append(ranges, units); }
+		public override free(): void { frees++; super.free(); }
+	}
+	try {
+		const reference = create();
+		for (let index = 0; index < 1000; index++) {
+			reference.append(model, [new TextChange(index, '', index, 'a')], EndOfLineSequence.LF, index + 2, null);
+		}
+		const expected = reference.serialize();
+		withRust(() => {
+			const data = create();
+			for (let index = 0; index < 1000; index++) {
+				data.append(model, [new TextChange(index, '', index, 'a')], EndOfLineSequence.LF, index + 2, null);
+			}
+			assert.deepStrictEqual({ bytes: data.serialize(), frees, transfers }, { bytes: expected, frees: 1, transfers: 1000 });
+			assert.deepStrictEqual(data.changes, reference.changes);
+			data.append(model, [new TextChange(1000, '', 1000, 'b')], EndOfLineSequence.LF, 1002, null);
+			data.releaseResources();
+			assert.strictEqual(frees, 2);
+			assert.strictEqual(data.changes[0].newText, 'a'.repeat(1000) + 'b');
+			data.append(model, [new TextChange(1001, '', 1001, 'c')], EndOfLineSequence.LF, 1003, null);
+			assert.deepStrictEqual({ text: data.changes[0].newText, frees }, { text: 'a'.repeat(1000) + 'bc', frees: 3 });
+		}, { ...rust, WasmUndoChangeBatch: CountedBatch });
+	} finally {
+		model.dispose();
+	}
+});
+
+test('Rust owning undo batches preserve repeated aligned replacements and contained fragmented edits', () => {
+	const payload = 'a\uD800\uFEFF\uD83D\uDE00'.repeat(2048);
+	const fixtures = [
+		{
+			previous: Array.from({ length: 128 }, (_, index) => new TextChange(index * 4, 'a', index * 5, 'xy')),
+			current: Array.from({ length: 128 }, (_, index) => new TextChange(index * 5, 'xy', index * 4, 'z'))
+		},
+		{
+			previous: [new TextChange(3, 'original', 3, payload)],
+			current: Array.from({ length: 128 }, (_, index) => new TextChange(3 + index * 48, payload.slice(index * 48, index * 48 + 6), 3 + index * 49, 'changed'))
+		}
+	];
+	for (const { previous, current } of fixtures) {
+		const inverse = current.map(change => new TextChange(change.newPosition, change.newText, change.oldPosition, change.oldText));
+		const batch = withRust(() => createRustUndoChangeBatch(previous));
+		assert.ok(batch);
+		try {
+			let reference = previous;
+			for (let index = 0; index < 32; index++) {
+				const changes = index % 2 === 0 ? current : inverse;
+				reference = compressConsecutiveTextChanges(reference, changes);
+				assert.ok(batch.append(changes));
+				assert.deepStrictEqual(decodeRustTextChanges(batch.serialize().bytes), reference.map(change => ({ oldPosition: change.oldPosition, oldText: change.oldText, newPosition: change.newPosition, newText: change.newText })));
+			}
+		} finally {
+			batch.dispose();
+		}
+	}
+});
+
+test('Rust open undo state is released on history replacement and model disposal', () => {
+	let frees = 0;
+	class CountedBatch extends rust.WasmUndoChangeBatch {
+		public override free(): void { frees++; super.free(); }
+	}
+	const registration = registerRustTextBuffer({ ...rust, WasmUndoChangeBatch: CountedBatch });
+	const model = createTextModel('');
+	try {
+		model.pushEditOperations(null, [{ range: new Range(1, 1, 1, 1), text: 'a' }], null);
+		model.setValue('b');
+		assert.strictEqual(frees, 1);
+		model.pushEditOperations(null, [{ range: new Range(1, 2, 1, 2), text: 'c' }], null);
+		model.dispose();
+		assert.strictEqual(frees, 2);
+	} finally {
+		model.dispose();
+		registration.dispose();
 	}
 });
 

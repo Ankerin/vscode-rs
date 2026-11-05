@@ -9,6 +9,9 @@ import { performance } from 'node:perf_hooks';
 import { pathToFileURL } from 'node:url';
 import { compressConsecutiveTextChanges, TextChange } from '../../src/vs/editor/common/core/textChange.js';
 import { IRustTextBufferModule, registerRustTextBuffer } from '../../src/vs/editor/common/model/rustTextBuffer/rustTextBuffer.js';
+import { SingleModelEditStackData } from '../../src/vs/editor/common/model/editStack.js';
+import { EndOfLineSequence } from '../../src/vs/editor/common/model.js';
+import { createTextModel } from '../../src/vs/editor/test/common/testTextModel.js';
 
 interface IRustModule extends IRustTextBufferModule {
 	default(options: { module_or_path: Uint8Array }): Promise<{ memory: WebAssembly.Memory }>;
@@ -45,9 +48,20 @@ if (fixture === 'typing') {
 	previous = [new TextChange(0, '', 0, text)];
 	current = Array.from({ length: 512 }, (_, index) => new TextChange(index * 192, text.slice(index * 192, index * 192 + 6), index * 192, 'change'));
 }
+const model = createTextModel('');
+const inverse = current.map(change => new TextChange(change.newPosition, change.newText, change.oldPosition, change.oldText));
+function appendStream(): ArrayBuffer {
+	const data = new SingleModelEditStackData(1, 1, EndOfLineSequence.LF, EndOfLineSequence.LF, null, null, previous.slice());
+	for (let index = 0; index < count; index++) {
+		const changes = fixture === 'typing' ? [new TextChange(108 + index, '', 108 + index, 'i')] : index % 2 === 0 ? current : inverse;
+		data.append(model, changes, EndOfLineSequence.LF, index + 2, null);
+	}
+	return data.serialize();
+}
 try {
 	for (let index = 0; index < 3; index++) {
 		compressConsecutiveTextChanges(previous, current);
+		appendStream();
 	}
 	global.gc?.();
 	const baseline = process.memoryUsage();
@@ -57,18 +71,25 @@ try {
 		changes = compressConsecutiveTextChanges(previous, current);
 	}
 	const elapsed = performance.now() - start;
+	const streamStart = performance.now();
+	const stream = new Uint8Array(appendStream());
+	const streamElapsed = performance.now() - streamStart;
 	const observed = process.memoryUsage();
 	let checksum = 2166136261;
 	const text = JSON.stringify(changes);
 	for (let index = 0; index < text.length; index++) {
 		checksum = Math.imul(checksum ^ text.charCodeAt(index), 16777619) >>> 0;
 	}
+	for (const byte of stream) {
+		checksum = Math.imul(checksum ^ byte, 16777619) >>> 0;
+	}
 	process.stdout.write(JSON.stringify({
 		engine, fixture, repetitions: count, inputUtf16Units: [...previous, ...current].reduce((length, change) => length + change.oldLength + change.newLength, 0),
-		measurements: { compose_batches_ms: elapsed },
+		measurements: { compose_batches_ms: elapsed, append_stream_ms: streamElapsed },
 		memory: { rssDeltaBytes: observed.rss - baseline.rss, heapUsedDeltaBytes: observed.heapUsed - baseline.heapUsed, peakRssBytes: process.resourceUsage().maxRSS * 1024, wasmLinearMemoryBytes: memory?.buffer.byteLength ?? 0 },
 		checksum
 	}));
 } finally {
+	model.dispose();
 	registration?.dispose();
 }

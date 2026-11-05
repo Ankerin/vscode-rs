@@ -334,4 +334,28 @@ Process peak RSS and final WASM linear memory are medians in MiB.
 | Fragmented ASCII insertion | 54.21 | 65.20 | 1.63 |
 | Fragmented Unicode insertion | 55.49 | 84.54 | 1.63 |
 
-This boundary is slower in every measured workload. Borrowed native fragments avoid copied substring payloads inside Rust, but repeated source packing, result serialization, and lossless JavaScript decoding outweigh that work. The fragmented Unicode case also spends time preserving dense lone surrogates. Do not present this migration stage as an undo performance improvement or promote it by default. The next undo boundary must retain owning native history between appends and transfer only new changes, deferring complete result conversion until an existing consumer needs it. Raw runs remain ignored in `.build/rust/undo-benchmark.json`.
+This boundary is slower in every measured workload. Borrowed native fragments avoid copied substring payloads inside Rust, but repeated source packing, result serialization, and lossless JavaScript decoding outweigh that work. The fragmented Unicode case also spends time preserving dense lone surrogates. Do not present stateless composition as an undo performance improvement or promote it by default. ABI 2 implements owning native history between appends and transfers only new changes, deferring complete result conversion until an existing consumer needs it. The ABI 1 raw runs remain ignored in `.build/rust/undo-benchmark-stateless.json`.
+
+## Owning undo batch observation
+
+Measured on November 5, 2026 with Node `24.22.1`, Rust `1.99.1`, and release undo-change ABI 2 bindings. Three fresh processes per engine alternate using the same runner; all complete result and serialized-stream checksums match. Each stream starts from the existing previous batch, appends only new changes, and serializes once at completion. Typing appends 10,000 characters; other streams alternate each fixture's changes and inverse changes. The optimized implementation reuses vectors for contained single edits and aligned replacements, and a scratch vector for contained fragmented edits. Times are medians in milliseconds.
+
+| Fixture | Appends | Existing stream | Rust/WASM stream | Existing stateless pairs | Rust/WASM stateless pairs |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Small typing batch | 10,000 | 3.20 | 2.65 | 1.41 | 22.22 |
+| 1,024 cursors | 100 | 5.45 | 5.24 | 7.54 | 56.04 |
+| Fragmented ASCII insertion | 30 | 3.87 | 2.01 | 5.18 | 38.45 |
+| Fragmented Unicode insertion | 30 | 5.60 | 1.96 | 4.22 | 102.76 |
+
+The owning streams improve on the reference in this capture, with a small cursor difference that needs more representative measurements before treating it as a reliable gain. The earlier owning implementation, before allocation reuse, was slower in every stream: existing/Rust times were 4.18/5.22, 3.49/21.58, 3.62/7.65, and 5.96/9.31 milliseconds respectively. Reference variation across captures is visible. Stateless pair composition remains substantially slower and still serves existing public array consumers.
+
+The following process peak RSS and final WASM memory are medians in MiB. Each process measures both stateless pairs and the stream, including warm-up; these peaks do not isolate retained open undo state.
+
+| Fixture | Existing process peak RSS | Rust process peak RSS | Rust linear memory at completion |
+| --- | ---: | ---: | ---: |
+| Small typing batch | 73.83 | 77.06 | 1.13 |
+| 1,024 cursors | 79.37 | 80.86 | 1.31 |
+| Fragmented ASCII insertion | 82.72 | 88.14 | 1.88 |
+| Fragmented Unicode insertion | 85.67 | 108.60 | 1.88 |
+
+This capture does not demonstrate lower process memory. Native batches own flat vectors rather than shared rope fragments, and general composition still copies the next payload before committing. Remaining undo metadata and service orchestration are TypeScript. End-to-end keystroke latency, many open undo histories, sustained memory behavior, and whole-application resource savings remain unmeasured. Current raw runs are ignored in `.build/rust/undo-benchmark.json`; initial owning runs are retained in `.build/rust/undo-benchmark-owned-initial.json`.

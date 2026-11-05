@@ -34,6 +34,8 @@ export interface IResourceUndoRedoElement {
 	readonly confirmBeforeUndo?: boolean;
 	undo(): Promise<void> | void;
 	redo(): Promise<void> | void;
+	/** Releases cached/native resources without invalidating the element. Must be idempotent. */
+	releaseResources?(): void;
 }
 
 export interface IWorkspaceUndoRedoElement {
@@ -56,6 +58,8 @@ export interface IWorkspaceUndoRedoElement {
 	readonly confirmBeforeUndo?: boolean;
 	undo(): Promise<void> | void;
 	redo(): Promise<void> | void;
+	/** Releases cached/native resources without invalidating the element. Must be idempotent. */
+	releaseResources?(): void;
 
 	/**
 	 * If implemented, indicates that this undo/redo element can be split into multiple per resource elements.

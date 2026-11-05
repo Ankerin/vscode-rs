@@ -12,7 +12,8 @@ import { IUndoRedoService, IResourceUndoRedoElement, UndoRedoElementType, IWorks
 import { URI } from '../../../base/common/uri.js';
 import { TextChange, compressConsecutiveTextChanges } from '../core/textChange.js';
 import * as buffer from '../../../base/common/buffer.js';
-import { IDisposable } from '../../../base/common/lifecycle.js';
+import { IDisposable, MutableDisposable } from '../../../base/common/lifecycle.js';
+import { createRustUndoChangeBatch, decodeRustTextChanges, RustUndoChangeBatch } from '../core/rustTextChanges.js';
 import { basename } from '../../../base/common/resources.js';
 import { ISingleEditOperation } from '../core/editOperation.js';
 import { EditSources, TextModelEditSource } from '../textModelEditSource.js';
@@ -22,6 +23,38 @@ function uriGetComparisonKey(resource: URI): string {
 }
 
 export class SingleModelEditStackData {
+	private _nativeChanges: MutableDisposable<RustUndoChangeBatch> | undefined;
+	private _changes: TextChange[] | undefined;
+	private _serializedChanges: { count: number; bytes: Uint8Array } | undefined;
+
+	public get changes(): TextChange[] {
+		if (!this._changes) {
+			const serialized = this.getSerializedNativeChanges();
+			const changes = serialized ? decodeRustTextChanges(serialized.bytes) : undefined;
+			if (!changes) {
+				throw new Error('The Rust undo batch returned invalid change records');
+			}
+			this._changes = changes.map(change => new TextChange(change.oldPosition, change.oldText, change.newPosition, change.newText));
+			this._serializedChanges = undefined;
+		}
+		return this._changes;
+	}
+
+	public set changes(changes: TextChange[]) {
+		this._nativeChanges?.dispose();
+		this._nativeChanges = undefined;
+		this._serializedChanges = undefined;
+		this._changes = changes;
+	}
+
+	private getSerializedNativeChanges(): { count: number; bytes: Uint8Array } | undefined {
+		if (this._nativeChanges?.value) {
+			this._serializedChanges = this._nativeChanges.value.serialize();
+			this._nativeChanges.dispose();
+			this._nativeChanges = undefined;
+		}
+		return this._serializedChanges;
+	}
 
 	public static create(model: ITextModel, beforeCursorState: Selection[] | null): SingleModelEditStackData {
 		const alternativeVersionId = model.getAlternativeVersionId();
@@ -44,12 +77,24 @@ export class SingleModelEditStackData {
 		public afterEOL: EndOfLineSequence,
 		public readonly beforeCursorState: Selection[] | null,
 		public afterCursorState: Selection[] | null,
-		public changes: TextChange[]
-	) { }
+		changes: TextChange[]
+	) {
+		this._changes = changes;
+	}
 
 	public append(model: ITextModel, textChanges: TextChange[], afterEOL: EndOfLineSequence, afterVersionId: number, afterCursorState: Selection[] | null): void {
 		if (textChanges.length > 0) {
-			this.changes = compressConsecutiveTextChanges(this.changes, textChanges);
+			if (!this._nativeChanges?.value) {
+				const batch = createRustUndoChangeBatch(this.changes);
+				if (batch) {
+					this._nativeChanges = new MutableDisposable<RustUndoChangeBatch>();
+					this._nativeChanges.value = batch;
+					this._changes = undefined;
+				}
+			}
+			if (!this._nativeChanges?.value?.append(textChanges)) {
+				this.changes = compressConsecutiveTextChanges(this.changes, textChanges);
+			}
 		}
 		this.afterEOL = afterEOL;
 		this.afterVersionId = afterVersionId;
@@ -86,6 +131,7 @@ export class SingleModelEditStackData {
 	}
 
 	public serialize(): ArrayBuffer {
+		const native = this.getSerializedNativeChanges();
 		let necessarySize = (
 			+ 4 // beforeVersionId
 			+ 4 // afterVersionId
@@ -95,8 +141,12 @@ export class SingleModelEditStackData {
 			+ SingleModelEditStackData._writeSelectionsSize(this.afterCursorState)
 			+ 4 // change count
 		);
-		for (const change of this.changes) {
-			necessarySize += change.writeSize();
+		if (native) {
+			necessarySize += native.bytes.byteLength;
+		} else {
+			for (const change of this.changes) {
+				necessarySize += change.writeSize();
+			}
 		}
 
 		const b = new Uint8Array(necessarySize);
@@ -107,11 +157,20 @@ export class SingleModelEditStackData {
 		buffer.writeUInt8(b, this.afterEOL, offset); offset += 1;
 		offset = SingleModelEditStackData._writeSelections(b, this.beforeCursorState, offset);
 		offset = SingleModelEditStackData._writeSelections(b, this.afterCursorState, offset);
-		buffer.writeUInt32BE(b, this.changes.length, offset); offset += 4;
-		for (const change of this.changes) {
-			offset = change.write(b, offset);
+		buffer.writeUInt32BE(b, native ? native.count : this.changes.length, offset); offset += 4;
+		if (native) {
+			b.set(native.bytes, offset);
+		} else {
+			for (const change of this.changes) {
+				offset = change.write(b, offset);
+			}
 		}
 		return b.buffer;
+	}
+
+	/** Releases native storage while retaining the composed batch for later undo or append. */
+	public releaseResources(): void {
+		this.getSerializedNativeChanges();
 	}
 
 	public static deserialize(source: ArrayBuffer): SingleModelEditStackData {
@@ -183,7 +242,16 @@ export class SingleModelEditStackElement implements IResourceUndoRedoElement {
 	}
 
 	public setModel(model: ITextModel | URI): void {
+		if (URI.isUri(model)) {
+			this.releaseResources();
+		}
 		this.model = model;
+	}
+
+	public releaseResources(): void {
+		if (this._data instanceof SingleModelEditStackData) {
+			this._data.releaseResources();
+		}
 	}
 
 	public canAppend(model: ITextModel): boolean {
@@ -321,6 +389,13 @@ export class MultiModelEditStackElement implements IWorkspaceUndoRedoElement {
 
 	public close(): void {
 		this._isOpen = false;
+		this.releaseResources();
+	}
+
+	public releaseResources(): void {
+		for (const element of this._editStackElementsArr) {
+			element.releaseResources();
+		}
 	}
 
 	public open(): void {
@@ -407,6 +482,14 @@ export class EditStack {
 
 	public clear(): void {
 		this._undoRedoService.removeElements(this._model.uri);
+	}
+
+	/** Keeps undo records after model disposal while releasing their open native batches. */
+	public releaseResources(): void {
+		const elements = this._undoRedoService.getElements(this._model.uri);
+		for (const element of [...elements.past, ...elements.future]) {
+			element.releaseResources?.();
+		}
 	}
 
 	private _getOrCreateEditStackElement(beforeCursorState: Selection[] | null, group: UndoRedoGroup | undefined): EditStackElement {

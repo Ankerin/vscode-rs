@@ -213,11 +213,13 @@ class ResourceEditStack {
 
 	public dispose(): void {
 		for (const element of this._past) {
+			element.actual.releaseResources?.();
 			if (element.type === UndoRedoElementType.Workspace) {
 				element.removeResource(this.resourceLabel, this.strResource, RemovedResourceReason.ExternalRemoval);
 			}
 		}
 		for (const element of this._future) {
+			element.actual.releaseResources?.();
 			if (element.type === UndoRedoElementType.Workspace) {
 				element.removeResource(this.resourceLabel, this.strResource, RemovedResourceReason.ExternalRemoval);
 			}
@@ -238,6 +240,9 @@ class ResourceEditStack {
 	}
 
 	public flushAllElements(): void {
+		for (const element of [...this._past, ...this._future]) {
+			element.actual.releaseResources?.();
+		}
 		this._past = [];
 		this._future = [];
 		this.versionId++;
@@ -284,6 +289,7 @@ class ResourceEditStack {
 	public pushElement(element: StackElement): void {
 		// remove the future
 		for (const futureElement of this._future) {
+			futureElement.actual.releaseResources?.();
 			if (futureElement.type === UndoRedoElementType.Workspace) {
 				futureElement.removeResource(this.resourceLabel, this.strResource, RemovedResourceReason.NoParallelUniverses);
 			}
@@ -317,8 +323,11 @@ class ResourceEditStack {
 				isOK = false;
 				removePastAfter = i;
 			}
-			if (!isOK && element.type === UndoRedoElementType.Workspace) {
-				element.removeResource(this.resourceLabel, this.strResource, RemovedResourceReason.ExternalRemoval);
+			if (!isOK) {
+				element.actual.releaseResources?.();
+				if (element.type === UndoRedoElementType.Workspace) {
+					element.removeResource(this.resourceLabel, this.strResource, RemovedResourceReason.ExternalRemoval);
+				}
 			}
 		}
 		let removeFutureBefore = -1;
@@ -328,8 +337,11 @@ class ResourceEditStack {
 				isOK = false;
 				removeFutureBefore = i;
 			}
-			if (!isOK && element.type === UndoRedoElementType.Workspace) {
-				element.removeResource(this.resourceLabel, this.strResource, RemovedResourceReason.ExternalRemoval);
+			if (!isOK) {
+				element.actual.releaseResources?.();
+				if (element.type === UndoRedoElementType.Workspace) {
+					element.removeResource(this.resourceLabel, this.strResource, RemovedResourceReason.ExternalRemoval);
+				}
 			}
 		}
 		if (removePastAfter !== -1) {
@@ -387,6 +399,7 @@ class ResourceEditStack {
 	public splitPastWorkspaceElement(toRemove: WorkspaceStackElement, individualMap: Map<string, ResourceStackElement>): void {
 		for (let j = this._past.length - 1; j >= 0; j--) {
 			if (this._past[j] === toRemove) {
+				toRemove.actual.releaseResources?.();
 				if (individualMap.has(this.strResource)) {
 					// gets replaced
 					this._past[j] = individualMap.get(this.strResource)!;
@@ -403,6 +416,7 @@ class ResourceEditStack {
 	public splitFutureWorkspaceElement(toRemove: WorkspaceStackElement, individualMap: Map<string, ResourceStackElement>): void {
 		for (let j = this._future.length - 1; j >= 0; j--) {
 			if (this._future[j] === toRemove) {
+				toRemove.actual.releaseResources?.();
 				if (individualMap.has(this.strResource)) {
 					// gets replaced
 					this._future[j] = individualMap.get(this.strResource)!;

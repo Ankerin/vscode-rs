@@ -300,5 +300,23 @@ suite('UndoRedoService', () => {
 		assert.strictEqual(elements.past[2], element3, 'Third element should be element3');
 	});
 
+	test('releases retained resources when redo history and snapshot tails are removed', () => {
+		const resource = URI.file('retained-resources.txt');
+		const service = createUndoRedoService();
+		const released: string[] = [];
+		const element = (label: string): IUndoRedoElement => ({
+			type: UndoRedoElementType.Resource, resource, label, code: 'typing',
+			undo: () => { }, redo: () => { }, releaseResources: () => { released.push(label); }
+		});
+		service.pushElement(element('first'));
+		const snapshot = service.createSnapshot(resource);
+		service.pushElement(element('second'));
+		service.undo(resource);
+		service.pushElement(element('third'));
+		service.restoreSnapshot(snapshot);
+		service.removeElements(resource);
+		assert.deepStrictEqual({ released, canUndo: service.canUndo(resource), canRedo: service.canRedo(resource) }, { released: ['second', 'third', 'first'], canUndo: false, canRedo: false });
+	});
+
 	ensureNoDisposablesAreLeakedInTestSuite();
 });

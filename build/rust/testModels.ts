@@ -43,7 +43,8 @@ const testArgs = [
 	'--run', 'src/vs/editor/test/common/services/editorWebWorker.test.ts',
 	'--run', 'src/vs/editor/test/common/diff/diffComputer.test.ts',
 	'--run', 'src/vs/editor/test/node/diffing/defaultLinesDiffComputer.test.ts',
-	'--run', 'src/vs/editor/test/node/diffing/verifyLinesDiff.test.ts'
+	'--run', 'src/vs/editor/test/node/diffing/verifyLinesDiff.test.ts',
+	'--run', 'src/vs/platform/undoRedo/test/common/undoRedoService.test.ts'
 ];
 for (const engine of ['existing', 'rust']) {
 	const args = engine === 'rust' ? ['--import', pathToFileURL(output).href] : [];

@@ -7,6 +7,236 @@
 
 use crate::{BufferError, TextChunk};
 
+const MAX_UNDO_TEXT_UNITS: usize = 4 * 1024 * 1024;
+const MAX_UNDO_CHANGES: usize = 262_144;
+
+#[derive(Debug)]
+struct OwnedTextChange {
+	old_position: usize,
+	old_text: Vec<u16>,
+	new_position: usize,
+	new_text: Vec<u16>,
+}
+
+/// Owns the current composed undo batch; only newly appended changes need cross the ABI.
+#[derive(Debug, Default)]
+pub struct UndoChangeBatch {
+	changes: Vec<OwnedTextChange>,
+	scratch: Vec<u16>,
+}
+
+impl UndoChangeBatch {
+	pub fn len(&self) -> usize {
+		self.changes.len()
+	}
+	pub fn is_empty(&self) -> bool {
+		self.changes.is_empty()
+	}
+
+	/// Borrows the current version for serialization without constructing decoded strings.
+	pub fn changes(&self) -> Vec<TextChange<'_>> {
+		self.changes
+			.iter()
+			.map(|change| TextChange {
+				old_position: change.old_position,
+				old_text: &change.old_text,
+				new_position: change.new_position,
+				new_text: &change.new_text,
+			})
+			.collect()
+	}
+
+	/// Builds the next batch before replacing current state. Unsupported sizes leave it unchanged.
+	pub fn append(&mut self, current: &[TextChange<'_>]) -> Result<bool, BufferError> {
+		if self.changes.len() + current.len() > MAX_UNDO_CHANGES {
+			return Ok(false);
+		}
+		if let [change] = current
+			&& let [previous] = self.changes.as_mut_slice()
+			&& previous.old_position == previous.new_position
+			&& change.old_position == change.new_position
+			&& let Some(start) = change.old_position.checked_sub(previous.new_position)
+			&& let Some(end) = start.checked_add(change.old_text.len())
+			&& previous.new_text.get(start..end) == Some(change.old_text)
+		{
+			let length = previous.new_text.len() - change.old_text.len() + change.new_text.len();
+			if length + previous.old_text.len() > MAX_UNDO_TEXT_UNITS
+				|| previous
+					.new_position
+					.checked_add(length)
+					.is_none_or(|end| end > u32::MAX as usize)
+			{
+				return Ok(false);
+			}
+			if previous
+				.new_text
+				.try_reserve(change.new_text.len().saturating_sub(change.old_text.len()))
+				.is_err()
+			{
+				return Ok(false);
+			}
+			previous
+				.new_text
+				.splice(start..end, change.new_text.iter().copied());
+			if previous.old_text == previous.new_text {
+				self.changes.clear();
+			}
+			return Ok(true);
+		}
+		if current.len() == self.changes.len()
+			&& !current.is_empty()
+			&& self.changes.windows(2).all(|changes| {
+				changes[0]
+					.old_position
+					.checked_add(changes[0].old_text.len())
+					.is_some_and(|end| end < changes[1].old_position)
+			}) && current.windows(2).all(|changes| {
+			changes[0]
+				.new_position
+				.checked_add(changes[0].new_text.len())
+				.is_some_and(|end| end <= changes[1].new_position)
+		}) && self.changes.iter().zip(current).all(|(previous, change)| {
+			previous.new_position == change.old_position && previous.new_text == change.old_text
+		}) {
+			let total =
+				self.changes
+					.iter()
+					.zip(current)
+					.try_fold(0_usize, |total, (previous, change)| {
+						total
+							.checked_add(previous.old_text.len())?
+							.checked_add(change.new_text.len())
+					});
+			if total.is_none_or(|total| total > MAX_UNDO_TEXT_UNITS)
+				|| current.iter().any(|change| {
+					change
+						.new_position
+						.checked_add(change.new_text.len())
+						.is_none_or(|end| end > u32::MAX as usize)
+				}) {
+				return Ok(false);
+			}
+			for (previous, change) in self.changes.iter_mut().zip(current) {
+				if previous
+					.new_text
+					.try_reserve(
+						change
+							.new_text
+							.len()
+							.saturating_sub(previous.new_text.len()),
+					)
+					.is_err()
+				{
+					return Ok(false);
+				}
+			}
+			for (previous, change) in self.changes.iter_mut().zip(current) {
+				previous.new_position = change.new_position;
+				previous.new_text.clear();
+				previous.new_text.extend_from_slice(change.new_text);
+			}
+			self.changes
+				.retain(|change| change.old_text != change.new_text);
+			return Ok(true);
+		}
+		if let [previous] = self.changes.as_mut_slice()
+			&& previous.old_position == previous.new_position
+			&& current.len() > 1
+		{
+			let mut last = 0;
+			let mut delta = 0_i64;
+			let mut supported = true;
+			for change in current {
+				let Some(start) = change.old_position.checked_sub(previous.new_position) else {
+					supported = false;
+					break;
+				};
+				let Some(end) = start.checked_add(change.old_text.len()) else {
+					supported = false;
+					break;
+				};
+				if start < last
+					|| previous.new_text.get(start..end) != Some(change.old_text)
+					|| translate(change.old_position, delta)? != change.new_position
+				{
+					supported = false;
+					break;
+				}
+				last = end;
+				delta += change.new_text.len() as i64 - change.old_text.len() as i64;
+			}
+			if supported {
+				let length = translate(previous.new_text.len(), delta)?;
+				if length + previous.old_text.len() > MAX_UNDO_TEXT_UNITS
+					|| previous
+						.new_position
+						.checked_add(length)
+						.is_none_or(|end| end > u32::MAX as usize)
+				{
+					return Ok(false);
+				}
+				self.scratch.clear();
+				if self.scratch.try_reserve(length).is_err() {
+					return Ok(false);
+				}
+				let mut offset = 0;
+				for change in current {
+					let start = change.old_position - previous.new_position;
+					self.scratch
+						.extend_from_slice(&previous.new_text[offset..start]);
+					self.scratch.extend_from_slice(change.new_text);
+					offset = start + change.old_text.len();
+				}
+				self.scratch.extend_from_slice(&previous.new_text[offset..]);
+				std::mem::swap(&mut previous.new_text, &mut self.scratch);
+				self.scratch.clear();
+				if previous.old_text == previous.new_text {
+					self.changes.clear();
+				}
+				return Ok(true);
+			}
+		}
+		let previous = self.changes();
+		let total = previous
+			.iter()
+			.chain(current)
+			.try_fold(0_usize, |total, change| {
+				total
+					.checked_add(change.old_text.len())?
+					.checked_add(change.new_text.len())
+			});
+		if total.is_none_or(|total| total > MAX_UNDO_TEXT_UNITS) {
+			return Ok(false);
+		}
+		let composed = compress_text_changes(&previous, current)?;
+		if composed.len() > MAX_UNDO_CHANGES {
+			return Ok(false);
+		}
+		let mut changes = Vec::with_capacity(composed.len());
+		for change in composed {
+			if change
+				.old_position
+				.checked_add(change.old_length())
+				.is_none_or(|end| end > u32::MAX as usize)
+				|| change
+					.new_position
+					.checked_add(change.new_length())
+					.is_none_or(|end| end > u32::MAX as usize)
+			{
+				return Ok(false);
+			}
+			changes.push(OwnedTextChange {
+				old_position: change.old_position,
+				old_text: change.old_text().collect(),
+				new_position: change.new_position,
+				new_text: change.new_text().collect(),
+			});
+		}
+		self.changes = changes;
+		Ok(true)
+	}
+}
+
 /// A change between two document versions in UTF-16 offsets.
 #[derive(Clone, Copy, Debug)]
 pub struct TextChange<'a> {
@@ -235,6 +465,58 @@ fn split_current(change: TextChange<'_>, offset: usize) -> (TextChange<'_>, Text
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn owning_batches_keep_simple_edits_in_place_and_reject_invalid_appends_atomically() {
+		let mut batch = UndoChangeBatch::default();
+		assert!(
+			batch
+				.append(&[TextChange {
+					old_position: 0,
+					old_text: &[],
+					new_position: 0,
+					new_text: &[97, 98]
+				}])
+				.unwrap()
+		);
+		assert!(
+			batch
+				.append(&[TextChange {
+					old_position: 1,
+					old_text: &[98],
+					new_position: 1,
+					new_text: &[0xD800]
+				}])
+				.unwrap()
+		);
+		assert_eq!(batch.changes()[0].new_text, &[97, 0xD800]);
+		let change = TextChange {
+			old_position: 0,
+			old_text: &[97],
+			new_position: 0,
+			new_text: &[98],
+		};
+		assert!(matches!(
+			batch.append(&[change, change]),
+			Err(BufferError::InvalidRange)
+		));
+		assert_eq!(batch.changes()[0].new_text, &[97, 0xD800]);
+		let oversized = vec![99; MAX_UNDO_TEXT_UNITS + 1];
+		assert!(
+			!batch
+				.append(&[TextChange {
+					old_position: 0,
+					old_text: &[],
+					new_position: 0,
+					new_text: &oversized
+				}])
+				.unwrap()
+		);
+		assert_eq!(
+			(batch.len(), batch.changes()[0].new_text),
+			(1, &[97, 0xD800][..])
+		);
+	}
 
 	#[test]
 	fn composition_splits_intermediate_text_without_copying_payloads() {

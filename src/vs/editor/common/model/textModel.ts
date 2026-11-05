@@ -414,6 +414,7 @@ export class TextModel extends Disposable implements model.ITextModel, IDecorati
 	public override dispose(): void {
 		this.__isDisposing = true;
 		this._onWillDispose.fire();
+		this._commandManager.releaseResources();
 		this._tokenizationTextModelPart.dispose();
 		this._isDisposed = true;
 		super.dispose();
