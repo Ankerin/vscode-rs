@@ -5,6 +5,8 @@
 
 import { IDisposable, toDisposable } from '../../../../../base/common/lifecycle.js';
 import { OffsetRange } from '../../../core/ranges/offsetRange.js';
+import { Range } from '../../../core/range.js';
+import { RangeMapping } from '../../rangeMapping.js';
 import { DateTimeout, DiffAlgorithmResult, InfiniteTimeout, ISequence, ITimeout, SequenceDiff } from './diffAlgorithm.js';
 
 /** Generated sequence alignment bindings, independent of the storage ABI. */
@@ -13,6 +15,7 @@ export interface IRustSequenceDiffModule {
 	diff_dynamic(original: Float64Array, modified: Float64Array, originalExact: Uint32Array, modifiedExact: Uint32Array, scores: Float64Array, timeout?: () => boolean, deadline?: number): Uint32Array;
 	diff_myers(original: Float64Array, modified: Float64Array, timeout?: () => boolean, deadline?: number): Uint32Array | undefined;
 	optimize_diff(original: Float64Array, modified: Float64Array, originalStrong: Uint32Array, modifiedStrong: Uint32Array, originalScores: Float64Array, modifiedScores: Float64Array, ranges: Uint32Array): Uint32Array | undefined;
+	refine_diff(original: Uint16Array, modified: Uint16Array, originalOffsets: Uint32Array, modifiedOffsets: Uint32Array, settings: Uint32Array, timeout?: () => boolean, deadline?: number): Uint32Array | undefined;
 }
 
 const maxDynamicDiffCells = 4 * 1024 * 1024;
@@ -21,7 +24,7 @@ let registeredModule: IRustSequenceDiffModule | undefined;
 
 /** Registers algorithms only for the lifetime of the initialized editor core. */
 export function registerRustSequenceDiff(module: IRustSequenceDiffModule): IDisposable {
-	if (typeof module.sequence_diff_abi_version !== 'function' || module.sequence_diff_abi_version() !== 4) {
+	if (typeof module.sequence_diff_abi_version !== 'function' || module.sequence_diff_abi_version() !== 5) {
 		throw new Error('The Rust sequence diff bindings do not match the current algorithm contract');
 	}
 	if (registeredModule) {
@@ -33,6 +36,64 @@ export function registerRustSequenceDiff(module: IRustSequenceDiffModule): IDisp
 			registeredModule = undefined;
 		}
 	});
+}
+
+function encodeLines(lines: string[], range: Range): { units: Uint16Array; offsets: Uint32Array } | undefined {
+	const lineCount = range.endLineNumber - range.startLineNumber + 1;
+	if (lineCount - 1 > maxDynamicDiffCells) {
+		return undefined;
+	}
+	const offsets = new Uint32Array(lineCount + 1);
+	for (let index = 1; index < offsets.length; index++) {
+		const length = offsets[index - 1] + lines[range.startLineNumber + index - 2].length;
+		if (length + offsets.length - 2 > maxDynamicDiffCells) {
+			return undefined;
+		}
+		offsets[index] = length;
+	}
+	const units = new Uint16Array(offsets[offsets.length - 1]);
+	for (let index = 0; index + 1 < offsets.length; index++) {
+		const line = lines[range.startLineNumber + index - 1];
+		for (let column = 0; column < line.length; column++) {
+			units[offsets[index] + column] = line.charCodeAt(column);
+		}
+	}
+	return { units, offsets };
+}
+
+/** Keeps slice construction, alignment, raw edits, and display refinement in one native scope. */
+export function tryComputeRustCharacterDiff(originalLines: string[], modifiedLines: string[], range: RangeMapping, timeout: ITimeout, considerWhitespaceChanges: boolean, extendToSubwords: boolean, includeRawChanges: boolean): { mappings: RangeMapping[]; rawChanges: RangeMapping[]; hitTimeout: boolean } | undefined {
+	if (!registeredModule) {
+		return undefined;
+	}
+	const { check, deadline } = getTimeout(timeout);
+	// Stateful/custom callbacks keep the existing pipeline, including unsupported-path fallback.
+	if (check) {
+		return undefined;
+	}
+	const first = encodeLines(originalLines, range.originalRange);
+	const second = encodeLines(modifiedLines, range.modifiedRange);
+	if (!first || !second) {
+		return undefined;
+	}
+	const toRange = (range: Range) => [range.startLineNumber, range.startColumn, range.endLineNumber, range.endColumn];
+	const settings = new Uint32Array([...toRange(range.originalRange), ...toRange(range.modifiedRange), Number(considerWhitespaceChanges), Number(extendToSubwords) | (Number(includeRawChanges) << 1)]);
+	const result = registeredModule.refine_diff(first.units, second.units, first.offsets, second.offsets, settings, undefined, deadline);
+	if (!result) {
+		return undefined;
+	}
+	const hitTimeout = result[0] === 1;
+	if (hitTimeout && timeout instanceof DateTimeout) {
+		timeout.invalidate();
+	}
+	const mappings: RangeMapping[] = [];
+	const rawChanges: RangeMapping[] = [];
+	for (let index = 0; index < result[1] + result[2]; index++) {
+		const offset = 3 + index * 8;
+		const mapping = new RangeMapping(new Range(result[offset], result[offset + 1], result[offset + 2], result[offset + 3]), new Range(result[offset + 4], result[offset + 5], result[offset + 6], result[offset + 7]));
+		(index < result[1] ? mappings : rawChanges).push(mapping);
+	}
+	return { mappings, rawChanges, hitTimeout };
 }
 
 function toElements(sequence: ISequence): Float64Array {

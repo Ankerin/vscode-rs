@@ -5,15 +5,122 @@
 
 use js_sys::Function;
 use vscode_editor_core::{
-	LineEqualityScores, OptimizationSequence, SequenceDiff, SequenceDiffError, SequenceDiffResult,
-	dynamic_programming_diff, myers_diff, optimize_sequence_diffs,
+	CharacterDiffOptions, CharacterSequence, LineEqualityScores, OptimizationSequence, Position,
+	SequenceDiff, SequenceDiffError, SequenceDiffResult, TextRange, dynamic_programming_diff,
+	myers_diff, optimize_sequence_diffs, refine_character_diff,
 };
 use wasm_bindgen::prelude::*;
 
 /// Versions sequence alignment independently of the text storage contract.
 #[wasm_bindgen]
 pub fn sequence_diff_abi_version() -> u32 {
-	4
+	5
+}
+
+/// Builds owning UTF-16 slices once and returns translated display and raw character mappings.
+/// Settings contain two document ranges, whitespace handling, and the subword/raw option bits.
+#[wasm_bindgen]
+pub fn refine_diff(
+	original: &[u16],
+	modified: &[u16],
+	original_offsets: &[u32],
+	modified_offsets: &[u32],
+	settings: &[u32],
+	timeout: Option<Function>,
+	deadline: Option<f64>,
+) -> Result<Option<Vec<u32>>, JsValue> {
+	if settings.len() != 10 || settings[8] > 1 || settings[9] > 3 {
+		return Err(JsError::from(SequenceDiffError::InvalidRanges).into());
+	}
+	let text_range = |values: &[u32]| TextRange {
+		start: Position {
+			line_number: values[0] as usize,
+			column: values[1] as usize,
+		},
+		end: Position {
+			line_number: values[2] as usize,
+			column: values[3] as usize,
+		},
+	};
+	let original_lines = unpack_lines(original, original_offsets).map_err(JsError::from)?;
+	let modified_lines = unpack_lines(modified, modified_offsets).map_err(JsError::from)?;
+	let compute = || {
+		let first = CharacterSequence::new(
+			&original_lines,
+			text_range(&settings[..4]),
+			settings[8] == 1,
+		)?;
+		let second = CharacterSequence::new(
+			&modified_lines,
+			text_range(&settings[4..8]),
+			settings[8] == 1,
+		)?;
+		Ok::<_, SequenceDiffError>((first, second))
+	};
+	let (first, second) = match compute() {
+		Ok(sequences) => sequences,
+		Err(SequenceDiffError::TooLarge | SequenceDiffError::AllocationFailed) => return Ok(None),
+		Err(error) => return Err(JsError::from(error).into()),
+	};
+	let mut callback_error = None;
+	let result = refine_character_diff(
+		&first,
+		&second,
+		CharacterDiffOptions {
+			extend_to_subwords: settings[9] & 1 != 0,
+			include_raw_changes: settings[9] & 2 != 0,
+		},
+		|| check_timeout(&timeout, deadline, &mut callback_error),
+	);
+	if let Some(error) = callback_error {
+		return Err(error);
+	}
+	match result {
+		Ok(result) => {
+			let mut values =
+				Vec::with_capacity(3 + 8 * (result.mappings.len() + result.raw_changes.len()));
+			values.extend([
+				u32::from(result.hit_timeout),
+				result.mappings.len() as u32,
+				result.raw_changes.len() as u32,
+			]);
+			for (original, modified) in result.mappings.into_iter().chain(result.raw_changes) {
+				for range in [original, modified] {
+					values.extend([
+						range.start.line_number as u32,
+						range.start.column as u32,
+						range.end.line_number as u32,
+						range.end.column as u32,
+					]);
+				}
+			}
+			Ok(Some(values))
+		}
+		Err(
+			SequenceDiffError::TooLarge
+			| SequenceDiffError::AllocationFailed
+			| SequenceDiffError::UnrepresentablePath
+			| SequenceDiffError::InvalidRanges,
+		) => Ok(None),
+		Err(error) => Err(JsError::from(error).into()),
+	}
+}
+
+fn unpack_lines<'a>(
+	units: &'a [u16],
+	offsets: &[u32],
+) -> Result<Vec<&'a [u16]>, SequenceDiffError> {
+	if offsets.len() < 2 || offsets[0] != 0 || offsets[offsets.len() - 1] as usize != units.len() {
+		return Err(SequenceDiffError::InvalidRanges);
+	}
+	offsets
+		.windows(2)
+		.map(|pair| {
+			units
+				.get(pair[0] as usize..pair[1] as usize)
+				.ok_or(SequenceDiffError::InvalidRanges)
+		})
+		.collect()
 }
 
 /// Returns the timeout flag followed by original/modified half-open range tuples.

@@ -6,16 +6,16 @@
 use super::{SequenceDiff, SequenceDiffError};
 
 /// Immutable sequence data needed by the editor's shift and join heuristics.
-pub struct OptimizationSequence<'a> {
-	pub elements: &'a [f64],
-	pub strong_elements: &'a [u32],
+pub struct OptimizationSequence<'a, T = f64, S = u32> {
+	pub elements: &'a [T],
+	pub strong_elements: &'a [S],
 	pub boundary_scores: &'a [f64],
 }
 
 /// Joins edits by shifting twice, then aligns insertions/deletions at scored boundaries.
-pub fn optimize_sequence_diffs(
-	original: OptimizationSequence<'_>,
-	modified: OptimizationSequence<'_>,
+pub fn optimize_sequence_diffs<T: PartialEq, S: PartialEq>(
+	original: OptimizationSequence<'_, T, S>,
+	modified: OptimizationSequence<'_, T, S>,
 	diffs: &[SequenceDiff],
 ) -> Result<Vec<SequenceDiff>, SequenceDiffError> {
 	for sequence in [&original, &modified] {
@@ -108,9 +108,9 @@ fn shift(diff: &SequenceDiff, delta: isize) -> SequenceDiff {
 	}
 }
 
-fn join_by_shifting(
-	original: &OptimizationSequence<'_>,
-	modified: &OptimizationSequence<'_>,
+fn join_by_shifting<T: PartialEq, S: PartialEq>(
+	original: &OptimizationSequence<'_, T, S>,
+	modified: &OptimizationSequence<'_, T, S>,
 	diffs: &[SequenceDiff],
 ) -> Vec<SequenceDiff> {
 	let Some(first) = diffs.first() else {
@@ -173,10 +173,10 @@ fn join_by_shifting(
 	right
 }
 
-fn shift_to_boundary(
+fn shift_to_boundary<T, S: PartialEq>(
 	diff: &SequenceDiff,
-	original: &OptimizationSequence<'_>,
-	modified: &OptimizationSequence<'_>,
+	original: &OptimizationSequence<'_, T, S>,
+	modified: &OptimizationSequence<'_, T, S>,
 	start1: usize,
 	end1: usize,
 	start2: usize,

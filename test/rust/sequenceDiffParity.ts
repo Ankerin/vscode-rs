@@ -11,9 +11,12 @@ import { pathToFileURL } from 'node:url';
 import { DateTimeout, DiffAlgorithmResult, InfiniteTimeout } from '../../src/vs/editor/common/diff/defaultLinesDiffComputer/algorithms/diffAlgorithm.js';
 import { DynamicProgrammingDiffing } from '../../src/vs/editor/common/diff/defaultLinesDiffComputer/algorithms/dynamicProgrammingDiffing.js';
 import { MyersDiffAlgorithm } from '../../src/vs/editor/common/diff/defaultLinesDiffComputer/algorithms/myersDiffAlgorithm.js';
-import { registerRustSequenceDiff, tryComputeRustLineDiff } from '../../src/vs/editor/common/diff/defaultLinesDiffComputer/algorithms/rustSequenceDiff.js';
+import { registerRustSequenceDiff, tryComputeRustCharacterDiff, tryComputeRustLineDiff } from '../../src/vs/editor/common/diff/defaultLinesDiffComputer/algorithms/rustSequenceDiff.js';
 import { DefaultLinesDiffComputer } from '../../src/vs/editor/common/diff/defaultLinesDiffComputer/defaultLinesDiffComputer.js';
-import { optimizeSequenceDiffs } from '../../src/vs/editor/common/diff/defaultLinesDiffComputer/heuristicSequenceOptimizations.js';
+import { extendDiffsToEntireWordIfAppropriate, optimizeSequenceDiffs, removeShortMatches, removeVeryShortMatchingTextBetweenLongDiffs } from '../../src/vs/editor/common/diff/defaultLinesDiffComputer/heuristicSequenceOptimizations.js';
+import { LinesSliceCharSequence } from '../../src/vs/editor/common/diff/defaultLinesDiffComputer/linesSliceCharSequence.js';
+import { Range } from '../../src/vs/editor/common/core/range.js';
+import { RangeMapping } from '../../src/vs/editor/common/diff/rangeMapping.js';
 import { IRustTextBufferModule, registerRustTextBuffer } from '../../src/vs/editor/common/model/rustTextBuffer/rustTextBuffer.js';
 import { ArraySequence } from './testSequence.js';
 
@@ -188,4 +191,76 @@ test('Rust alignment preserves full display diffs, moved lines, and raw changes 
 			assert.deepStrictEqual(withRust(() => computer.computeDiffWithRawChanges(lines[0], lines[1], options)), reference, folder);
 		}
 	}
+});
+
+function refineReference(originalLines: string[], modifiedLines: string[], range: RangeMapping, considerWhitespaceChanges: boolean, subwords: boolean, raw: boolean) {
+	const original = new LinesSliceCharSequence(originalLines, range.originalRange, considerWhitespaceChanges);
+	const modified = new LinesSliceCharSequence(modifiedLines, range.modifiedRange, considerWhitespaceChanges);
+	const dynamic = new DynamicProgrammingDiffing();
+	const myers = new MyersDiffAlgorithm();
+	const result = (original.length + modified.length < 500 ? dynamic : myers).compute(original, modified);
+	const toMapping = (diff: DiffAlgorithmResult['diffs'][number]) => new RangeMapping(original.translateRange(diff.seq1Range), modified.translateRange(diff.seq2Range));
+	const rawChanges = raw ? myers.compute(original, modified).diffs.map(toMapping) : [];
+	let diffs = optimizeSequenceDiffs(original, modified, result.diffs);
+	diffs = extendDiffsToEntireWordIfAppropriate(original, modified, diffs, (sequence, offset) => sequence.findWordContaining(offset));
+	if (subwords) {
+		diffs = extendDiffsToEntireWordIfAppropriate(original, modified, diffs, (sequence, offset) => sequence.findSubWordContaining(offset), true);
+	}
+	diffs = removeShortMatches(original, modified, diffs);
+	diffs = removeVeryShortMatchingTextBetweenLongDiffs(original, modified, diffs);
+	return { mappings: diffs.map(toMapping), rawChanges, hitTimeout: false };
+}
+
+test('Rust owning character slices preserve seeded range translation, whitespace, words, subwords, and raw edits', () => {
+	let seed = 41;
+	const random = (limit: number) => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed % limit; };
+	const alphabet = ['abc', 'ABC', 'fooBar', 'a1B2', 'word;', ', ', '\t', '\uFEFF', '\u2007', '\u0085', '\u180E', '\u2028', '\r', '\uD800', '\uDC00', '😀'];
+	let nativeResults = 0;
+	for (let iteration = 0; iteration < 1024; iteration++) {
+		const create = () => Array.from({ length: 1 + random(8) }, () => Array.from({ length: random(iteration % 8 === 0 ? 48 : 12) }, () => alphabet[random(alphabet.length)]).join(''));
+		const original = create();
+		const modified = create();
+		const rangeFor = (lines: string[]) => {
+			const startLine = 1 + random(lines.length);
+			const endLine = startLine + random(lines.length - startLine + 1);
+			const startColumn = 1 + random(lines[startLine - 1].length + 1);
+			const endColumn = startLine === endLine ? startColumn + random(lines[endLine - 1].length + 2 - startColumn) : 1 + random(lines[endLine - 1].length + 1);
+			return new Range(startLine, startColumn, endLine, endColumn);
+		};
+		const range = new RangeMapping(rangeFor(original), rangeFor(modified));
+		const considerWhitespaceChanges = iteration % 2 === 0;
+		const subwords = iteration % 3 !== 0;
+		const raw = iteration % 5 !== 0;
+		const reference = refineReference(original, modified, range, considerWhitespaceChanges, subwords, raw);
+		const result = withRust(() => tryComputeRustCharacterDiff(original, modified, range, InfiniteTimeout.instance, considerWhitespaceChanges, subwords, raw));
+		if (result) {
+			nativeResults++;
+			assert.deepStrictEqual(result, reference, `Character slice ${iteration}`);
+		}
+	}
+	assert.ok(nativeResults > 900, `Only ${nativeResults} slices used native refinement`);
+});
+
+test('Rust character refinement validates packed boundaries and preserves timeout and callback fallback', () => {
+	const original = ['wordBefore '.repeat(20), '\tfooBar1; suffix'];
+	const modified = ['wordAfter '.repeat(20), '  fooNewBar2; suffix'];
+	const range = new RangeMapping(new Range(1, 1, 2, original[1].length + 1), new Range(1, 1, 2, modified[1].length + 1));
+	const reference = refineReference(original, modified, range, true, true, true);
+	assert.deepStrictEqual(withRust(() => tryComputeRustCharacterDiff(original, modified, range, InfiniteTimeout.instance, true, true, true)), reference);
+	let checks = 0;
+	assert.strictEqual(withRust(() => tryComputeRustCharacterDiff(original, modified, range, { isValid: () => { checks++; return true; } }, true, true, true)), undefined);
+	assert.strictEqual(checks, 0);
+	const timeout = new DateTimeout(30000);
+	const registration = registerRustSequenceDiff({ ...rust, refine_diff: (...args) => { args[6] = Number.NEGATIVE_INFINITY; return rust.refine_diff(...args); } });
+	try {
+		const result = tryComputeRustCharacterDiff(original, modified, range, timeout, true, true, true);
+		assert.deepStrictEqual({ hitTimeout: result?.hitTimeout, valid: timeout.isValid() }, { hitTimeout: true, valid: false });
+	} finally {
+		registration.dispose();
+	}
+	const settings = new Uint32Array([1, 1, 1, 2, 1, 1, 1, 2, 1, 0]);
+	for (const offsets of [[1, 1], [0, 2], [0, 1, 0, 1], [0]]) {
+		assert.throws(() => rust.refine_diff(new Uint16Array([97]), new Uint16Array([98]), new Uint32Array(offsets), new Uint32Array([0, 1]), settings), /ranges/);
+	}
+	assert.throws(() => rust.refine_diff(new Uint16Array([97]), new Uint16Array([98]), new Uint32Array([0, 1]), new Uint32Array([0, 1]), settings, () => { throw new Error('Refinement timeout failure'); }), /Refinement timeout failure/);
 });

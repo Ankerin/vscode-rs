@@ -19,7 +19,7 @@ import { computeMovedLines } from './computeMovedLines.js';
 import { extendDiffsToEntireWordIfAppropriate, optimizeSequenceDiffs, removeShortMatches, removeVeryShortMatchingLinesBetweenDiffs, removeVeryShortMatchingTextBetweenLongDiffs } from './heuristicSequenceOptimizations.js';
 import { LineSequence } from './lineSequence.js';
 import { LinesSliceCharSequence } from './linesSliceCharSequence.js';
-import { tryComputeRustLineDiff } from './algorithms/rustSequenceDiff.js';
+import { tryComputeRustCharacterDiff, tryComputeRustLineDiff } from './algorithms/rustSequenceDiff.js';
 
 export class DefaultLinesDiffComputer implements ILinesDiffComputer {
 	private readonly dynamicProgrammingDiffing = new DynamicProgrammingDiffing();
@@ -229,6 +229,13 @@ export class DefaultLinesDiffComputer implements ILinesDiffComputer {
 	private refineDiff(originalLines: string[], modifiedLines: string[], diff: SequenceDiff, timeout: ITimeout, considerWhitespaceChanges: boolean, options: ILinesDiffComputerOptions, rawChanges?: RangeMapping[]): { mappings: RangeMapping[]; hitTimeout: boolean } {
 		const lineRangeMapping = toLineRangeMapping(diff);
 		const rangeMapping = lineRangeMapping.toRangeMapping2(originalLines, modifiedLines);
+		const native = tryComputeRustCharacterDiff(originalLines, modifiedLines, rangeMapping, timeout, considerWhitespaceChanges, !!options.extendToSubwords, !!rawChanges);
+		if (native) {
+			for (const change of native.rawChanges) {
+				rawChanges?.push(change);
+			}
+			return native;
+		}
 
 		const slice1 = new LinesSliceCharSequence(originalLines, rangeMapping.originalRange, considerWhitespaceChanges);
 		const slice2 = new LinesSliceCharSequence(modifiedLines, rangeMapping.modifiedRange, considerWhitespaceChanges);

@@ -8,7 +8,11 @@
 use std::{error::Error, fmt, ops::Range};
 
 mod optimization;
+mod refinement;
 pub use optimization::{OptimizationSequence, optimize_sequence_diffs};
+pub use refinement::{
+	CharacterDiffOptions, CharacterDiffResult, CharacterSequence, TextRange, refine_character_diff,
+};
 
 /// Bounds the quadratic direction matrix before allocating it.
 pub const MAX_DYNAMIC_DIFF_CELLS: usize = 4 * 1024 * 1024;
@@ -71,9 +75,9 @@ impl Error for SequenceDiffError {}
 
 /// Preserves diagonal and horizontal tie preference, including the consecutive-diagonal bonus.
 /// Only directions occupy quadratic space; scores and run lengths use one rolling row.
-pub fn dynamic_programming_diff(
-	original: &[f64],
-	modified: &[f64],
+pub fn dynamic_programming_diff<T: PartialEq>(
+	original: &[T],
+	modified: &[T],
 	line_scores: Option<LineEqualityScores<'_>>,
 	mut is_valid: impl FnMut() -> bool,
 ) -> Result<SequenceDiffResult, SequenceDiffError> {
@@ -107,11 +111,11 @@ pub fn dynamic_programming_diff(
 	directions.resize(cells, 0);
 	let mut scores = vec![0.0_f64; modified.len()];
 	let mut lengths = vec![0_usize; modified.len()];
-	for (s1, &element1) in original.iter().enumerate() {
+	for (s1, element1) in original.iter().enumerate() {
 		let mut diagonal_score = 0.0;
 		let mut diagonal_length = 0;
 		let mut vertical_score = 0.0;
-		for (s2, &element2) in modified.iter().enumerate() {
+		for (s2, element2) in modified.iter().enumerate() {
 			if !is_valid() {
 				return Ok(SequenceDiffResult::trivial(
 					original.len(),
@@ -273,9 +277,9 @@ impl Frontier {
 
 /// Aligns large sequences with the existing Myers frontier and snake preference.
 /// An indexed arena owns paths; allocation limits return an error instead of exhausting memory.
-pub fn myers_diff(
-	original: &[f64],
-	modified: &[f64],
+pub fn myers_diff<T: PartialEq>(
+	original: &[T],
+	modified: &[T],
 	mut is_valid: impl FnMut() -> bool,
 ) -> Result<SequenceDiffResult, SequenceDiffError> {
 	if original.is_empty() || modified.is_empty() {
@@ -473,7 +477,7 @@ mod tests {
 			(5, SequenceDiffResult::trivial(4, 3, true))
 		);
 		assert_eq!(
-			dynamic_programming_diff(&[], &[], None, || panic!(
+			dynamic_programming_diff::<f64>(&[], &[], None, || panic!(
 				"Empty inputs do not check timeouts"
 			))
 			.unwrap(),
