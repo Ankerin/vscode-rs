@@ -29,6 +29,7 @@ import { IEditorModel } from './editorCommon.js';
 import { TextModelEditSource } from './textModelEditSource.js';
 import { TextEdit } from './core/edits/textEdit.js';
 import { IViewModel } from './viewModel.js';
+import type { IGuessedIndentation } from './model/indentationGuesser.js';
 
 /**
  * Vertical Lane in the overview ruler of the editor.
@@ -1595,6 +1596,8 @@ export class SearchData {
 export interface ITextBuffer extends IReadonlyTextBuffer, IDisposable {
 	setEOL(newEOL: '\r\n' | '\n'): void;
 	applyEdits(rawOperations: ValidAnnotatedEditOperation[], recordTrimAutoWhitespace: boolean, computeUndoEdits: boolean): ApplyEditsResult;
+	/** Returns native indentation settings when the buffer supports complete source inspection. */
+	getGuessedIndentation?(defaultTabSize: number, defaultInsertSpaces: boolean): IGuessedIndentation | undefined;
 }
 
 /**

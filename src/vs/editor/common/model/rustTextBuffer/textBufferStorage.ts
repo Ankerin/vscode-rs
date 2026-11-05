@@ -8,6 +8,7 @@ import { Position } from '../../core/position.js';
 import { Range } from '../../core/range.js';
 import { ApplyEditsResult, FindMatch, ITextSnapshot, SearchData, ValidAnnotatedEditOperation } from '../../model.js';
 import { createLineStartsFast, StringBuffer } from '../pieceTreeTextBuffer/pieceTreeBase.js';
+import type { IGuessedIndentation } from '../indentationGuesser.js';
 
 /** A replacement in the original document's UTF-16 coordinates, ordered from bottom to top. */
 export interface ITextBufferStorageEdit {
@@ -48,6 +49,7 @@ export interface ITextBufferStorage {
 	getLineLastNonWhitespaceColumn?(lineNumber: number): number;
 	/** Counts visible characters without transferring whole lines when the range is supported. */
 	getCharacterCountInRange?(range: Range, eol: string): number | undefined;
+	getGuessedIndentation?(defaultTabSize: number, defaultInsertSpaces: boolean): IGuessedIndentation;
 	insert(offset: number, value: string, eolNormalized?: boolean): void;
 	delete(offset: number, length: number): void;
 	/** Applies validated replacements together when the storage supports atomic batches. */

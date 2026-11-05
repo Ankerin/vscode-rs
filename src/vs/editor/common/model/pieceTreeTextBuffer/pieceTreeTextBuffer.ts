@@ -13,6 +13,7 @@ import { countEOL, StringEOL } from '../../core/misc/eolCounter.js';
 import { TextChange } from '../../core/textChange.js';
 import { Disposable } from '../../../../base/common/lifecycle.js';
 import { createRegisteredTextBufferStorage, ITextBufferStorage } from '../rustTextBuffer/textBufferStorage.js';
+import type { IGuessedIndentation } from '../indentationGuesser.js';
 
 export interface IValidatedEditOperation {
 	sortIndex: number;
@@ -247,6 +248,10 @@ export class PieceTreeTextBuffer extends Disposable implements ITextBuffer {
 			return 0;
 		}
 		return result + 2;
+	}
+
+	public getGuessedIndentation(defaultTabSize: number, defaultInsertSpaces: boolean): IGuessedIndentation | undefined {
+		return this._pieceTree.getGuessedIndentation?.(defaultTabSize, defaultInsertSpaces);
 	}
 
 	private _getEndOfLine(eol: EndOfLinePreference): string {

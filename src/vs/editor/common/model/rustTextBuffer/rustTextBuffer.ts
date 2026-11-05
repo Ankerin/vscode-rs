@@ -14,6 +14,7 @@ import { ITextBufferFlags, ITextBufferModelEditsResult, ITextBufferStorage, ITex
 import { IRustSequenceDiffModule, registerRustSequenceDiff } from '../../diff/defaultLinesDiffComputer/algorithms/rustSequenceDiff.js';
 import { IRustTextChangeModule, registerRustTextChanges } from '../../core/rustTextChanges.js';
 import { applyRustModelEdits, isSupportedRustTextRange } from './modelEdits.js';
+import type { IGuessedIndentation } from '../indentationGuesser.js';
 
 /** The generated binding surface; UTF-16 arrays preserve JavaScript string semantics. */
 export interface IRustTextBuffer {
@@ -31,6 +32,7 @@ export interface IRustTextBuffer {
 	first_non_whitespace_column(lineNumber: number): number;
 	last_non_whitespace_column(lineNumber: number): number;
 	character_count(startLine: number, startColumn: number, endLine: number, endColumn: number, eolLength: number): number | undefined;
+	guess_indentation(defaultTabSize: number, defaultInsertSpaces: boolean): Float64Array;
 	line_batch(startLine: number, maxLines: number, maxUnits: number): string | Uint16Array;
 	find_literal(startLine: number, startColumn: number, endLine: number, endColumn: number, needle: Uint16Array, limit: number): Uint32Array;
 	line_length(lineNumber: number): number;
@@ -105,6 +107,13 @@ class RustTextBufferStorage implements ITextBufferStorage, IDisposable {
 	public getLineLastNonWhitespaceColumn(lineNumber: number): number { return this._buffer.last_non_whitespace_column(lineNumber); }
 	public getCharacterCountInRange(range: Range, eol: string): number | undefined {
 		return isSupportedRustTextRange(range) ? this._buffer.character_count(range.startLineNumber, range.startColumn, range.endLineNumber, range.endColumn, eol.length) : undefined;
+	}
+	public getGuessedIndentation(defaultTabSize: number, defaultInsertSpaces: boolean): IGuessedIndentation {
+		const result = this._buffer.guess_indentation(defaultTabSize, defaultInsertSpaces);
+		if (result.length !== 2) {
+			throw new Error('The Rust indentation result does not match the current model contract');
+		}
+		return { tabSize: result[0], insertSpaces: result[1] !== 0 };
 	}
 	public getOffsetAt(lineNumber: number, column: number): number { return this._buffer.offset_at(lineNumber, column); }
 	public getNearestChunk(offset: number): string { return fromUnits(this._buffer.nearest_chunk(offset)); }
@@ -292,7 +301,7 @@ class RustTextBufferStorage implements ITextBufferStorage, IDisposable {
 
 /** Installs an initialized Rust module for new models. Dispose the registration to restore defaults. */
 export function registerRustTextBuffer(module: IRustTextBufferModule, initialization?: IRustTextBufferInitialization): IDisposable {
-	if (typeof module.text_buffer_abi_version !== 'function' || module.text_buffer_abi_version() !== 5) {
+	if (typeof module.text_buffer_abi_version !== 'function' || module.text_buffer_abi_version() !== 6) {
 		throw new Error('The Rust text buffer bindings do not match the current storage contract');
 	}
 	const registration = new DisposableStore();

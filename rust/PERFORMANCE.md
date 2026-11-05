@@ -429,4 +429,26 @@ Process peak RSS and final WASM linear memory are medians in MiB.
 | Long line | 55.35 | 65.69 | 1.50 |
 | Whitespace-heavy source | 57.80 | 67.33 | 1.75 |
 
-This capture demonstrates faster counting and long-line column queries, while peak process memory is higher. Avoided decoded line transfers do not establish total memory savings; the shared WASM runtime and persistent rope remain part of the measured process. Whole-editor input latency, supported platforms, and the full resource gate remain pending. Raw runs stay ignored in `.build/rust/queries-benchmark.json`.
+This capture demonstrates faster counting and long-line column queries, while peak process memory is higher. Avoided decoded line transfers do not establish total memory savings; the shared WASM runtime and persistent rope remain part of the measured process. Whole-editor input latency, supported platforms, and the full resource gate remain pending. Raw runs stay ignored in `.build/rust/queries-benchmark-scalar.json`.
+
+## Indentation detection observation
+
+The `--queries` runner was expanded on November 6, 2026 with release storage ABI 6 bindings and the same Windows x64, Node `24.22.1`, and Rust `1.99.1` environment. It now additionally runs 100 indentation detections with tab-size default 4 and alternating space preferences. Two detections warm the implementation before timing. Other scalar queries retain the same workloads, and all complete checksums match. Three alternating fresh processes per engine provide the following medians in milliseconds.
+
+| Fixture | Existing 100 detections | Rust/WASM 100 detections | Existing columns | Rust/WASM columns | Existing 200 counts | Rust/WASM 200 counts |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Short lines | 44.78 | 17.95 | 1.87 | 4.62 | 6.51 | 1.34 |
+| Unicode lines | 45.96 | 18.65 | 1.96 | 4.84 | 6.30 | 1.36 |
+| Long line | 98.52 | 6.86 | 109.96 | 23.37 | 30.25 | 7.47 |
+| Whitespace-heavy source | 40.80 | 10.70 | 7.41 | 6.52 | 15.47 | 4.32 |
+
+The first native implementation repeatedly resolved line coordinates and was slower on short lines: 127.99 versus 45.46 milliseconds, and 121.99 versus 45.35 milliseconds on Unicode. Replacing that traversal with a sequential borrowed leaf cursor avoids separate line lookups and decoded strings. The final detection capture improves on the existing implementation for every fixture; short scalar column queries retain their earlier regression. The long-line fixture slows within the native implementation because the cursor scans content/prefixes sequentially, while the previous implementation used indexed line ends. The final within-capture comparisons remain the relevant evidence.
+
+| Fixture | Existing process peak RSS MiB | Rust process peak RSS MiB | Rust linear memory MiB |
+| --- | ---: | ---: | ---: |
+| Short lines | 63.84 | 67.02 | 1.69 |
+| Unicode lines | 64.04 | 67.14 | 1.44 |
+| Long line | 63.51 | 66.54 | 1.50 |
+| Whitespace-heavy source | 58.87 | 66.99 | 1.75 |
+
+Process peak RSS remains higher with Rust. These figures include setup, warm-up, all query workloads, and checksum construction; they do not isolate the indentation algorithm's live allocations. Application startup/input latency and whole-editor resource improvements remain unverified. Final runs are ignored in `.build/rust/queries-benchmark.json`; the initial coordinate-based traversal is retained in `.build/rust/queries-benchmark-indentation-initial.json`.

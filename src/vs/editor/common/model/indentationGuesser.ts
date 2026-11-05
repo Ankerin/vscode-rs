@@ -103,6 +103,10 @@ export interface IGuessedIndentation {
 }
 
 export function guessIndentation(source: ITextBuffer, defaultTabSize: number, defaultInsertSpaces: boolean): IGuessedIndentation {
+	const native = source.getGuessedIndentation?.(defaultTabSize, defaultInsertSpaces);
+	if (native) {
+		return native;
+	}
 	// Look at most at the first 10k lines
 	const linesCount = Math.min(source.getLineCount(), 10000);
 

@@ -5,7 +5,9 @@
 
 //! Typed WebAssembly bindings. Text crosses the boundary as UTF-16, never a lossy Rust string.
 
-use vscode_editor_core::{BufferError, Position, TextBuffer, TextEdit, TextSnapshot};
+use vscode_editor_core::{
+	BufferError, Position, TextBuffer, TextEdit, TextSnapshot, guess_indentation,
+};
 use wasm_bindgen::prelude::*;
 
 mod model_edits;
@@ -16,7 +18,7 @@ mod text_transfer;
 /// Identifies the storage contract independently of the binding generator's version.
 #[wasm_bindgen]
 pub fn text_buffer_abi_version() -> u32 {
-	5
+	6
 }
 
 #[wasm_bindgen]
@@ -152,6 +154,15 @@ impl WasmTextBuffer {
 
 	pub fn last_non_whitespace_column(&self, line_number: usize) -> Result<usize, JsError> {
 		Ok(self.buffer.last_non_whitespace_column(line_number)?)
+	}
+
+	pub fn guess_indentation(
+		&self,
+		default_tab_size: f64,
+		default_insert_spaces: bool,
+	) -> Result<Vec<f64>, JsError> {
+		let guess = guess_indentation(&self.buffer, default_tab_size, default_insert_spaces)?;
+		Ok(vec![guess.tab_size, f64::from(guess.insert_spaces)])
 	}
 
 	/// Unsupported visible-line coordinates leave the existing character-count path available.

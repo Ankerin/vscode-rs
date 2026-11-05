@@ -11,6 +11,7 @@ import { Range } from '../../src/vs/editor/common/core/range.js';
 import { DefaultEndOfLine, EndOfLinePreference } from '../../src/vs/editor/common/model.js';
 import { createTextBuffer } from '../../src/vs/editor/common/model/textModel.js';
 import { IRustTextBufferModule, registerRustTextBuffer } from '../../src/vs/editor/common/model/rustTextBuffer/rustTextBuffer.js';
+import { guessIndentation } from '../../src/vs/editor/common/model/indentationGuesser.js';
 
 interface IRustModule extends IRustTextBufferModule {
 	default(options: { module_or_path: Uint8Array }): Promise<{ memory: WebAssembly.Memory }>;
@@ -56,6 +57,10 @@ try {
 		checksum += buffer.getCharacterCountInRange(range, EndOfLinePreference.TextDefined);
 		checksum += buffer.getLineFirstNonWhitespaceColumn(range.startLineNumber) + buffer.getLineLastNonWhitespaceColumn(range.endLineNumber);
 	}
+	for (const insertSpaces of [true, false]) {
+		const result = guessIndentation(buffer, 4, insertSpaces);
+		checksum += result.tabSize + (result.insertSpaces ? 1 : 0);
+	}
 	global.gc?.();
 	const baseline = process.memoryUsage();
 	let start = performance.now();
@@ -69,9 +74,15 @@ try {
 		checksum += buffer.getCharacterCountInRange(ranges[index % ranges.length], preferences[index % preferences.length]);
 	}
 	measurements.character_count_queries_ms = performance.now() - start;
+	start = performance.now();
+	for (let index = 0; index < 100; index++) {
+		const result = guessIndentation(buffer, 4, index % 2 === 0);
+		checksum += result.tabSize + (result.insertSpaces ? 1 : 0);
+	}
+	measurements.indentation_queries_ms = performance.now() - start;
 	const observed = process.memoryUsage();
 	process.stdout.write(JSON.stringify({
-		engine, fixture, inputUtf16Units: text.length, columnQueries, characterQueries: 200,
+		engine, fixture, inputUtf16Units: text.length, columnQueries, characterQueries: 200, indentationQueries: 100,
 		measurements,
 		memory: { rssDeltaBytes: observed.rss - baseline.rss, heapUsedDeltaBytes: observed.heapUsed - baseline.heapUsed, peakRssBytes: process.resourceUsage().maxRSS * 1024, wasmLinearMemoryBytes: memory?.buffer.byteLength ?? 0 },
 		checksum

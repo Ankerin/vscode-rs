@@ -19,6 +19,7 @@ import { createTextModel } from '../../src/vs/editor/test/common/testTextModel.j
 import { encodeUTF16 } from '../../src/vs/editor/common/core/utf16Transfer.js';
 import { containsRTL, containsUnusualLineTerminators, isBasicASCII } from '../../src/vs/base/common/strings.js';
 import { readUInt32BE } from '../../src/vs/base/common/buffer.js';
+import { guessIndentation } from '../../src/vs/editor/common/model/indentationGuesser.js';
 
 interface IRustModule extends IRustTextBufferModule {
 	default(options: { module_or_path: Uint8Array }): Promise<{ memory: WebAssembly.Memory }>;
@@ -96,7 +97,7 @@ function compareBuffers(reference: PieceTreeTextBuffer, actual: PieceTreeTextBuf
 }
 
 test('Rust storage rejects stale bindings before registering a model factory', () => {
-	for (const version of [1, 2, 3, 4]) {
+	for (const version of [1, 2, 3, 4, 5]) {
 		assert.throws(() => registerRustTextBuffer({ ...rust, text_buffer_abi_version: () => version }), /storage contract/);
 	}
 	const registration = registerRustTextBuffer(rust);
@@ -148,6 +149,48 @@ test('Rust scalar model queries avoid decoded line transfers', context => {
 	context.after(() => { reference.dispose(); actual.dispose(); });
 	const range = new Range(1, 1, 3, 1);
 	assert.deepStrictEqual([actual.getLineFirstNonWhitespaceColumn(1), actual.getLineLastNonWhitespaceColumn(1), actual.getCharacterCountInRange(range)], [reference.getLineFirstNonWhitespaceColumn(1), reference.getLineLastNonWhitespaceColumn(1), reference.getCharacterCountInRange(range)]);
+});
+
+test('Rust indentation detection preserves seeded alignment, mixed prefixes, and numeric defaults', context => {
+	let seed = 131;
+	const random = (limit: number) => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed % limit; };
+	const prefixes = ['', ' ', '  ', '    ', '      ', '        ', '\t', '\t\t', '\t    ', '  \t', '   ', '     ', '       '];
+	const contents = ['', 'value', 'const a = 1,', 'b = 2;', '- item', '\uD800x\uFEFF\uD83D\uDE00', 'value, ', '\u00A0'];
+	for (let iteration = 0; iteration < 768; iteration++) {
+		const text = Array.from({ length: random(64) }, () => prefixes[random(prefixes.length)] + contents[random(contents.length)]).join(iteration % 2 === 0 ? '\n' : '\r\n');
+		const [reference, actual] = createPair(context, [text]);
+		try {
+			for (const tabSize of [2, 4, 8, 3.5, -0, Number.NaN, Number.POSITIVE_INFINITY]) {
+				for (const insertSpaces of [false, true]) {
+					assert.deepStrictEqual(guessIndentation(actual, tabSize, insertSpaces), guessIndentation(reference, tabSize, insertSpaces), `Indentation ${iteration}/${tabSize}/${insertSpaces}`);
+				}
+			}
+		} finally {
+			reference.dispose();
+			actual.dispose();
+		}
+	}
+});
+
+test('Rust indentation detection keeps the ten-thousand-line limit and avoids line transfers', context => {
+	class IndentationBuffer extends rust.WasmTextBuffer {
+		public static override from_text(text: string): IndentationBuffer { return new IndentationBuffer(encodeUTF16(text)); }
+		public override line_batch(): never { throw new Error('Decoded indentation line transfer'); }
+		public override line_content(): never { throw new Error('Copied indentation line transfer'); }
+		public override line_length(): never { throw new Error('Separate indentation metadata transfer'); }
+	}
+	for (const text of ['root\n'.repeat(10000) + '  child\n    nested', 'const a = 1,\n' + ' '.repeat(65537) + '\uD800x,\n\t  \n  child']) {
+		const reference = createBuffer([text]);
+		const registration = registerRustTextBuffer({ ...rust, WasmTextBuffer: IndentationBuffer });
+		let actual: PieceTreeTextBuffer;
+		try { actual = createBuffer([text]); } finally { registration.dispose(); }
+		context.after(() => { reference.dispose(); actual.dispose(); });
+		for (const tabSize of [2, 4, 8]) {
+			for (const insertSpaces of [false, true]) {
+				assert.deepStrictEqual(guessIndentation(actual, tabSize, insertSpaces), guessIndentation(reference, tabSize, insertSpaces));
+			}
+		}
+	}
 });
 
 test('Rust binding batches validate every original range and text slice before changing the document', () => {
