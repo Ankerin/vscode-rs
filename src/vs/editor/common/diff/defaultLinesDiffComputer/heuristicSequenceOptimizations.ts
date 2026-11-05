@@ -8,8 +8,13 @@ import { OffsetRange } from '../../core/ranges/offsetRange.js';
 import { ISequence, OffsetPair, SequenceDiff } from './algorithms/diffAlgorithm.js';
 import { LineSequence } from './lineSequence.js';
 import { LinesSliceCharSequence } from './linesSliceCharSequence.js';
+import { tryOptimizeRustSequenceDiffs } from './algorithms/rustSequenceDiff.js';
 
 export function optimizeSequenceDiffs(sequence1: ISequence, sequence2: ISequence, sequenceDiffs: SequenceDiff[]): SequenceDiff[] {
+	const native = tryOptimizeRustSequenceDiffs(sequence1, sequence2, sequenceDiffs);
+	if (native) {
+		return native;
+	}
 	let result = sequenceDiffs;
 	result = joinSequenceDiffsByShifting(sequence1, sequence2, result);
 	// Sometimes, calling this function twice improves the result.

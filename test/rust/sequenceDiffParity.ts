@@ -13,6 +13,7 @@ import { DynamicProgrammingDiffing } from '../../src/vs/editor/common/diff/defau
 import { MyersDiffAlgorithm } from '../../src/vs/editor/common/diff/defaultLinesDiffComputer/algorithms/myersDiffAlgorithm.js';
 import { registerRustSequenceDiff, tryComputeRustLineDiff } from '../../src/vs/editor/common/diff/defaultLinesDiffComputer/algorithms/rustSequenceDiff.js';
 import { DefaultLinesDiffComputer } from '../../src/vs/editor/common/diff/defaultLinesDiffComputer/defaultLinesDiffComputer.js';
+import { optimizeSequenceDiffs } from '../../src/vs/editor/common/diff/defaultLinesDiffComputer/heuristicSequenceOptimizations.js';
 import { IRustTextBufferModule, registerRustTextBuffer } from '../../src/vs/editor/common/model/rustTextBuffer/rustTextBuffer.js';
 import { ArraySequence } from './testSequence.js';
 
@@ -150,6 +151,24 @@ test('Rust deadline checks preserve expiration latching and custom DateTimeout i
 	}
 	const fractional = new DateTimeout(0.000001);
 	assert.ok(Number.isInteger(fractional.getDeadline()));
+});
+
+test('Rust diff optimization preserves seeded scored shifts, joins, and malformed binding behavior', () => {
+	class ScoredSequence extends ArraySequence {
+		public getBoundaryScore(offset: number): number { return offset % 7 === 0 ? 100 : offset % 5; }
+	}
+	let seed = 42;
+	const random = (limit: number) => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed % limit; };
+	const algorithm = new MyersDiffAlgorithm();
+	for (let iteration = 0; iteration < 512; iteration++) {
+		const original = new ScoredSequence(Array.from({ length: 1 + random(64) }, () => random(4)));
+		const modified = new ScoredSequence(Array.from({ length: 1 + random(64) }, () => random(4)));
+		const raw = algorithm.compute(original, modified).diffs;
+		const reference = optimizeSequenceDiffs(original, modified, raw);
+		assert.deepStrictEqual(withRust(() => optimizeSequenceDiffs(original, modified, raw)), reference);
+	}
+	assert.throws(() => rust.optimize_diff(new Float64Array([1]), new Float64Array([1]), new Uint32Array([0]), new Uint32Array([0]), new Float64Array(), new Float64Array(), new Uint32Array([0])), /ranges/);
+	assert.strictEqual(rust.optimize_diff(new Float64Array([1]), new Float64Array([1]), new Uint32Array([0]), new Uint32Array([0]), new Float64Array(), new Float64Array(), new Uint32Array([0, 2, 0, 1])), undefined);
 });
 
 test('Rust alignment preserves full display diffs, moved lines, and raw changes for repository fixtures', async () => {

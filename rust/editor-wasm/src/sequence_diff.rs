@@ -5,14 +5,15 @@
 
 use js_sys::Function;
 use vscode_editor_core::{
-	LineEqualityScores, SequenceDiffError, SequenceDiffResult, dynamic_programming_diff, myers_diff,
+	LineEqualityScores, OptimizationSequence, SequenceDiff, SequenceDiffError, SequenceDiffResult,
+	dynamic_programming_diff, myers_diff, optimize_sequence_diffs,
 };
 use wasm_bindgen::prelude::*;
 
 /// Versions sequence alignment independently of the text storage contract.
 #[wasm_bindgen]
 pub fn sequence_diff_abi_version() -> u32 {
-	3
+	4
 }
 
 /// Returns the timeout flag followed by original/modified half-open range tuples.
@@ -100,4 +101,46 @@ fn encode_result(result: SequenceDiffResult) -> Vec<u32> {
 		]);
 	}
 	ranges
+}
+
+/// Applies join/shift heuristics using stable strong identities and boundary scores.
+#[wasm_bindgen]
+pub fn optimize_diff(
+	original: &[f64],
+	modified: &[f64],
+	original_strong: &[u32],
+	modified_strong: &[u32],
+	original_scores: &[f64],
+	modified_scores: &[f64],
+	ranges: &[u32],
+) -> Result<Option<Vec<u32>>, JsError> {
+	let (ranges, remainder) = ranges.as_chunks::<4>();
+	if !remainder.is_empty() {
+		return Err(SequenceDiffError::InvalidRanges.into());
+	}
+	let diffs: Vec<_> = ranges
+		.iter()
+		.map(|range| SequenceDiff {
+			original: range[0] as usize..range[1] as usize,
+			modified: range[2] as usize..range[3] as usize,
+		})
+		.collect();
+	let original = OptimizationSequence {
+		elements: original,
+		strong_elements: original_strong,
+		boundary_scores: original_scores,
+	};
+	let modified = OptimizationSequence {
+		elements: modified,
+		strong_elements: modified_strong,
+		boundary_scores: modified_scores,
+	};
+	match optimize_sequence_diffs(original, modified, &diffs) {
+		Ok(diffs) => Ok(Some(encode_result(SequenceDiffResult {
+			diffs,
+			hit_timeout: false,
+		}))),
+		Err(SequenceDiffError::InvalidRanges | SequenceDiffError::InvalidScores) => Ok(None),
+		Err(error) => Err(error.into()),
+	}
 }

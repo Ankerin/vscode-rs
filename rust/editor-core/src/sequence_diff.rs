@@ -7,6 +7,9 @@
 
 use std::{error::Error, fmt, ops::Range};
 
+mod optimization;
+pub use optimization::{OptimizationSequence, optimize_sequence_diffs};
+
 /// Bounds the quadratic direction matrix before allocating it.
 pub const MAX_DYNAMIC_DIFF_CELLS: usize = 4 * 1024 * 1024;
 
@@ -47,6 +50,7 @@ pub enum SequenceDiffError {
 	TooLarge,
 	AllocationFailed,
 	UnrepresentablePath,
+	InvalidRanges,
 }
 
 impl fmt::Display for SequenceDiffError {
@@ -58,6 +62,7 @@ impl fmt::Display for SequenceDiffError {
 			Self::UnrepresentablePath => {
 				"The sequence diff path requires the existing number semantics"
 			}
+			Self::InvalidRanges => "The sequence diff ranges are invalid or inconsistent",
 		})
 	}
 }

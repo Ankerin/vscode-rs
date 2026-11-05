@@ -12,6 +12,7 @@ export interface IRustSequenceDiffModule {
 	sequence_diff_abi_version(): number;
 	diff_dynamic(original: Float64Array, modified: Float64Array, originalExact: Uint32Array, modifiedExact: Uint32Array, scores: Float64Array, timeout?: () => boolean, deadline?: number): Uint32Array;
 	diff_myers(original: Float64Array, modified: Float64Array, timeout?: () => boolean, deadline?: number): Uint32Array | undefined;
+	optimize_diff(original: Float64Array, modified: Float64Array, originalStrong: Uint32Array, modifiedStrong: Uint32Array, originalScores: Float64Array, modifiedScores: Float64Array, ranges: Uint32Array): Uint32Array | undefined;
 }
 
 const maxDynamicDiffCells = 4 * 1024 * 1024;
@@ -20,7 +21,7 @@ let registeredModule: IRustSequenceDiffModule | undefined;
 
 /** Registers algorithms only for the lifetime of the initialized editor core. */
 export function registerRustSequenceDiff(module: IRustSequenceDiffModule): IDisposable {
-	if (typeof module.sequence_diff_abi_version !== 'function' || module.sequence_diff_abi_version() !== 3) {
+	if (typeof module.sequence_diff_abi_version !== 'function' || module.sequence_diff_abi_version() !== 4) {
 		throw new Error('The Rust sequence diff bindings do not match the current algorithm contract');
 	}
 	if (registeredModule) {
@@ -62,6 +63,50 @@ function getTimeout(timeout: ITimeout): { check: (() => boolean) | undefined; de
 		return { check: undefined, deadline: timeout.getDeadline() };
 	}
 	return { check: () => timeout.isValid(), deadline: undefined };
+}
+
+function toOptimizationData(sequence: ISequence): { elements: Float64Array; strong: Uint32Array; scores: Float64Array } | undefined {
+	if (!sequence.getStrongElement) {
+		return undefined;
+	}
+	const identities = new Map<string | number, number>();
+	const strong = new Uint32Array(sequence.length);
+	for (let offset = 0; offset < strong.length; offset++) {
+		const element = sequence.getStrongElement(offset);
+		if (typeof element === 'number' && Number.isNaN(element)) {
+			return undefined;
+		}
+		let identity = identities.get(element);
+		if (identity === undefined) {
+			identity = identities.size;
+			identities.set(element, identity);
+		}
+		strong[offset] = identity;
+	}
+	const scores = new Float64Array(sequence.getBoundaryScore ? sequence.length + 1 : 0);
+	for (let offset = 0; offset < scores.length; offset++) {
+		scores[offset] = sequence.getBoundaryScore!(offset);
+	}
+	return { elements: toElements(sequence), strong, scores };
+}
+
+/** Ports both join passes and scored shifts while retaining custom sequence fallback. */
+export function tryOptimizeRustSequenceDiffs(original: ISequence, modified: ISequence, diffs: SequenceDiff[]): SequenceDiff[] | undefined {
+	if (!registeredModule || diffs.length === 0 || original.length + modified.length > maxDynamicDiffCells) {
+		return undefined;
+	}
+	const first = toOptimizationData(original);
+	const second = toOptimizationData(modified);
+	if (!first || !second) {
+		return undefined;
+	}
+	const ranges = new Uint32Array(diffs.length * 4);
+	for (let index = 0; index < diffs.length; index++) {
+		const diff = diffs[index];
+		ranges.set([diff.seq1Range.start, diff.seq1Range.endExclusive, diff.seq2Range.start, diff.seq2Range.endExclusive], index * 4);
+	}
+	const result = registeredModule.optimize_diff(first.elements, second.elements, first.strong, second.strong, first.scores, second.scores, ranges);
+	return result ? decodeResult(result, InfiniteTimeout.instance).diffs : undefined;
 }
 
 /** Uses native frontier/path state for large sequences, falling back at its allocation limits. */

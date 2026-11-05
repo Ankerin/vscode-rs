@@ -11,4 +11,5 @@ export class ArraySequence implements ISequence {
 	public get length(): number { return this.elements.length; }
 	public getElement(offset: number): number { return this.elements[offset]; }
 	public isStronglyEqual(first: number, second: number): boolean { return this.elements[first] === this.elements[second]; }
+	public getStrongElement(offset: number): number { return this.elements[offset]; }
 }

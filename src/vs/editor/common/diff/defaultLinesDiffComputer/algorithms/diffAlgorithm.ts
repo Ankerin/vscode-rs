@@ -167,6 +167,9 @@ export interface ISequence {
 	 * It prevents shifting to less matching lines.
 	 */
 	isStronglyEqual(offset1: number, offset2: number): boolean;
+
+	/** Optional stable identity for native heuristics; equality must match isStronglyEqual. */
+	getStrongElement?(offset: number): number | string;
 }
 
 export interface ITimeout {

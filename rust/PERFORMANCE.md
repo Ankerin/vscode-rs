@@ -110,7 +110,9 @@ These results are not sufficient to promote Rust storage as the default or claim
 
 Process RSS and heap observations in the raw artifact are sampled at one workload point while most snapshots remain retained. They are not a peak-memory profiler or an application-wide memory baseline. V8 and WebAssembly allocators can retain capacity after disposal, and submillisecond measurements and GC-sensitive extraction timings vary between runs. Do not interpret a smaller JavaScript heap as equivalent total-memory savings.
 
-## Sequence diff observation
+## Sequence alignment observation
+
+This observation describes sequence ABI 3 before native shift/join optimization. The following section records the newer stage.
 
 Measured on November 5, 2026, Windows x64, Node `24.22.1`, Rust `1.99.1`, wasm-bindgen `0.2.130`, and js-sys `0.3.107`, using release WebAssembly and the current bundled TypeScript sources. Run `pnpm run benchmark-rust-editor -- --diff`. The same runner alternates three fresh processes per engine and fixture; all paired result checksums matched. Three warmup iterations precede an explicit GC and the timed work. Input construction and result serialization/checksums are outside the timing intervals. Sequence extraction, typed binding transfers, complete diff heuristics, and range translation remain inside them.
 
@@ -160,3 +162,34 @@ Process peak RSS below comes from `process.resourceUsage().maxRSS` over each ent
 | Unicode | 172.31 | 67.55 | 1.38 |
 
 These observations support lower peak process memory and faster alignment for the measured diff workloads. They do not establish editor startup, rendering latency, application-wide memory savings, arbitrary equality-score performance, or worst-case diff behavior. V8 and WebAssembly allocation retention, GC, fixture shape, and submillisecond noise influence the numbers. Raw runs remain in the ignored `.build/rust/diff-benchmark.json`; existing text-storage observations above are unchanged.
+
+
+## Sequence optimization observation
+
+Measured under the same method, fixture inputs, repetition counts, and software versions on November 5, 2026. Sequence ABI 4 additionally runs both shift/join passes and scored insertion/deletion shifts in Rust. The bridge transfers stable strong identities and boundary scores for each optimization; sequences without that contract keep the existing implementation. All result checksums matched. Times are medians of three fresh processes, in milliseconds.
+
+| Fixture | Workload | Existing | Rust/WASM |
+| --- | --- | ---: | ---: |
+| small | Ten display diffs | 13.09 | 11.37 |
+| small | Ten timed display diffs | 36.85 | 29.19 |
+| small | Ten display diffs with raw edits | 26.84 | 10.77 |
+| medium | Ten display diffs | 144.74 | 59.72 |
+| medium | Ten timed display diffs | 455.69 | 413.59 |
+| medium | Ten display diffs with raw edits | 123.74 | 57.54 |
+| large | Ten display diffs | 145.00 | 110.60 |
+| large | Ten timed display diffs | 360.42 | 332.17 |
+| large | Ten display diffs with raw edits | 108.72 | 94.13 |
+| unicode | Ten display diffs | 59.27 | 33.64 |
+| unicode | Ten timed display diffs | 201.58 | 183.12 |
+| unicode | Ten display diffs with raw edits | 56.87 | 27.73 |
+
+Process peak RSS and final linear memory use the same method and MiB units as the preceding observation.
+
+| Fixture | Existing process peak RSS | Rust process peak RSS | Rust linear memory at completion |
+| --- | ---: | ---: | ---: |
+| small | 64.80 | 64.02 | 1.13 |
+| medium | 322.55 | 74.12 | 1.75 |
+| large | 129.80 | 106.08 | 1.88 |
+| unicode | 175.14 | 69.23 | 1.38 |
+
+The complete Rust-backed pipeline remains faster than the paired reference in these fixtures. Native optimization does not provide an additional speed gain over the preceding Rust alignment stage: identity/score construction and repeated typed transfers add overhead, particularly in the large fixture. Move the owning sequence state and remaining refinement algorithms into Rust to remove these repeated conversions. Do not use this stage as evidence of faster application rendering or lower full-product memory. Current raw runs are in the ignored `.build/rust/diff-benchmark.json`; the preceding alignment-stage raw runs were retained locally as `.build/rust/diff-benchmark-alignment.json`.

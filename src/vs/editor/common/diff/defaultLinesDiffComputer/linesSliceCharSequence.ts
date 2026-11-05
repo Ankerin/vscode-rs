@@ -177,6 +177,10 @@ export class LinesSliceCharSequence implements ISequence {
 		return this.elements[offset1] === this.elements[offset2];
 	}
 
+	public getStrongElement(offset: number): number {
+		return this.elements[offset];
+	}
+
 	public extendToFullLines(range: OffsetRange): OffsetRange {
 		const start = findLastMonotonous(this.firstElementOffsetByLineIdx, x => x <= range.start) ?? 0;
 		const end = findFirstMonotonous(this.firstElementOffsetByLineIdx, x => range.endExclusive <= x) ?? this.elements.length;
