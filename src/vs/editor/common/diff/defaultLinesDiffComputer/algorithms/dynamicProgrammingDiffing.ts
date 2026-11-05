@@ -6,6 +6,7 @@
 import { OffsetRange } from '../../../core/ranges/offsetRange.js';
 import { IDiffAlgorithm, SequenceDiff, ISequence, ITimeout, InfiniteTimeout, DiffAlgorithmResult } from './diffAlgorithm.js';
 import { Array2D } from '../utils.js';
+import { tryComputeRustDynamicDiff } from './rustSequenceDiff.js';
 
 /**
  * A O(MN) diffing algorithm that supports a score function.
@@ -15,6 +16,12 @@ export class DynamicProgrammingDiffing implements IDiffAlgorithm {
 	compute(sequence1: ISequence, sequence2: ISequence, timeout: ITimeout = InfiniteTimeout.instance, equalityScore?: (offset1: number, offset2: number) => number): DiffAlgorithmResult {
 		if (sequence1.length === 0 || sequence2.length === 0) {
 			return DiffAlgorithmResult.trivial(sequence1, sequence2);
+		}
+		if (!equalityScore) {
+			const result = tryComputeRustDynamicDiff(sequence1, sequence2, timeout);
+			if (result) {
+				return result;
+			}
 		}
 
 		/**

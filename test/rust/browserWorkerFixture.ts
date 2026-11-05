@@ -39,10 +39,11 @@ export async function inspectBrowserWorker(initialization: IRustTextBufferInitia
 		await client.proxy.$acceptNewModel(data);
 		await client.proxy.$acceptModelChanged(data.url, event);
 		const state = await client.proxy.$inspectModel(data.url, offsets);
+		const diffs = await Promise.all([0, 30000].map(maxComputationTimeMs => client.proxy.$computeStringDiff('a a'.repeat(256), 'b b'.repeat(256), { maxComputationTimeMs }, 'advanced')));
 		await client.proxy.$acceptRemovedModel(data.url);
 		const removed = await client.proxy.$inspectModel(data.url, []);
 		await client.proxy.$disposeWorker();
-		return { state, removed, initializationFailed, disposed: await client.proxy.$inspectRealm() };
+		return { state, diffs, removed, initializationFailed, disposed: await client.proxy.$inspectRealm() };
 	} finally {
 		store.dispose();
 	}

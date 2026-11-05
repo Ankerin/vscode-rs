@@ -3,13 +3,14 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { IDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
+import { DisposableStore, IDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
 import { Position } from '../../core/position.js';
 import { Range } from '../../core/range.js';
 import { FindMatch, ITextSnapshot, SearchData } from '../../model.js';
 import { Searcher, createFindMatch, isValidMatch } from '../textModelSearch.js';
 import { StringBuffer } from '../pieceTreeTextBuffer/pieceTreeBase.js';
 import { ITextBufferStorage, ITextBufferStorageEdit, registerTextBufferStorageFactory } from './textBufferStorage.js';
+import { IRustSequenceDiffModule, registerRustSequenceDiff } from '../../diff/defaultLinesDiffComputer/algorithms/rustSequenceDiff.js';
 
 /** The generated binding surface; UTF-16 arrays preserve JavaScript string semantics. */
 export interface IRustTextBuffer {
@@ -38,7 +39,7 @@ interface IRustTextSnapshot {
 	free(): void;
 }
 
-export interface IRustTextBufferModule {
+export interface IRustTextBufferModule extends IRustSequenceDiffModule {
 	text_buffer_abi_version(): number;
 	WasmTextBuffer: {
 		new(units: Uint16Array): IRustTextBuffer;
@@ -323,7 +324,14 @@ export function registerRustTextBuffer(module: IRustTextBufferModule, initializa
 	if (typeof module.text_buffer_abi_version !== 'function' || module.text_buffer_abi_version() !== 3) {
 		throw new Error('The Rust text buffer bindings do not match the current storage contract');
 	}
-	const registration = registerTextBufferStorageFactory((chunks, eol, eolNormalized) => new RustTextBufferStorage(module, chunks, eol, eolNormalized));
+	const registration = new DisposableStore();
+	try {
+		registration.add(registerTextBufferStorageFactory((chunks, eol, eolNormalized) => new RustTextBufferStorage(module, chunks, eol, eolNormalized)));
+		registration.add(registerRustSequenceDiff(module));
+	} catch (error) {
+		registration.dispose();
+		throw error;
+	}
 	registeredInitialization = initialization;
 	return toDisposable(() => {
 		registration.dispose();

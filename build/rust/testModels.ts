@@ -39,7 +39,10 @@ await build({
 
 const testArgs = [
 	...tests.flatMap(file => ['--run', `src/vs/editor/test/common/model/${file}`]),
-	'--run', 'src/vs/editor/test/common/services/editorWebWorker.test.ts'
+	'--run', 'src/vs/editor/test/common/services/editorWebWorker.test.ts',
+	'--run', 'src/vs/editor/test/common/diff/diffComputer.test.ts',
+	'--run', 'src/vs/editor/test/node/diffing/defaultLinesDiffComputer.test.ts',
+	'--run', 'src/vs/editor/test/node/diffing/verifyLinesDiff.test.ts'
 ];
 for (const engine of ['existing', 'rust']) {
 	const args = engine === 'rust' ? ['--import', pathToFileURL(output).href] : [];
@@ -58,5 +61,5 @@ for (const engine of ['existing', 'rust']) {
 		process.exit(result.status ?? 1);
 	}
 	const count = /(?<count>\d+) passing/.exec(stripVTControlCharacters(result.stdout))?.groups?.count;
-	console.log(`${engine}: ${count ?? 'all selected'} model tests passed through the canonical unit runner`);
+	console.log(`${engine}: ${count ?? 'all selected'} model, worker, and diff tests passed through the canonical unit runner`);
 }

@@ -1,4 +1,4 @@
-# Rust Text Storage Performance
+# Rust Editor Performance
 
 ## Method
 
@@ -109,3 +109,54 @@ Each fixture ends with LF and therefore has a final empty line. Insertions conta
 These results are not sufficient to promote Rust storage as the default or claim that the application is faster or uses fewer resources overall. The historical and current tables use different Node versions and implementation stages; use the existing/Rust pair within the current run for direct comparisons.
 
 Process RSS and heap observations in the raw artifact are sampled at one workload point while most snapshots remain retained. They are not a peak-memory profiler or an application-wide memory baseline. V8 and WebAssembly allocators can retain capacity after disposal, and submillisecond measurements and GC-sensitive extraction timings vary between runs. Do not interpret a smaller JavaScript heap as equivalent total-memory savings.
+
+## Sequence diff observation
+
+Measured on November 5, 2026, Windows x64, Node `24.22.1`, Rust `1.99.1`, wasm-bindgen `0.2.130`, and js-sys `0.3.107`, using release WebAssembly and the current bundled TypeScript sources. Run `pnpm run benchmark-rust-editor -- --diff`. The same runner alternates three fresh processes per engine and fixture; all paired result checksums matched. Three warmup iterations precede an explicit GC and the timed work. Input construction and result serialization/checksums are outside the timing intervals. Sequence extraction, typed binding transfers, complete diff heuristics, and range translation remain inside them.
+
+Each document contains numbered source lines, replaces `return` with `yield` every seventeenth line, and relocates eight lines from index 20 to the midpoint. Unicode lines include U+03A9, U+6F22, U+1F600, and an unpaired high surrogate. Standalone alignment uses up to 800 numeric elements with every thirteenth element changed. Each reported alignment workload repeats 20 times; each complete diff workload repeats ten times. Timed display diffs use a 30,000 ms budget per computation and check the same cell/frontier frequency as the reference. These workloads do not expire that budget.
+
+| Fixture | Lines per document | Original UTF-16 units | Standalone sequence elements |
+| --- | ---: | ---: | ---: |
+| Small source | 120 | 5,458 | 120 |
+| Medium source | 800 | 37,018 | 800 |
+| Large source | 4,000 | 188,534 | 800 |
+| Unicode source | 500 | 22,592 | 500 |
+
+Times are medians of three processes, in milliseconds.
+
+| Fixture | Workload | Existing | Rust/WASM |
+| --- | --- | ---: | ---: |
+| Small | 20 dynamic alignments | 9.72 | 1.64 |
+| Small | 20 Myers alignments | 0.31 | 0.26 |
+| Small | Ten display diffs | 21.91 | 7.64 |
+| Small | Ten timed display diffs | 36.98 | 29.25 |
+| Small | Ten display diffs with raw edits | 25.34 | 9.16 |
+| Medium | 20 dynamic alignments | 186.43 | 60.81 |
+| Medium | 20 Myers alignments | 9.73 | 2.14 |
+| Medium | Ten display diffs | 142.83 | 54.54 |
+| Medium | Ten timed display diffs | 441.29 | 406.46 |
+| Medium | Ten display diffs with raw edits | 127.26 | 54.61 |
+| Large | 20 dynamic alignments | 181.94 | 62.13 |
+| Large | 20 Myers alignments | 10.63 | 2.00 |
+| Large | Ten display diffs | 141.33 | 83.65 |
+| Large | Ten timed display diffs | 344.56 | 314.06 |
+| Large | Ten display diffs with raw edits | 110.04 | 72.89 |
+| Unicode | 20 dynamic alignments | 79.63 | 23.81 |
+| Unicode | 20 Myers alignments | 6.21 | 0.89 |
+| Unicode | Ten display diffs | 65.33 | 26.80 |
+| Unicode | Ten timed display diffs | 185.16 | 170.08 |
+| Unicode | Ten display diffs with raw edits | 49.01 | 25.35 |
+
+The initial per-cell JavaScript timeout callback made timed display diffs 1.38–1.54 times slower in these fixtures. Sequence ABI 3 instead passes the unchanged `DateTimeout` deadline to Rust/WASM and imports `Date.now()` directly, preserving custom checks and timeout latching. The current timed runs improve modestly; untimed runs improve more. The clock check still accounts for a substantial fraction of timed dynamic alignment.
+
+Process peak RSS below comes from `process.resourceUsage().maxRSS` over each entire fresh-process fixture, including initialization and warmup. WebAssembly linear memory is recorded at the end and is already part of the process footprint, so the columns must not be added together. Values are medians in MiB.
+
+| Fixture | Existing process peak RSS | Rust process peak RSS | Rust linear memory at completion |
+| --- | ---: | ---: | ---: |
+| Small | 64.31 | 62.68 | 1.13 |
+| Medium | 316.64 | 69.61 | 1.75 |
+| Large | 130.10 | 103.84 | 1.81 |
+| Unicode | 172.31 | 67.55 | 1.38 |
+
+These observations support lower peak process memory and faster alignment for the measured diff workloads. They do not establish editor startup, rendering latency, application-wide memory savings, arbitrary equality-score performance, or worst-case diff behavior. V8 and WebAssembly allocation retention, GC, fixture shape, and submillisecond noise influence the numbers. Raw runs remain in the ignored `.build/rust/diff-benchmark.json`; existing text-storage observations above are unchanged.

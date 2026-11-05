@@ -90,11 +90,13 @@ Editor worker mirrors use the registered Rust storage without retaining a second
 
 ## Migration sequence
 
+The advanced diff pipeline delegates weighted line and unweighted character alignment to Rust dynamic programming and Myers algorithms. Dynamic programming uses byte directions and one rolling score/run-length row. Myers uses separate growing diagonal sides and an indexed path arena, preserving the original typed-frontier number semantics and path preferences. Typed boundaries preserve numeric equality, UTF-16 offsets, and half-open ranges. Sequence ABI 3 includes native deadline checks; `DateTimeout` exposes its millisecond deadline and latches native expiration, while overridden/custom timeout checks remain callbacks. Allocation limits preserve the existing fallback rather than introducing a new visible error. Existing diff heuristics, move detection, and range translation remain migration work.
+
 | Stage | Scope | Required result before advancing | Current status |
 | --- | --- | --- | --- |
 | 0 | Baselines, architecture, toolchain, formatting, validation commands | Reproducible native/WASM builds and explicit compatibility gates | Architecture and build/test foundation implemented; complete application baselines pending |
 | 1 | Text storage | Differential tests against real buffer/model operations, resource lifetime checks, workload benchmarks, worker/web parity | Desktop and editor worker storage implemented behind an internal flag; Node/Chromium worker parity checked; full web, packaging, and promotion gates pending |
-| 2 | Remaining editor model | Undo/redo, edits, selections, decorations, search, diff, bracket/folding state, tokens, Unicode behavior ported with existing contracts | Plain storage-level literal search and model batch application implemented; remaining model algorithms planned |
+| 2 | Remaining editor model | Undo/redo, edits, selections, decorations, search, diff, bracket/folding state, tokens, Unicode behavior ported with existing contracts | Literal search, model batch application, weighted dynamic diff, and Myers alignment implemented; remaining model/diff algorithms planned |
 | 3 | Native platform services | Files/encoding/watchers, workspace search, storage/configuration, process management, clipboard, dialogs, trust, lifecycle migrated individually | Planned |
 | 4 | Terminal and development tools | PTY/ConPTY, shell integration, terminal state, tasks, Git/SCM, LSP/DAP, debug sessions, diagnostics retain behavior | Planned |
 | 5 | Extensions and rich editors | Extension API and built-in contributions, webviews, notebook models/renderers, custom editors, authentication, synchronization retain contracts | Planned |

@@ -8,11 +8,12 @@ See [Architecture](ARCHITECTURE.md) for the complete target, subsystem boundarie
 
 | Directory | Responsibility | Status |
 | --- | --- | --- |
-| `editor-core/` | Platform-independent UTF-16 text storage, positions, edits, literal search, and immutable snapshots | Implemented and tested natively |
+| `editor-core/` | Platform-independent UTF-16 storage, positions, edits, literal search, immutable snapshots, and sequence diff algorithms | Implemented and tested natively |
 | `editor-wasm/` | Typed WebAssembly bindings for the same Rust core | Implemented and tested against existing editor models |
 | `../src/vs/editor/common/model/rustTextBuffer/` | Storage adapter beneath `PieceTreeTextBuffer` | Implemented; opt-in |
 | `../src/vs/editor/browser/model/` | Browser resource loading of generated bindings | Implemented for desktop startup |
 | `../src/vs/editor/common/services/textModelSync/` | Rust-backed editor worker mirror storage and lifecycle | Implemented; follows the renderer's opt-in initialization |
+| `../src/vs/editor/common/diff/defaultLinesDiffComputer/algorithms/` | Native dynamic and Myers sequence alignment beneath existing diff heuristics | Implemented; follows the core registration |
 | `../build/rust/` | Binding generation and compatibility test runner | Implemented |
 | `../test/rust/` | Tests against the existing buffer and text model | Implemented |
 | `../.github/workflows/rust-editor.yml` | Native OS matrix and WebAssembly compatibility CI | Configured; remote runs not verified locally |
@@ -40,7 +41,7 @@ From the repository root:
 pnpm run build-rust-editor
 ```
 
-The command builds a release WebAssembly module and generates JavaScript bindings and declarations under `out/vs/editor/common/model/rustTextBuffer/`. Generated files are ignored by Git. The generator must exactly match the pinned `wasm-bindgen` crate version. The adapter validates storage ABI version 3 before registering a factory, so stale assets are rejected during initialization and desktop startup retains the existing storage. Run this command after any client build that replaces `out/`.
+The command builds a release WebAssembly module and generates JavaScript bindings and declarations under `out/vs/editor/common/model/rustTextBuffer/`. Generated files are ignored by Git. The generator must exactly match the pinned `wasm-bindgen` crate version. Registration validates storage ABI version 3 and sequence diff ABI version 3; stale assets are rejected atomically, and desktop startup retains the existing implementations. Run this command after any client build that replaces `out/`.
 
 From `rust/`, a native build of the core is also available:
 
@@ -95,6 +96,8 @@ pnpm run test-rust-editor -- --browser
 
 The browser fixture checks model synchronization, UTF-16 coordinates, failed WASM loading, and disposal during initialization with real browser APIs. It does not launch the workbench or establish visual parity.
 
+Sequence diff checks compare both native algorithms with the real existing implementations over seeded numeric sequences, including NaN, infinities, fractional values, and surrogates. They check weighted line preference, timeout callback order and exceptions, expiration latching, long/equal inputs, and bounded-state fallback. All 58 repository diff fixtures are compared for display ranges, moved lines, and raw character edits with both trim-whitespace modes. The inputs and expected fixture files remain unchanged. Browser workers also compute string edits with and without a deadline through the existing RPC.
+
 The November 5, 2026 desktop validation attempt used the repository-pinned Node `24.22.1` and Electron `43.8.6` after building the client and built-in extensions. The application exited before workbench restoration because its existing `@vscode/policy-watcher` native binding was missing. Rebuilding the native dependencies reported MSBuild `MSB8040`: the selected MSVC toolset lacks its required Spectre libraries. No desktop screenshot or live editing result was obtained. Prepare the required Visual Studio components and native dependencies through the existing repository setup before repeating this gate.
 
 To run the existing model, search, edit, undo, decoration, and editor worker suites through the canonical Node unit runner with both storage implementations:
@@ -117,6 +120,14 @@ pnpm run benchmark-rust-editor
 
 The runner alternates three fresh processes for each implementation and fixture: ASCII source, Latin-1, Unicode with supplementary characters, and long lines. It exercises the same input and operations, checks a matching output checksum within each fixture, prints median timings, and saves raw runs plus process-memory observations to the ignored `.build/rust/benchmark.json`. A separate document exercises 200 batches of 32 cursor insertions. Literal searches cover both present and absent results after distributed editing. See [Performance](PERFORMANCE.md) for the current measurements and their limits. Timings are diagnostic and are not flaky pass/fail assertions.
 
+For sequence alignment and the complete existing display/raw diff pipeline:
+
+```sh
+pnpm run benchmark-rust-editor -- --diff
+```
+
+This mode alternates three fresh processes per engine and fixture, checks identical results, and records raw timings and process peak RSS in `.build/rust/diff-benchmark.json`. It includes real deadlines; deadline checks stay at the original cell/frontier frequency. Custom timeout implementations keep their callback contract.
+
 ## Current limits
 
 - The Rust rope uses one-byte Latin-1 leaves when all units fit, and two-byte UTF-16 leaves otherwise. Split leaves share their backing and line-ending indexes. The compact encoding reduces that leaf's text payload by half compared with the previous Rust representation; node, index, allocator, snapshot, and application overhead must still be measured before making total-memory claims.
@@ -124,4 +135,5 @@ The runner alternates three fresh processes for each implementation and fixture:
 - Drained snapshots explicitly release their Rust version. An abandoned snapshot is retained until its generated binding is collected through `FinalizationRegistry`, because the existing `ITextSnapshot` contract has no disposal method.
 - Rust performs the storage adapter's plain literal search without copying lines, with nonoverlapping matches and existing start-column range semantics. The core uses KMP across leaf boundaries and the `memchr` safe API to skip compact-leaf prefixes. The model submits validated replacement batches in one binding call; Rust validates all original ranges before committing. Single edits use one replacement instead of separate deletion/insertion calls. Case folding, word boundaries, capture groups, public regex/multiline search, inverse edit generation, notifications, and undo orchestration remain in their existing JavaScript implementations.
 - `getPieceTree()` is an existing implementation-specific test helper. It is available only for the original storage; Rust models expose the normal `ITextBuffer` API instead.
+- Dynamic and Myers sequence alignment execute in Rust while existing trimming, hashes, boundary scores, word/subword heuristics, move detection, and range translation remain in TypeScript. Arbitrary dynamic equality-score callbacks retain the existing implementation. Native quadratic directions, diagonal frontiers, and path arenas are bounded; unsupported states retain the existing fallback. Sequence input/output conversion still allocates typed arrays.
 - Tauri is not introduced. Changing the rendering engine is a separate decision that must pass the cross-platform visual and interaction gates.

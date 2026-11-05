@@ -5,6 +5,7 @@
 
 import { OffsetRange } from '../../../core/ranges/offsetRange.js';
 import { DiffAlgorithmResult, IDiffAlgorithm, ISequence, ITimeout, InfiniteTimeout, SequenceDiff } from './diffAlgorithm.js';
+import { tryComputeRustMyersDiff } from './rustSequenceDiff.js';
 
 /**
  * An O(ND) diff algorithm that has a quadratic space worst-case complexity.
@@ -15,6 +16,10 @@ export class MyersDiffAlgorithm implements IDiffAlgorithm {
 		// The early return improves performance dramatically.
 		if (seq1.length === 0 || seq2.length === 0) {
 			return DiffAlgorithmResult.trivial(seq1, seq2);
+		}
+		const rustResult = tryComputeRustMyersDiff(seq1, seq2, timeout);
+		if (rustResult) {
+			return rustResult;
 		}
 
 		const seqX = seq1; // Text on the x axis

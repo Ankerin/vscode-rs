@@ -13,6 +13,7 @@ import { URI } from '../../src/vs/base/common/uri.js';
 import { Range } from '../../src/vs/editor/common/core/range.js';
 import { IModelChangedEvent } from '../../src/vs/editor/common/model/mirrorTextModel.js';
 import { MirrorModel } from '../../src/vs/editor/common/services/textModelSync/textModelSync.impl.js';
+import { EditorWorker } from '../../src/vs/editor/common/services/editorWebWorker.js';
 import type { inspectBrowserWorker } from './browserWorkerFixture.js';
 
 test('Chromium workers preserve model parity, initialization failures, and disposal during WASM loading', { timeout: 60000 }, async context => {
@@ -71,6 +72,9 @@ test('Chromium workers preserve model parity, initialization failures, and dispo
 	const reference = new MirrorModel(URI.parse(data.url), data.lines.slice(), data.EOL, data.versionId);
 	context.after(() => reference.dispose());
 	reference.onEvents(event);
+	const referenceWorker = new EditorWorker();
+	context.after(() => referenceWorker.dispose());
+	const diffs = await Promise.all([0, 30000].map(maxComputationTimeMs => referenceWorker.$computeStringDiff('a a'.repeat(256), 'b b'.repeat(256), { maxComputationTimeMs }, 'advanced')));
 	for (const mode of ['normal', 'failed', 'disposed'] as const) {
 		const wasmUrl = `${origin}/${mode === 'failed' ? 'missing.wasm' : 'vscode_editor_wasm_bg.wasm'}`;
 		if (mode === 'disposed') {
@@ -92,7 +96,7 @@ test('Chromium workers preserve model parity, initialization failures, and dispo
 				text: reference.getValue(), lines: reference.getLinesContent(), version: reference.version, eol: reference.eol,
 				positions: offsets.map(offset => reference.positionAt(offset)), rustInitialized: mode === 'normal'
 			},
-			removed: null, initializationFailed: mode === 'failed', disposed: { rustInitialized: false, models: 0 }
+			diffs, removed: null, initializationFailed: mode === 'failed', disposed: { rustInitialized: false, models: 0 }
 		});
 	}
 	assert.deepStrictEqual(errors, []);

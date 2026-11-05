@@ -10,6 +10,7 @@ on:
       - 'src/vs/editor/common/model/**'
       - 'src/vs/editor/browser/model/**'
       - 'src/vs/editor/common/services/**'
+      - 'src/vs/editor/common/diff/**'
       - 'src/vs/editor/browser/services/**'
       - 'src/vs/editor/test/common/services/editorWebWorker.test.ts'
       - 'src/vs/workbench/electron-browser/desktop.main.ts'

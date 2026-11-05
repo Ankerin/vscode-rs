@@ -205,4 +205,15 @@ export class DateTimeout implements ITimeout {
 		this.isValid = () => true;
 		this.valid = true;
 	}
+
+	/** Exposes the same absolute deadline to native synchronous algorithms. */
+	public getDeadline(): number {
+		// Date.now() advances in whole milliseconds; rounding the duration preserves fractional budgets.
+		return this.valid ? this.startTime + Math.ceil(this.timeout) : Number.NEGATIVE_INFINITY;
+	}
+
+	/** Latches expiration observed by the native algorithm, matching isValid(). */
+	public invalidate(): void {
+		this.valid = false;
+	}
 }

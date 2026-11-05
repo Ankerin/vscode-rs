@@ -19,6 +19,7 @@ import { computeMovedLines } from './computeMovedLines.js';
 import { extendDiffsToEntireWordIfAppropriate, optimizeSequenceDiffs, removeShortMatches, removeVeryShortMatchingLinesBetweenDiffs, removeVeryShortMatchingTextBetweenLongDiffs } from './heuristicSequenceOptimizations.js';
 import { LineSequence } from './lineSequence.js';
 import { LinesSliceCharSequence } from './linesSliceCharSequence.js';
+import { tryComputeRustLineDiff } from './algorithms/rustSequenceDiff.js';
 
 export class DefaultLinesDiffComputer implements ILinesDiffComputer {
 	private readonly dynamicProgrammingDiffing = new DynamicProgrammingDiffing();
@@ -77,7 +78,7 @@ export class DefaultLinesDiffComputer implements ILinesDiffComputer {
 		const lineAlignmentResult = (() => {
 			if (sequence1.length + sequence2.length < 1700) {
 				// Use the improved algorithm for small files
-				return this.dynamicProgrammingDiffing.compute(
+				return tryComputeRustLineDiff(sequence1, sequence2, originalLines, modifiedLines, timeout) ?? this.dynamicProgrammingDiffing.compute(
 					sequence1,
 					sequence2,
 					timeout,
