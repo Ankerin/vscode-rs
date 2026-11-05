@@ -5,8 +5,10 @@
 
 import { IDisposable, toDisposable } from '../../../base/common/lifecycle.js';
 import { IRange, Range } from '../core/range.js';
+import { OffsetRange } from '../core/ranges/offsetRange.js';
 import { decodeUTF16, encodeUTF16 } from '../core/utf16Transfer.js';
-import type { LineTokens } from './lineTokens.js';
+import type { LineTokens, TokenInfo } from './lineTokens.js';
+import type { TokenWithTextInfo } from './tokenWithTextArray.js';
 import type { SparseLineTokens, SparseMultilineTokens } from './sparseMultilineTokens.js';
 import type { ContiguousMultilineTokens } from './contiguousMultilineTokens.js';
 
@@ -29,6 +31,9 @@ export interface IRustTokensModule {
 	line_tokens_equal(first: Uint32Array, second: Uint32Array, from: number, count: number): boolean | undefined;
 	line_tokens_in_range(tokens: Uint32Array, start: number, end: number): Float64Array | undefined;
 	insert_line_tokens(tokens: Uint32Array, text: Uint16Array, insertedText: Uint16Array, parameters: Float64Array): [Uint32Array, Uint16Array] | undefined;
+	line_token_array(tokens: Uint32Array, textLength: number, text: boolean): Float64Array | undefined;
+	slice_token_array(lengths: Float64Array, start: number, end: number): Float64Array | undefined;
+	create_line_tokens(data: { text: string; metadata: number }[]): [Uint32Array, string] | undefined;
 	WasmContiguousTokensStore: { new(empty: ArrayBuffer): IRustContiguousTokensStore };
 	WasmSparseTokensStore: { new(standardEdit?: SparseMultilineTokens['acceptEdit']): IRustSparseTokensStore };
 }
@@ -58,10 +63,11 @@ export interface IRustContiguousTokensStore {
 }
 
 let registeredModule: IRustTokensModule | undefined;
+const standardArrayIterator = Array.prototype[Symbol.iterator];
 
 /** Installs token composition for the initialized core's disposable scope. */
 export function registerRustTokens(module: IRustTokensModule): IDisposable {
-	if (typeof module.tokens_abi_version !== 'function' || module.tokens_abi_version() !== 8 || typeof module.merge_semantic_tokens !== 'function' || typeof module.update_sparse_tokens !== 'function' || typeof module.split_sparse_tokens !== 'function' || typeof module.update_contiguous_tokens !== 'function' || typeof module.append_contiguous_tokens !== 'function' || typeof module.edit_contiguous_tokens_block !== 'function' || typeof module.contiguous_token_blocks_size !== 'function' || typeof module.serialize_contiguous_token_blocks !== 'function' || typeof module.encode_contiguous_token_blocks !== 'function' || typeof module.decode_contiguous_token_blocks !== 'function' || typeof module.line_token_index !== 'function' || typeof module.line_token_slice_info !== 'function' || typeof module.convert_line_token_offsets !== 'function' || typeof module.line_tokens_equal !== 'function' || typeof module.line_tokens_in_range !== 'function' || typeof module.insert_line_tokens !== 'function' || typeof module.WasmContiguousTokensStore !== 'function' || typeof module.WasmSparseTokensStore !== 'function') {
+	if (typeof module.tokens_abi_version !== 'function' || module.tokens_abi_version() !== 9 || typeof module.merge_semantic_tokens !== 'function' || typeof module.update_sparse_tokens !== 'function' || typeof module.split_sparse_tokens !== 'function' || typeof module.update_contiguous_tokens !== 'function' || typeof module.append_contiguous_tokens !== 'function' || typeof module.edit_contiguous_tokens_block !== 'function' || typeof module.contiguous_token_blocks_size !== 'function' || typeof module.serialize_contiguous_token_blocks !== 'function' || typeof module.encode_contiguous_token_blocks !== 'function' || typeof module.decode_contiguous_token_blocks !== 'function' || typeof module.line_token_index !== 'function' || typeof module.line_token_slice_info !== 'function' || typeof module.convert_line_token_offsets !== 'function' || typeof module.line_tokens_equal !== 'function' || typeof module.line_tokens_in_range !== 'function' || typeof module.insert_line_tokens !== 'function' || typeof module.line_token_array !== 'function' || typeof module.slice_token_array !== 'function' || typeof module.create_line_tokens !== 'function' || typeof module.WasmContiguousTokensStore !== 'function' || typeof module.WasmSparseTokensStore !== 'function') {
 		throw new Error('The Rust token bindings do not match the current metadata contract');
 	}
 	if (registeredModule) { throw new Error('A Rust token module is already registered'); }
@@ -141,6 +147,50 @@ export function tryInsertRustLineTokens(tokens: Uint32Array, count: number, text
 	if (!result) { return undefined; }
 	if (!Array.isArray(result) || result.length !== 2 || !(result[0] instanceof Uint32Array) || result[0].length % 2 !== 0 || !(result[1] instanceof Uint16Array) || (result[0].length > 1 ? result[0][result[0].length - 2] : 0) !== result[1].length) { throw new Error('The Rust line token insertion result does not match the editor contract'); }
 	return [result[0], decodeUTF16(result[1])];
+}
+
+/** Retains original provider callbacks for subclassed or externally overridden line tokens. */
+export function tryReadRustTokenArray(source: LineTokens, prototype: LineTokens, text: boolean): Float64Array | undefined {
+	if (!registeredModule || !standardLineTokens(source, prototype) || ['getTextLength', 'getLineContent', 'getTokenText'].some(name => Object.hasOwn(source, name))) { return undefined; }
+	const tokens = source.getEncodedTokens();
+	if (tokens.length / 2 !== source.getCount()) { return undefined; }
+	const result = registeredModule.line_token_array(tokens, source.getTextLength(), text);
+	const stride = text ? 3 : 2;
+	if (result && (result.length !== source.getCount() * stride || Array.from(result).some(value => !Number.isSafeInteger(value)))) { throw new Error('The Rust token sequence does not match the editor contract'); }
+	return result;
+}
+
+/** Rejects virtual iterators, sparse/accessor slots, and accessor fields without invoking providers. */
+function standardTokenSequence(items: readonly (TokenInfo | TokenWithTextInfo)[], text: boolean): boolean {
+	if (Object.getPrototypeOf(items) !== Array.prototype || Object.hasOwn(items, Symbol.iterator) || Object.getOwnPropertyDescriptor(Array.prototype, Symbol.iterator)?.value !== standardArrayIterator || items.length > 262144) { return false; }
+	for (let index = 0; index < items.length; index++) {
+		const item = Object.getOwnPropertyDescriptor(items, index)?.value as TokenInfo | TokenWithTextInfo | undefined;
+		if (!item || typeof Object.getOwnPropertyDescriptor(item, 'metadata')?.value !== 'number' || typeof Object.getOwnPropertyDescriptor(item, text ? 'text' : 'length')?.value !== (text ? 'string' : 'number')) { return false; }
+	}
+	return true;
+}
+
+/** Clips a complete sequence using its current lengths while keeping the original metadata objects. */
+export function trySliceRustTokenSequence(items: readonly (TokenInfo | TokenWithTextInfo)[], range: OffsetRange, text: boolean): Float64Array | undefined {
+	if (!registeredModule || !standardTokenSequence(items, text) || typeof Object.getOwnPropertyDescriptor(range, 'start')?.value !== 'number' || typeof Object.getOwnPropertyDescriptor(range, 'endExclusive')?.value !== 'number') { return undefined; }
+	const lengths = new Float64Array(items.length);
+	for (let index = 0; index < items.length; index++) { lengths[index] = text ? (items[index] as TokenWithTextInfo).text.length : (items[index] as TokenInfo).length; }
+	const result = registeredModule.slice_token_array(lengths, range.start, range.endExclusive);
+	if (result) {
+		if (result.length % 4 !== 0 || result.length > items.length * 4) { throw new Error('The Rust token slice does not match the editor contract'); }
+		for (let index = 0; index < result.length; index += 4) {
+			if (!Number.isSafeInteger(result[index]) || result[index] < 0 || result[index] >= items.length || (index > 0 && result[index] <= result[index - 4])) { throw new Error('The Rust token slice does not match the editor contract'); }
+		}
+	}
+	return result;
+}
+
+/** Joins primitive strings without decoding UTF-16 into Rust strings or changing original metadata coercion. */
+export function tryCreateRustLineTokens(data: { text: string; metadata: number }[]): [Uint32Array, string] | undefined {
+	if (!registeredModule || !standardTokenSequence(data, true)) { return undefined; }
+	const result = registeredModule.create_line_tokens(data);
+	if (result && (!Array.isArray(result) || result.length !== 2 || !(result[0] instanceof Uint32Array) || result[0].length !== data.length * 2 || typeof result[1] !== 'string' || (result[0].length > 1 ? result[0][result[0].length - 2] : 0) !== result[1].length)) { throw new Error('The Rust token construction does not match the editor contract'); }
+	return result;
 }
 
 /** The caller immediately registers the owning store's generated free method for disposal. */

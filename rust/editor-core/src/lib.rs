@@ -17,6 +17,7 @@ mod sparse_tokens;
 mod text_buffer;
 mod text_change;
 mod text_chunk;
+mod token_array;
 mod tokens;
 mod tree;
 
@@ -50,4 +51,5 @@ pub use sparse_tokens::{
 pub use text_buffer::{BufferError, Position, TextBuffer, TextEdit, TextSnapshot};
 pub use text_change::{CompressedTextChange, TextChange, UndoChangeBatch, compress_text_changes};
 pub use text_chunk::{TextChunk, TextChunkIter};
+pub use token_array::{create_line_token_array, line_token_array, slice_token_array};
 pub use tokens::{TokensError, merge_semantic_tokens};

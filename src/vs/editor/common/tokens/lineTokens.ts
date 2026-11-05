@@ -9,7 +9,7 @@ import { IPosition } from '../core/position.js';
 import { ITextModel } from '../model.js';
 import { OffsetRange } from '../core/ranges/offsetRange.js';
 import { onUnexpectedError } from '../../../base/common/errors.js';
-import { tryCompareRustLineTokens, tryConvertRustLineTokenOffsets, tryExtractRustLineTokens, tryFindRustLineTokenIndex, tryInsertRustLineTokens, trySliceRustLineTokens } from './rustTokens.js';
+import { tryCompareRustLineTokens, tryConvertRustLineTokenOffsets, tryCreateRustLineTokens, tryExtractRustLineTokens, tryFindRustLineTokenIndex, tryInsertRustLineTokens, tryReadRustTokenArray, trySliceRustLineTokens, trySliceRustTokenSequence } from './rustTokens.js';
 
 
 export interface IViewLineTokens {
@@ -42,6 +42,8 @@ export class LineTokens implements IViewLineTokens {
 	}
 
 	public static createFromTextAndMetadata(data: { text: string; metadata: number }[], decoder: ILanguageIdCodec): LineTokens {
+		const native = tryCreateRustLineTokens(data);
+		if (native) { return new LineTokens(native[0], native[1], decoder); }
 		let offset: number = 0;
 		let fullText: string = '';
 		const tokens = new Array<number>();
@@ -458,6 +460,11 @@ export function getStandardTokenTypeAtPosition(model: ITextModel, position: IPos
 export class TokenArray {
 	public static fromLineTokens(lineTokens: LineTokens): TokenArray {
 		const tokenInfo: TokenInfo[] = [];
+		const native = tryReadRustTokenArray(lineTokens, LineTokens.prototype, false);
+		if (native) {
+			for (let index = 0; index < native.length; index += 2) { tokenInfo.push(new TokenInfo(native[index], native[index + 1])); }
+			return TokenArray.create(tokenInfo);
+		}
 		for (let i = 0; i < lineTokens.getCount(); i++) {
 			tokenInfo.push(new TokenInfo(lineTokens.getEndOffset(i) - lineTokens.getStartOffset(i), lineTokens.getMetadata(i)));
 		}
@@ -498,6 +505,11 @@ export class TokenArray {
 
 	public slice(range: OffsetRange): TokenArray {
 		const result: TokenInfo[] = [];
+		const native = trySliceRustTokenSequence(this._tokenInfo, range, false);
+		if (native) {
+			for (let index = 0; index < native.length; index += 4) { result.push(new TokenInfo(native[index + 3], this._tokenInfo[native[index]].metadata)); }
+			return TokenArray.create(result);
+		}
 		let lengthSum = 0;
 		for (const tokenInfo of this._tokenInfo) {
 			const tokenStart = lengthSum;

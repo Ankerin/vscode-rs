@@ -6,6 +6,7 @@
 import { OffsetRange } from '../core/ranges/offsetRange.js';
 import { ILanguageIdCodec } from '../languages.js';
 import { LineTokens } from './lineTokens.js';
+import { tryReadRustTokenArray, trySliceRustTokenSequence } from './rustTokens.js';
 
 /**
  * This class represents a sequence of tokens.
@@ -18,6 +19,12 @@ import { LineTokens } from './lineTokens.js';
 export class TokenWithTextArray {
 	public static fromLineTokens(lineTokens: LineTokens): TokenWithTextArray {
 		const tokenInfo: TokenWithTextInfo[] = [];
+		const native = tryReadRustTokenArray(lineTokens, LineTokens.prototype, true);
+		if (native) {
+			const text = lineTokens.getLineContent();
+			for (let index = 0; index < native.length; index += 3) { tokenInfo.push(new TokenWithTextInfo(text.substring(native[index], native[index + 1]), native[index + 2])); }
+			return TokenWithTextArray.create(tokenInfo);
+		}
 		for (let i = 0; i < lineTokens.getCount(); i++) {
 			tokenInfo.push(new TokenWithTextInfo(lineTokens.getTokenText(i), lineTokens.getMetadata(i)));
 		}
@@ -58,6 +65,14 @@ export class TokenWithTextArray {
 
 	public slice(range: OffsetRange): TokenWithTextArray {
 		const result: TokenWithTextInfo[] = [];
+		const native = trySliceRustTokenSequence(this._tokenInfo, range, true);
+		if (native) {
+			for (let index = 0; index < native.length; index += 4) {
+				const token = this._tokenInfo[native[index]];
+				result.push(new TokenWithTextInfo(token.text.slice(native[index + 1], token.text.length - native[index + 2]), token.metadata));
+			}
+			return TokenWithTextArray.create(result);
+		}
 		let lengthSum = 0;
 		for (const tokenInfo of this._tokenInfo) {
 			const tokenStart = lengthSum;
