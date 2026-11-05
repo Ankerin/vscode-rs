@@ -12,7 +12,9 @@ import { Range } from '../../src/vs/editor/common/core/range.js';
 import { IRustTextBufferModule, registerRustTextBuffer } from '../../src/vs/editor/common/model/rustTextBuffer/rustTextBuffer.js';
 import { LanguageIdCodec } from '../../src/vs/editor/common/services/languagesRegistry.js';
 import { LineTokens } from '../../src/vs/editor/common/tokens/lineTokens.js';
-import { IRustTokensModule, registerRustTokens, tryEditRustSparseTokens, tryMergeRustSemanticTokens, tryRemoveRustSparseTokens, trySplitRustSparseTokens } from '../../src/vs/editor/common/tokens/rustTokens.js';
+import { IRustTokensModule, registerRustTokens, tryAppendRustContiguousTokens, tryEditRustSparseTokens, tryMergeRustSemanticTokens, tryRemoveRustSparseTokens, trySplitRustSparseTokens, tryUpdateRustContiguousTokens } from '../../src/vs/editor/common/tokens/rustTokens.js';
+import { ContiguousTokensEditing, EMPTY_LINE_TOKENS, toUint32Array } from '../../src/vs/editor/common/tokens/contiguousTokensEditing.js';
+import { ContiguousMultilineTokens } from '../../src/vs/editor/common/tokens/contiguousMultilineTokens.js';
 import { SparseMultilineTokens } from '../../src/vs/editor/common/tokens/sparseMultilineTokens.js';
 import { SparseTokensStore } from '../../src/vs/editor/common/tokens/sparseTokensStore.js';
 import { createTextModel } from '../../src/vs/editor/test/common/testTextModel.js';
@@ -252,5 +254,111 @@ test('Rust sparse edits preserve typed-array wrapping, word-edge affinity, and c
 		reference.acceptEdit(range, eolCount, firstLength, lastLength, firstCode);
 		withRust(() => actual.acceptEdit(range, eolCount, firstLength, lastLength, firstCode));
 		assert.deepStrictEqual({ state: sparseState(actual), backing: new Uint32Array(native.buffer) }, { state: sparseState(reference), backing: new Uint32Array(original.buffer) });
+	}
+});
+
+function contiguousState(result: Uint32Array | ArrayBuffer | null, source: Uint32Array | ArrayBuffer | null) {
+	return { words: result === null ? null : toUint32Array(result), sameSource: result === source, emptySentinel: result === EMPTY_LINE_TOKENS, typedArray: result instanceof Uint32Array };
+}
+
+test('Rust contiguous token editing preserves seeded endpoints, mutable aliases, result shapes, and sentinel identity', () => {
+	let seed = 167;
+	const random = (limit: number) => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed % limit; };
+	for (let iteration = 0; iteration < 1024; iteration++) {
+		const ends = Array.from({ length: 1 + random(32) }, () => random(128)).sort((first, second) => first - second);
+		const records = ends.flatMap(end => [end, random(0x100000000)]);
+		const last = ends[ends.length - 1];
+		const position = random(last + 1);
+		const operations = [
+			(tokens: Uint32Array | ArrayBuffer) => ContiguousTokensEditing.delete(tokens, 0, last),
+			(tokens: Uint32Array | ArrayBuffer) => ContiguousTokensEditing.delete(tokens, 0, last + 1),
+			(tokens: Uint32Array | ArrayBuffer) => ContiguousTokensEditing.delete(tokens, position, position + random(last - position + 1)),
+			(tokens: Uint32Array | ArrayBuffer) => ContiguousTokensEditing.deleteBeginning(tokens, position),
+			(tokens: Uint32Array | ArrayBuffer) => ContiguousTokensEditing.deleteEnding(tokens, position),
+			(tokens: Uint32Array | ArrayBuffer) => ContiguousTokensEditing.insert(tokens, ends[0], 3),
+			(tokens: Uint32Array | ArrayBuffer) => ContiguousTokensEditing.insert(tokens, last, 0xFFFFFFFF)
+		];
+		for (const operation of operations) {
+			const original = iteration % 2 === 0 ? offsetView(records) : new Uint32Array(records).buffer;
+			const native = iteration % 2 === 0 ? offsetView(records) : new Uint32Array(records).buffer;
+			const previousSeed = seed;
+			const expected = operation(original);
+			seed = previousSeed;
+			const actual = withRust(() => operation(native));
+			assert.deepStrictEqual({ result: contiguousState(actual, native), backing: new Uint32Array(native instanceof Uint32Array ? native.buffer : native) }, { result: contiguousState(expected, original), backing: new Uint32Array(original instanceof Uint32Array ? original.buffer : original) }, `Contiguous edit ${iteration}`);
+		}
+		const first = offsetView(records);
+		const second = offsetView(records);
+		const before = new Uint32Array(first.buffer.slice(0));
+		const expected = ContiguousTokensEditing.append(first, second);
+		const actual = withRust(() => ContiguousTokensEditing.append(first, second));
+		assert.deepStrictEqual({ result: contiguousState(actual, first), first: new Uint32Array(first.buffer), second: new Uint32Array(second.buffer) }, { result: contiguousState(expected, first), first: before, second: before });
+	}
+});
+
+test('Rust contiguous token editing preserves missing/empty shortcuts, unsupported fallback, and binding validation', () => {
+	const tokens = new Uint32Array([3, 7, 6, 9]);
+	const reject: IRustTokensModule = { ...rust, update_contiguous_tokens: () => { throw new Error('Unexpected token edit'); }, append_contiguous_tokens: () => { throw new Error('Unexpected token append'); } };
+	withRust(() => {
+		for (const source of [null, EMPTY_LINE_TOKENS]) {
+			assert.strictEqual(ContiguousTokensEditing.delete(source, 1, 2), source);
+			assert.strictEqual(ContiguousTokensEditing.deleteBeginning(source, 2), source);
+			assert.strictEqual(ContiguousTokensEditing.deleteEnding(source, 2), source);
+			assert.strictEqual(ContiguousTokensEditing.insert(source, 1, 2), source);
+		}
+		assert.strictEqual(ContiguousTokensEditing.delete(tokens, 2, 2), tokens);
+		assert.strictEqual(ContiguousTokensEditing.append(tokens, EMPTY_LINE_TOKENS), tokens);
+		assert.strictEqual(ContiguousTokensEditing.append(EMPTY_LINE_TOKENS, tokens), tokens);
+		assert.strictEqual(ContiguousTokensEditing.append(null, tokens), null);
+		assert.strictEqual(ContiguousTokensEditing.append(tokens, null), null);
+	}, reject);
+	for (const operation of [
+		(tokens: Uint32Array) => ContiguousTokensEditing.delete(tokens, 1, 4),
+		(tokens: Uint32Array) => ContiguousTokensEditing.insert(tokens, 3, 2),
+		(tokens: Uint32Array) => ContiguousTokensEditing.append(tokens, tokens)
+	]) {
+		const original = tokens.slice();
+		const native = tokens.slice();
+		const expected = operation(original);
+		const actual = withRust(() => operation(native), { ...rust, update_contiguous_tokens: () => undefined, append_contiguous_tokens: () => undefined });
+		assert.deepStrictEqual(contiguousState(actual, native), contiguousState(expected, original));
+	}
+	for (const value of [Number.NaN, -2, 3, 8]) {
+		assert.throws(() => withRust(() => tryUpdateRustContiguousTokens(tokens, 0, 1, 2), { ...rust, update_contiguous_tokens: () => value }), /contiguous token result/);
+	}
+	assert.throws(() => withRust(() => tryAppendRustContiguousTokens(tokens, tokens), { ...rust, append_contiguous_tokens: () => new Uint32Array(2) }), /contiguous token append/);
+	const before = tokens.slice();
+	assert.throws(() => rust.update_contiguous_tokens(tokens.subarray(0, 3), 0, 1, 2), /contract/);
+	assert.throws(() => rust.update_contiguous_tokens(tokens, 2, 1, 2), /operation/);
+	assert.throws(() => rust.append_contiguous_tokens(tokens, new Uint32Array(3)), /contract/);
+	assert.strictEqual(rust.update_contiguous_tokens(tokens, 0, 2, 1), undefined);
+	assert.strictEqual(rust.update_contiguous_tokens(tokens, 1, 1, Number.NaN), undefined);
+	assert.strictEqual(rust.append_contiguous_tokens(new Uint32Array(), tokens), undefined);
+	assert.deepStrictEqual(tokens, before);
+});
+
+test('Rust contiguous token edits preserve multiline block behavior and held line views', () => {
+	const records = Array.from({ length: 12 }, (_, index) => offsetView([3, 0xFF000000 + index, 6, 7 + index, 10, 11 + index]));
+	const original = records.map(tokens => offsetView(Array.from(tokens)));
+	const native = records.map(tokens => offsetView(Array.from(tokens)));
+	const reference = new ContiguousMultilineTokens(5, original);
+	const actual = new ContiguousMultilineTokens(5, native);
+	const state = (piece: ContiguousMultilineTokens) => ({
+		start: piece.startLineNumber, end: piece.endLineNumber,
+		tokens: Array.from({ length: piece.endLineNumber - piece.startLineNumber + 1 }, (_, index) => {
+			const tokens = piece.getLineTokens(piece.startLineNumber + index);
+			return tokens === null ? null : toUint32Array(tokens);
+		})
+	});
+	for (const [range, text] of [
+		[new Range(5, 4, 5, 4), '\uD800x'],
+		[new Range(6, 2, 8, 4), 'first\r\nlast'],
+		[new Range(1, 3, 2, 4), '\n'],
+		[new Range(5, 3, 5, 3), '\nnew\n'],
+		[new Range(1, 1, 20, 1), '']
+	] as const) {
+		reference.applyEdit(range, text);
+		withRust(() => actual.applyEdit(range, text));
+		assert.deepStrictEqual({ state: state(actual), backing: native.map(tokens => new Uint32Array(tokens.buffer)) }, { state: state(reference), backing: original.map(tokens => new Uint32Array(tokens.buffer)) });
 	}
 });

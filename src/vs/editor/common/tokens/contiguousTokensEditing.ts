@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { LineTokens } from './lineTokens.js';
+import { tryAppendRustContiguousTokens, tryUpdateRustContiguousTokens } from './rustTokens.js';
 
 export const EMPTY_LINE_TOKENS = (new Uint32Array(0)).buffer;
 
@@ -33,6 +34,10 @@ export class ContiguousTokensEditing {
 
 		const tokens = toUint32Array(lineTokens);
 		const tokensCount = (tokens.length >>> 1);
+		const native = tryUpdateRustContiguousTokens(tokens, 0, fromChIndex, toChIndex);
+		if (native !== undefined) {
+			return native === -1 ? EMPTY_LINE_TOKENS : native === tokens.length ? lineTokens : tokens.slice(0, native).buffer;
+		}
 
 		// special case: deleting everything
 		if (fromChIndex === 0 && tokens[tokens.length - 2] === toChIndex) {
@@ -100,6 +105,8 @@ export class ContiguousTokensEditing {
 		const myTokens = toUint32Array(lineTokens);
 		const otherTokens = toUint32Array(_otherTokens);
 		const otherTokensCount = (otherTokens.length >>> 1);
+		const native = tryAppendRustContiguousTokens(myTokens, otherTokens);
+		if (native) { return native.buffer as ArrayBuffer; }
 
 		const result = new Uint32Array(myTokens.length + otherTokens.length);
 		result.set(myTokens, 0);
@@ -120,6 +127,8 @@ export class ContiguousTokensEditing {
 
 		const tokens = toUint32Array(lineTokens);
 		const tokensCount = (tokens.length >>> 1);
+		const native = tryUpdateRustContiguousTokens(tokens, 1, chIndex, textLength);
+		if (native !== undefined) { return lineTokens; }
 
 		let fromTokenIndex = LineTokens.findIndexInTokensArray(tokens, chIndex);
 		if (fromTokenIndex > 0) {

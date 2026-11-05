@@ -12,13 +12,15 @@ export interface IRustTokensModule {
 	merge_semantic_tokens(contiguous: Uint32Array, sparse: Uint32Array, textLength: number): Uint32Array | undefined;
 	update_sparse_tokens(tokens: Uint32Array, parameters: Float64Array): Float64Array | undefined;
 	split_sparse_tokens(tokens: Uint32Array, parameters: Float64Array): Uint32Array | undefined;
+	update_contiguous_tokens(tokens: Uint32Array, operation: number, first: number, second: number): number | undefined;
+	append_contiguous_tokens(first: Uint32Array, second: Uint32Array): Uint32Array | undefined;
 }
 
 let registeredModule: IRustTokensModule | undefined;
 
 /** Installs token composition for the initialized core's disposable scope. */
 export function registerRustTokens(module: IRustTokensModule): IDisposable {
-	if (typeof module.tokens_abi_version !== 'function' || module.tokens_abi_version() !== 2 || typeof module.merge_semantic_tokens !== 'function' || typeof module.update_sparse_tokens !== 'function' || typeof module.split_sparse_tokens !== 'function') {
+	if (typeof module.tokens_abi_version !== 'function' || module.tokens_abi_version() !== 3 || typeof module.merge_semantic_tokens !== 'function' || typeof module.update_sparse_tokens !== 'function' || typeof module.split_sparse_tokens !== 'function' || typeof module.update_contiguous_tokens !== 'function' || typeof module.append_contiguous_tokens !== 'function') {
 		throw new Error('The Rust token bindings do not match the current metadata contract');
 	}
 	if (registeredModule) { throw new Error('A Rust token module is already registered'); }
@@ -26,6 +28,25 @@ export function registerRustTokens(module: IRustTokensModule): IDisposable {
 	return toDisposable(() => {
 		if (registeredModule === module) { registeredModule = undefined; }
 	});
+}
+
+/** Retains source identity while returning the native surviving length or shared-empty sentinel. */
+export function tryUpdateRustContiguousTokens(tokens: Uint32Array, operation: number, first: number, second: number): number | undefined {
+	if (!registeredModule || tokens.length === 0 || tokens.length % 2 !== 0 || tokens.length > 4 * 1024 * 1024 || ![first, second].every(value => Number.isSafeInteger(value) && value >= 0 && value <= 2 ** 40)) { return undefined; }
+	const result = registeredModule.update_contiguous_tokens(tokens, operation, first, second);
+	if (result === undefined) { return undefined; }
+	if (!Number.isSafeInteger(result) || (result !== -1 && (result < 0 || result % 2 !== 0 || result > tokens.length))) {
+		throw new Error('The Rust contiguous token result does not match the editor contract');
+	}
+	return result;
+}
+
+/** Creates an independent concatenated encoding with the original metadata and wrapping rules. */
+export function tryAppendRustContiguousTokens(first: Uint32Array, second: Uint32Array): Uint32Array | undefined {
+	if (!registeredModule || first.length === 0 || first.length % 2 !== 0 || second.length % 2 !== 0 || first.length + second.length > 4 * 1024 * 1024) { return undefined; }
+	const result = registeredModule.append_contiguous_tokens(first, second);
+	if (result && result.length !== first.length + second.length) { throw new Error('The Rust contiguous token append does not match the editor contract'); }
+	return result;
 }
 
 /** Updates existing arrays without changing their ownership or the observable inactive suffix. */

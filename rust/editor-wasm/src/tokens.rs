@@ -8,7 +8,52 @@ use wasm_bindgen::prelude::*;
 /// Identifies token metadata composition independently of storage and diff contracts.
 #[wasm_bindgen]
 pub fn tokens_abi_version() -> u32 {
-	2
+	3
+}
+
+/// Copies edits back to the source view; -1 represents the editor's shared empty-line sentinel.
+#[wasm_bindgen]
+pub fn update_contiguous_tokens(
+	tokens: &mut [u32],
+	operation: u32,
+	first: f64,
+	second: f64,
+) -> Result<Option<f64>, JsError> {
+	if tokens.is_empty()
+		|| tokens.len() > 4 * 1024 * 1024
+		|| [first, second].iter().any(|value| {
+			!value.is_finite()
+				|| value.fract() != 0.0
+				|| *value < 0.0
+				|| *value > (1u64 << 40) as f64
+		}) {
+		return Ok(None);
+	}
+	let result = match operation {
+		0 if second >= first => {
+			vscode_editor_core::delete_contiguous_tokens(tokens, first as i64, second as i64)?
+		}
+		0 => return Ok(None),
+		1 => vscode_editor_core::insert_contiguous_tokens(tokens, first as i64, second as i64)?,
+		_ => {
+			return Err(JsError::new(
+				"The contiguous token operation does not match the editor contract",
+			));
+		}
+	};
+	Ok(Some(match result {
+		vscode_editor_core::ContiguousTokensUpdate::EmptyLine => -1.0,
+		vscode_editor_core::ContiguousTokensUpdate::Words(length) => length as f64,
+	}))
+}
+
+/// Concatenates encoded token streams without changing either source view.
+#[wasm_bindgen]
+pub fn append_contiguous_tokens(
+	first: &[u32],
+	second: &[u32],
+) -> Result<Option<Vec<u32>>, JsError> {
+	Ok(vscode_editor_core::append_contiguous_tokens(first, second)?)
 }
 
 /// Updates aliased JavaScript records in place through the generated mutable-slice copyback.

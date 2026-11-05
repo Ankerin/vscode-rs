@@ -5,6 +5,7 @@
 
 //! Platform-independent editor algorithms. Text coordinates use UTF-16 code units.
 
+mod contiguous_tokens;
 mod folding;
 mod guides;
 mod indentation;
@@ -18,6 +19,10 @@ mod text_chunk;
 mod tokens;
 mod tree;
 
+pub use contiguous_tokens::{
+	ContiguousTokensUpdate, append_contiguous_tokens, delete_contiguous_tokens,
+	insert_contiguous_tokens,
+};
 pub use folding::{IndentationFoldingRanges, compute_indentation_folding};
 pub use guides::{ActiveIndentGuide, compute_active_indent_guide, compute_indent_guides};
 pub use indentation::{GuessedIndentation, guess_indentation};

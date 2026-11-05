@@ -542,3 +542,25 @@ Tokens are distributed eight per line. Positions cycle through 32 preconstructed
 | Unicode insertion | 97.95 | 68.02 | 1.44 |
 
 Dense runs have lower process peak RSS in this capture; small blocks have higher RSS. Native splits avoid the two intermediate JavaScript number arrays, but generated input/result transfers and independent output buffers still allocate. Mutable input views retain JavaScript ownership and copy back after edits/removals; native adjustment adds no persistent store or duplicate document. These observations include module loading, warm-up, both workloads, and result consumption. They do not establish whole-editor memory or typing-latency improvement. Raw runs remain ignored in `.build/rust/sparse-tokens-benchmark.json`.
+
+## Contiguous syntax token adjustment observation
+
+Measured on November 6, 2026 with Windows x64, Node `24.22.1`, Rust `1.99.1`, and release tokens ABI 3 bindings. The `--contiguous-tokens` runner alternates three fresh processes per engine, warms 32 edit/append pairs, and times actual `ContiguousTokensEditing` calls. Each edit inserts one character and deletes it again without changing token topology. Concatenation creates an independent double-length encoding. Every output word contributes to identical checksums inside timing; input setup remains outside timing. Times are medians in milliseconds.
+
+| Fixture | Calls per workload | Tokens | Existing edit pairs | Rust edit pairs | Existing concatenation | Rust concatenation |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Small line | 10,000 | 8 | 4.41 | 10.01 | 8.13 | 11.46 |
+| Dense line | 1,000 | 8,192 | 211.85 | 213.07 | 439.09 | 452.18 |
+| Dense line, suffix edit | 1,000 | 8,192 | 202.78 | 207.18 | 466.75 | 448.30 |
+| Long line, one token | 10,000 | 1 | 1.81 | 7.84 | 3.52 | 6.92 |
+
+Ordinary token widths are eight UTF-16 units; the one-token line has 1,048,576 units. Edits occur at offset 2, except the suffix fixture, which edits two units before the final end. Generated mutable input transfer/copyback still processes whole streams even for narrow edits. Small/one-token paths regress, dense timings are close, and only suffix-fixture concatenation is faster in this capture. These observations do not justify promoting the stage by default.
+
+| Fixture | Existing process peak RSS MiB | Rust process peak RSS MiB | Rust linear memory MiB |
+| --- | ---: | ---: | ---: |
+| Small line | 49.83 | 61.70 | 1.13 |
+| Dense line | 53.04 | 65.94 | 1.50 |
+| Dense line, suffix edit | 53.06 | 65.80 | 1.50 |
+| Long line, one token | 50.04 | 61.66 | 1.13 |
+
+Process peak RSS is higher with Rust in every fixture. Existing concatenation already allocates typed output directly, so this port does not remove a temporary JavaScript number array. Native mutation returns a scalar and retains no persistent token state; aliases keep existing JavaScript buffers. Observations include loading, warm-up, both workloads, and checksum consumption, and do not establish whole-editor resource improvement. Raw runs remain ignored in `.build/rust/contiguous-tokens-benchmark.json`.
