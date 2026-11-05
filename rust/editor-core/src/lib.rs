@@ -12,9 +12,10 @@ mod text_chunk;
 mod tree;
 
 pub use sequence_diff::{
-	CharacterDiffOptions, CharacterDiffResult, CharacterSequence, LineDiffResult,
-	LineEqualityScores, MAX_DYNAMIC_DIFF_CELLS, OptimizationSequence, SequenceDiff,
-	SequenceDiffError, SequenceDiffResult, TextRange, compute_moved_lines,
+	CharacterDiffOptions, CharacterDiffResult, CharacterSequence, DetailedLineDiff,
+	DocumentDiffOptions, DocumentDiffResult, LineDiffResult, LineEqualityScores,
+	MAX_DYNAMIC_DIFF_CELLS, MovedBlockDiff, OptimizationSequence, SequenceDiff, SequenceDiffError,
+	SequenceDiffResult, TextRange, compute_document_diff, compute_moved_lines,
 	dynamic_programming_diff, myers_diff, optimize_sequence_diffs, refine_character_diff,
 	refine_line_diff,
 };

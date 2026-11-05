@@ -283,3 +283,33 @@ Process peak RSS and final WASM linear memory are medians in MiB.
 | unicode | 171.98 | 65.07 | 1.50 |
 
 The paired pipeline remains faster than the reference for these workloads. This capture does not demonstrate an additional speed gain from move detection over the preceding line-refinement stage. The fixtures contain limited block movement; typed source/hash transfers and stage-to-stage timing variation remain relevant. Ordered lookup removes repeated linear candidate-extension searches, but these measurements do not quantify its benefit on pathological repeated triples. Shared source state across the full pipeline remains the next boundary. Current raw runs are in `.build/rust/diff-benchmark.json`; ABI 6 runs are preserved in `.build/rust/diff-benchmark-lines.json`. No full-product memory or visual-parity claim follows from these measurements.
+
+## Shared document pipeline observation
+
+Measured with the same fixture inputs, alternating three fresh processes per engine, Node `24.22.1`, Rust `1.99.1`, and release bindings on November 5, 2026. Sequence ABI 8 performs the full advanced document pipeline in one native scope: line alignment, whitespace scanning, character refinement, detailed line grouping, move matching, and refinement inside moved blocks share one source transfer. The JavaScript bridge constructs existing result objects from a single packed response. Every checksum matched. Times are medians in milliseconds.
+
+| Fixture | Workload | Existing | Rust/WASM |
+| --- | --- | ---: | ---: |
+| small | Ten display diffs | 21.77 | 6.30 |
+| small | Ten timed display diffs | 38.09 | 29.72 |
+| small | Ten display diffs with raw edits | 27.12 | 7.41 |
+| medium | Ten display diffs | 147.51 | 36.72 |
+| medium | Ten timed display diffs | 477.29 | 412.20 |
+| medium | Ten display diffs with raw edits | 131.86 | 40.74 |
+| large | Ten display diffs | 142.13 | 56.53 |
+| large | Ten timed display diffs | 370.81 | 320.58 |
+| large | Ten display diffs with raw edits | 112.31 | 57.68 |
+| unicode | Ten display diffs | 68.66 | 19.44 |
+| unicode | Ten timed display diffs | 195.81 | 184.38 |
+| unicode | Ten display diffs with raw edits | 50.79 | 17.72 |
+
+Process peak RSS and final WASM linear memory are medians in MiB.
+
+| Fixture | Existing process peak RSS | Rust process peak RSS | Rust linear memory at completion |
+| --- | ---: | ---: | ---: |
+| small | 63.75 | 62.84 | 1.13 |
+| medium | 322.58 | 68.64 | 1.94 |
+| large | 105.28 | 80.57 | 2.13 |
+| unicode | 172.21 | 64.19 | 1.50 |
+
+The paired pipeline is faster and uses lower process peak RSS in these fixtures. Untimed display/raw computation is also faster in this capture than the preceding native move stage, consistent with removing repeated source packing and transfers; cross-capture comparisons remain diagnostic because reference timings vary. Timed workloads retain the original cell/frontier deadline frequency and still spend substantial time crossing to the clock. These observations do not establish whole-product memory savings, startup/rendering latency, exact visual parity, or legacy-diff performance. Current raw runs are in `.build/rust/diff-benchmark.json`; ABI 7 runs are retained in `.build/rust/diff-benchmark-moves.json`. Both remain ignored.

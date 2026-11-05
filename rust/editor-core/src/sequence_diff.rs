@@ -7,10 +7,15 @@
 
 use std::{error::Error, fmt, ops::Range};
 
+mod document;
 mod lines;
 mod moves;
 mod optimization;
 mod refinement;
+pub use document::{
+	DetailedLineDiff, DocumentDiffOptions, DocumentDiffResult, MovedBlockDiff,
+	compute_document_diff,
+};
 pub use lines::{LineDiffResult, refine_line_diff};
 pub use moves::compute_moved_lines;
 pub use optimization::{OptimizationSequence, optimize_sequence_diffs};

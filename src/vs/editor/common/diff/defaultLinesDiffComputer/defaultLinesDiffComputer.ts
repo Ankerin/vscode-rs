@@ -19,7 +19,7 @@ import { computeMovedLines } from './computeMovedLines.js';
 import { extendDiffsToEntireWordIfAppropriate, optimizeSequenceDiffs, removeShortMatches, removeVeryShortMatchingLinesBetweenDiffs, removeVeryShortMatchingTextBetweenLongDiffs } from './heuristicSequenceOptimizations.js';
 import { LineSequence } from './lineSequence.js';
 import { LinesSliceCharSequence } from './linesSliceCharSequence.js';
-import { tryComputeRustCharacterDiff, tryComputeRustLineAlignment, tryComputeRustLineDiff } from './algorithms/rustSequenceDiff.js';
+import { tryComputeRustCharacterDiff, tryComputeRustDocumentDiff, tryComputeRustLineAlignment, tryComputeRustLineDiff } from './algorithms/rustSequenceDiff.js';
 
 export class DefaultLinesDiffComputer implements ILinesDiffComputer {
 	private readonly dynamicProgrammingDiffing = new DynamicProgrammingDiffing();
@@ -57,6 +57,13 @@ export class DefaultLinesDiffComputer implements ILinesDiffComputer {
 		}
 
 		const timeout = options.maxComputationTimeMs === 0 ? InfiniteTimeout.instance : new DateTimeout(options.maxComputationTimeMs);
+		const native = tryComputeRustDocumentDiff(originalLines, modifiedLines, timeout, options, !!rawChanges);
+		if (native) {
+			for (const change of native.rawChanges) {
+				rawChanges?.push(change);
+			}
+			return native.diff;
+		}
 		const considerWhitespaceChanges = !options.ignoreTrimWhitespace;
 
 		const lineAlignment = tryComputeRustLineAlignment(originalLines, modifiedLines, timeout) ?? (() => {

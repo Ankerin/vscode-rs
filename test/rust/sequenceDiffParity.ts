@@ -11,7 +11,7 @@ import { pathToFileURL } from 'node:url';
 import { DateTimeout, DiffAlgorithmResult, InfiniteTimeout } from '../../src/vs/editor/common/diff/defaultLinesDiffComputer/algorithms/diffAlgorithm.js';
 import { DynamicProgrammingDiffing } from '../../src/vs/editor/common/diff/defaultLinesDiffComputer/algorithms/dynamicProgrammingDiffing.js';
 import { MyersDiffAlgorithm } from '../../src/vs/editor/common/diff/defaultLinesDiffComputer/algorithms/myersDiffAlgorithm.js';
-import { registerRustSequenceDiff, tryComputeRustCharacterDiff, tryComputeRustLineAlignment, tryComputeRustLineDiff, tryComputeRustMovedLines } from '../../src/vs/editor/common/diff/defaultLinesDiffComputer/algorithms/rustSequenceDiff.js';
+import { registerRustSequenceDiff, tryComputeRustCharacterDiff, tryComputeRustDocumentDiff, tryComputeRustLineAlignment, tryComputeRustLineDiff, tryComputeRustMovedLines } from '../../src/vs/editor/common/diff/defaultLinesDiffComputer/algorithms/rustSequenceDiff.js';
 import { DefaultLinesDiffComputer } from '../../src/vs/editor/common/diff/defaultLinesDiffComputer/defaultLinesDiffComputer.js';
 import { extendDiffsToEntireWordIfAppropriate, optimizeSequenceDiffs, removeShortMatches, removeVeryShortMatchingLinesBetweenDiffs, removeVeryShortMatchingTextBetweenLongDiffs } from '../../src/vs/editor/common/diff/defaultLinesDiffComputer/heuristicSequenceOptimizations.js';
 import { LineSequence } from '../../src/vs/editor/common/diff/defaultLinesDiffComputer/lineSequence.js';
@@ -191,6 +191,7 @@ test('Rust alignment preserves full display diffs, moved lines, and raw changes 
 			const options = { ignoreTrimWhitespace, maxComputationTimeMs: 0, computeMoves: true, extendToSubwords: true };
 			const reference = computer.computeDiffWithRawChanges(lines[0], lines[1], options);
 			assert.deepStrictEqual(withRust(() => computer.computeDiffWithRawChanges(lines[0], lines[1], options)), reference, folder);
+			assert.deepStrictEqual(withRust(() => tryComputeRustDocumentDiff(lines[0], lines[1], InfiniteTimeout.instance, options, true)), reference, `Native document ${folder}`);
 		}
 	}
 });
@@ -376,4 +377,70 @@ test('Rust move detection validates packets and retains deadline latching and fa
 	assert.throws(() => rust.moved_lines(units, units, offsets, offsets, hashes, new Uint32Array([0])), /ranges/);
 	assert.strictEqual(rust.moved_lines(units, units, offsets, offsets, new Uint32Array([0]), new Uint32Array()), undefined);
 	assert.strictEqual(rust.moved_lines(units, units, offsets, offsets, hashes, new Uint32Array([0, 2, 0, 1])), undefined);
+});
+
+test('Rust complete document diffs preserve seeded whitespace, raw edits, grouping, and move refinement', () => {
+	let seed = 43;
+	const random = (limit: number) => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed % limit; };
+	const alphabet = ['', 'alpha line one', 'beta line two', '  alpha line one\t', 'fooBar12', 'a', '\t', '\uFEFF', '\u0085', '\uD800', '\uDC00', '\uD83D\uDE00'];
+	const computer = new DefaultLinesDiffComputer();
+	for (let iteration = 0; iteration < 1024; iteration++) {
+		const create = () => Array.from({ length: 1 + random(32) }, () => alphabet[random(alphabet.length)]);
+		const original = create();
+		const modified = iteration % 3 === 0 ? [...original.slice(3), ...original.slice(0, 3)].map((line, index) => index % 5 === 0 ? `${line} changed` : line) : create();
+		const options = { ignoreTrimWhitespace: iteration % 2 === 0, maxComputationTimeMs: 0, computeMoves: iteration % 5 !== 0, extendToSubwords: iteration % 3 === 0 };
+		const raw = iteration % 4 !== 0;
+		const reference = raw ? computer.computeDiffWithRawChanges(original, modified, options) : { diff: computer.computeDiff(original, modified, options), rawChanges: [] };
+		assert.deepStrictEqual(withRust(() => tryComputeRustDocumentDiff(original, modified, InfiniteTimeout.instance, options, raw)), reference, `Complete document ${iteration}`);
+	}
+	for (const count of [849, 850, 1200]) {
+		const original = Array.from({ length: count }, (_, index) => `line ${index} long enough to move`);
+		const modified = original.slice();
+		modified.splice(50, 0, ...modified.splice(12, 8));
+		modified[30] = '  ' + modified[30];
+		const options = { ignoreTrimWhitespace: false, maxComputationTimeMs: 0, computeMoves: true, extendToSubwords: true };
+		assert.deepStrictEqual(withRust(() => tryComputeRustDocumentDiff(original, modified, InfiniteTimeout.instance, options, true)), computer.computeDiffWithRawChanges(original, modified, options));
+	}
+});
+
+test('Rust document computation shares one boundary and retains deadlines and unsupported-state fallback', () => {
+	const original = ['alpha line one', 'alpha line two', 'alpha line three', 'beta line one', 'beta line two', 'beta line three'];
+	const modified = [...original.slice(3), ...original.slice(0, 3)];
+	const options = { ignoreTrimWhitespace: false, maxComputationTimeMs: 0, computeMoves: true, extendToSubwords: true };
+	const computer = new DefaultLinesDiffComputer();
+	const reference = computer.computeDiffWithRawChanges(original, modified, options);
+	let calls = 0;
+	let registration = registerRustSequenceDiff({
+		...rust,
+		diff_document: (...args) => { calls++; return rust.diff_document(...args); },
+		diff_lines: () => { throw new Error('Unexpected separate line transfer'); },
+		refine_diff: () => { throw new Error('Unexpected separate character transfer'); },
+		moved_lines: () => { throw new Error('Unexpected separate move transfer'); }
+	});
+	try {
+		assert.deepStrictEqual({ result: computer.computeDiffWithRawChanges(original, modified, options), calls }, { result: reference, calls: 1 });
+	} finally {
+		registration.dispose();
+	}
+	registration = registerRustSequenceDiff({ ...rust, diff_document: () => undefined });
+	try {
+		assert.deepStrictEqual(computer.computeDiffWithRawChanges(original, modified, options), reference);
+	} finally {
+		registration.dispose();
+	}
+	let checks = 0;
+	assert.strictEqual(withRust(() => tryComputeRustDocumentDiff(original, modified, { isValid: () => { checks++; return true; } }, options, true)), undefined);
+	assert.strictEqual(checks, 0);
+	const timeout = new DateTimeout(30000);
+	registration = registerRustSequenceDiff({ ...rust, diff_document: (...args) => { args[6] = Number.NEGATIVE_INFINITY; return rust.diff_document(...args); } });
+	try {
+		assert.deepStrictEqual({ hitTimeout: tryComputeRustDocumentDiff(original, modified, timeout, options, true)?.diff.hitTimeout, valid: timeout.isValid() }, { hitTimeout: true, valid: false });
+	} finally {
+		registration.dispose();
+	}
+	const units = new Uint16Array([97]);
+	const offsets = new Uint32Array([0, 1]);
+	assert.throws(() => rust.diff_document(units, units, offsets, offsets, new Float64Array([1]), 16), /ranges/);
+	assert.throws(() => rust.diff_document(units, units, new Uint32Array([0, 2]), offsets, new Float64Array([1]), 0), /ranges/);
+	assert.throws(() => rust.diff_document(units, new Uint16Array([98]), offsets, offsets, new Float64Array(), 0), /scores/);
 });

@@ -5,8 +5,9 @@
 
 use js_sys::Function;
 use vscode_editor_core::{
-	CharacterDiffOptions, CharacterSequence, LineEqualityScores, OptimizationSequence, Position,
-	SequenceDiff, SequenceDiffError, SequenceDiffResult, TextRange, compute_moved_lines,
+	CharacterDiffOptions, CharacterSequence, DetailedLineDiff, DocumentDiffOptions,
+	LineEqualityScores, OptimizationSequence, Position, SequenceDiff, SequenceDiffError,
+	SequenceDiffResult, TextRange, compute_document_diff, compute_moved_lines,
 	dynamic_programming_diff, myers_diff, optimize_sequence_diffs, refine_character_diff,
 	refine_line_diff,
 };
@@ -15,7 +16,100 @@ use wasm_bindgen::prelude::*;
 /// Versions sequence alignment independently of the text storage contract.
 #[wasm_bindgen]
 pub fn sequence_diff_abi_version() -> u32 {
-	7
+	8
+}
+
+/// Returns document/move groups and character mappings after one shared-source diff computation.
+/// Settings use whitespace, move, subword, and raw-change bits, in that order.
+#[wasm_bindgen]
+pub fn diff_document(
+	original: &[u16],
+	modified: &[u16],
+	original_offsets: &[u32],
+	modified_offsets: &[u32],
+	equality_scores: &[f64],
+	settings: u32,
+	deadline: Option<f64>,
+) -> Result<Option<Vec<u32>>, JsError> {
+	if settings > 15 {
+		return Err(SequenceDiffError::InvalidRanges.into());
+	}
+	let first = unpack_lines(original, original_offsets)?;
+	let second = unpack_lines(modified, modified_offsets)?;
+	let mut valid = true;
+	let result = compute_document_diff(
+		&first,
+		&second,
+		equality_scores,
+		DocumentDiffOptions {
+			consider_whitespace_changes: settings & 1 != 0,
+			compute_moves: settings & 2 != 0,
+			extend_to_subwords: settings & 4 != 0,
+			include_raw_changes: settings & 8 != 0,
+		},
+		|| {
+			valid = deadline.is_none_or(|deadline| js_sys::Date::now() < deadline) && valid;
+			valid
+		},
+	);
+	match result {
+		Ok(result) => {
+			let mut values = vec![
+				u32::from(result.hit_timeout),
+				result.changes.len() as u32,
+				result.moves.len() as u32,
+				result.raw_changes.len() as u32,
+			];
+			append_detailed_changes(&mut values, result.changes);
+			for moved in result.moves {
+				append_line_range(&mut values, &moved.ranges);
+				values.push(moved.changes.len() as u32);
+				append_detailed_changes(&mut values, moved.changes);
+			}
+			append_text_mappings(&mut values, result.raw_changes);
+			Ok(Some(values))
+		}
+		Err(
+			SequenceDiffError::TooLarge
+			| SequenceDiffError::AllocationFailed
+			| SequenceDiffError::UnrepresentablePath
+			| SequenceDiffError::InvalidRanges,
+		) => Ok(None),
+		Err(error) => Err(error.into()),
+	}
+}
+
+fn append_detailed_changes(values: &mut Vec<u32>, changes: Vec<DetailedLineDiff>) {
+	for change in changes {
+		append_line_range(values, &change.ranges);
+		values.push(change.inner_changes.len() as u32);
+		append_text_mappings(values, change.inner_changes);
+	}
+}
+
+fn append_text_mappings(
+	values: &mut Vec<u32>,
+	mappings: impl IntoIterator<Item = (TextRange, TextRange)>,
+) {
+	for (original, modified) in mappings {
+		for range in [original, modified] {
+			values.extend([
+				range.start.line_number as u32,
+				range.start.column as u32,
+				range.end.line_number as u32,
+				range.end.column as u32,
+			]);
+		}
+	}
+}
+
+fn append_line_range(values: &mut Vec<u32>, range: &SequenceDiff) {
+	values.extend([
+		range.original.start as u32,
+		range.original.end as u32,
+		range.modified.start as u32,
+		range.modified.end as u32,
+	]);
 }
 
 /// Detects moved blocks from validated line changes and shared trimmed line identities.
@@ -190,16 +284,10 @@ pub fn refine_diff(
 				result.mappings.len() as u32,
 				result.raw_changes.len() as u32,
 			]);
-			for (original, modified) in result.mappings.into_iter().chain(result.raw_changes) {
-				for range in [original, modified] {
-					values.extend([
-						range.start.line_number as u32,
-						range.start.column as u32,
-						range.end.line_number as u32,
-						range.end.column as u32,
-					]);
-				}
-			}
+			append_text_mappings(
+				&mut values,
+				result.mappings.into_iter().chain(result.raw_changes),
+			);
 			Ok(Some(values))
 		}
 		Err(
@@ -306,12 +394,7 @@ fn encode_result(result: SequenceDiffResult) -> Vec<u32> {
 	let mut ranges = Vec::with_capacity(1 + 4 * result.diffs.len());
 	ranges.push(u32::from(result.hit_timeout));
 	for diff in result.diffs {
-		ranges.extend([
-			diff.original.start as u32,
-			diff.original.end as u32,
-			diff.modified.start as u32,
-			diff.modified.end as u32,
-		]);
+		append_line_range(&mut ranges, &diff);
 	}
 	ranges
 }

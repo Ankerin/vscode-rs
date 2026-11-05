@@ -8,6 +8,7 @@ import { OffsetRange } from '../../../core/ranges/offsetRange.js';
 import { LineRange } from '../../../core/ranges/lineRange.js';
 import { Range } from '../../../core/range.js';
 import { DetailedLineRangeMapping, LineRangeMapping, RangeMapping } from '../../rangeMapping.js';
+import { ILinesDiffComputerOptions, LinesDiff, MovedText } from '../../linesDiffComputer.js';
 import { DateTimeout, DiffAlgorithmResult, InfiniteTimeout, ISequence, ITimeout, SequenceDiff } from './diffAlgorithm.js';
 
 /** Generated sequence alignment bindings, independent of the storage ABI. */
@@ -19,6 +20,7 @@ export interface IRustSequenceDiffModule {
 	refine_diff(original: Uint16Array, modified: Uint16Array, originalOffsets: Uint32Array, modifiedOffsets: Uint32Array, settings: Uint32Array, timeout?: () => boolean, deadline?: number): Uint32Array | undefined;
 	diff_lines(original: Uint16Array, modified: Uint16Array, originalOffsets: Uint32Array, modifiedOffsets: Uint32Array, equalityScores: Float64Array, timeout?: () => boolean, deadline?: number): Uint32Array | undefined;
 	moved_lines(original: Uint16Array, modified: Uint16Array, originalOffsets: Uint32Array, modifiedOffsets: Uint32Array, hashes: Uint32Array, changes: Uint32Array, deadline?: number): Uint32Array | undefined;
+	diff_document(original: Uint16Array, modified: Uint16Array, originalOffsets: Uint32Array, modifiedOffsets: Uint32Array, equalityScores: Float64Array, settings: number, deadline?: number): Uint32Array | undefined;
 }
 
 const maxDynamicDiffCells = 4 * 1024 * 1024;
@@ -27,7 +29,7 @@ let registeredModule: IRustSequenceDiffModule | undefined;
 
 /** Registers algorithms only for the lifetime of the initialized editor core. */
 export function registerRustSequenceDiff(module: IRustSequenceDiffModule): IDisposable {
-	if (typeof module.sequence_diff_abi_version !== 'function' || module.sequence_diff_abi_version() !== 7) {
+	if (typeof module.sequence_diff_abi_version !== 'function' || module.sequence_diff_abi_version() !== 8) {
 		throw new Error('The Rust sequence diff bindings do not match the current algorithm contract');
 	}
 	if (registeredModule) {
@@ -39,6 +41,60 @@ export function registerRustSequenceDiff(module: IRustSequenceDiffModule): IDisp
 			registeredModule = undefined;
 		}
 	});
+}
+
+/** Shares source lines and identities across the complete native advanced diff pipeline. */
+export function tryComputeRustDocumentDiff(original: string[], modified: string[], timeout: ITimeout, options: ILinesDiffComputerOptions, includeRawChanges: boolean): { diff: LinesDiff; rawChanges: RangeMapping[] } | undefined {
+	if (!registeredModule || original.length === 0 || modified.length === 0) {
+		return undefined;
+	}
+	const { check, deadline } = getTimeout(timeout);
+	if (check) {
+		return undefined;
+	}
+	const first = encodeLines(original, new Range(1, 1, original.length, original[original.length - 1].length + 1));
+	const second = encodeLines(modified, new Range(1, 1, modified.length, modified[modified.length - 1].length + 1));
+	if (!first || !second) {
+		return undefined;
+	}
+	const scores = original.length + modified.length < 1700 ? Float64Array.from(modified, line => line.length === 0 ? 0.1 : 1 + Math.log(1 + line.length)) : new Float64Array();
+	const settings = Number(!options.ignoreTrimWhitespace) | (Number(options.computeMoves) << 1) | (Number(!!options.extendToSubwords) << 2) | (Number(includeRawChanges) << 3);
+	const values = registeredModule.diff_document(first.units, second.units, first.offsets, second.offsets, scores, settings, deadline);
+	if (!values) {
+		return undefined;
+	}
+	let offset = 4;
+	const readLineMapping = () => {
+		const mapping = new LineRangeMapping(new LineRange(values[offset] + 1, values[offset + 1] + 1), new LineRange(values[offset + 2] + 1, values[offset + 3] + 1));
+		offset += 4;
+		return mapping;
+	};
+	const readTextMapping = () => {
+		const mapping = decodeTextMapping(values, offset);
+		offset += 8;
+		return mapping;
+	};
+	const readChanges = (count: number) => Array.from({ length: count }, () => {
+		const mapping = readLineMapping();
+		const innerCount = values[offset++];
+		return new DetailedLineRangeMapping(mapping.original, mapping.modified, Array.from({ length: innerCount }, readTextMapping));
+	});
+	const changes = readChanges(values[1]);
+	const moves = Array.from({ length: values[2] }, () => {
+		const mapping = readLineMapping();
+		const count = values[offset++];
+		return new MovedText(mapping, readChanges(count));
+	});
+	const rawChanges = Array.from({ length: values[3] }, readTextMapping);
+	const hitTimeout = values[0] === 1;
+	if (hitTimeout && timeout instanceof DateTimeout) {
+		timeout.invalidate();
+	}
+	return { diff: new LinesDiff(changes, moves, hitTimeout), rawChanges };
+}
+
+function decodeTextMapping(values: Uint32Array, offset: number): RangeMapping {
+	return new RangeMapping(new Range(values[offset], values[offset + 1], values[offset + 2], values[offset + 3]), new Range(values[offset + 4], values[offset + 5], values[offset + 6], values[offset + 7]));
 }
 
 /** Runs the existing block matching and extension rules in the native line-coordinate domain. */
@@ -119,7 +175,7 @@ export function tryComputeRustCharacterDiff(originalLines: string[], modifiedLin
 	const rawChanges: RangeMapping[] = [];
 	for (let index = 0; index < result[1] + result[2]; index++) {
 		const offset = 3 + index * 8;
-		const mapping = new RangeMapping(new Range(result[offset], result[offset + 1], result[offset + 2], result[offset + 3]), new Range(result[offset + 4], result[offset + 5], result[offset + 6], result[offset + 7]));
+		const mapping = decodeTextMapping(result, offset);
 		(index < result[1] ? mappings : rawChanges).push(mapping);
 	}
 	return { mappings, rawChanges, hitTimeout };
