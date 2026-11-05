@@ -9,6 +9,7 @@ import { IPosition } from '../core/position.js';
 import { ITextModel } from '../model.js';
 import { OffsetRange } from '../core/ranges/offsetRange.js';
 import { onUnexpectedError } from '../../../base/common/errors.js';
+import { tryCompareRustLineTokens, tryConvertRustLineTokenOffsets, tryExtractRustLineTokens, tryFindRustLineTokenIndex, tryInsertRustLineTokens, trySliceRustLineTokens } from './rustTokens.js';
 
 
 export interface IViewLineTokens {
@@ -53,6 +54,7 @@ export class LineTokens implements IViewLineTokens {
 	}
 
 	public static convertToEndOffset(tokens: Uint32Array, lineTextLength: number): void {
+		if (tryConvertRustLineTokenOffsets(tokens, lineTextLength)) { return; }
 		const tokenCount = (tokens.length >>> 1);
 		const lastTokenIndex = tokenCount - 1;
 		for (let tokenIndex = 0; tokenIndex < lastTokenIndex; tokenIndex++) {
@@ -65,6 +67,8 @@ export class LineTokens implements IViewLineTokens {
 		if (tokens.length <= 2) {
 			return 0;
 		}
+		const native = tryFindRustLineTokenIndex(tokens, desiredIndex);
+		if (native !== undefined) { return native; }
 
 		let low = 0;
 		let high = (tokens.length >>> 1) - 1;
@@ -134,6 +138,8 @@ export class LineTokens implements IViewLineTokens {
 		if (this._tokensCount !== other._tokensCount) {
 			return false;
 		}
+		const native = tryCompareRustLineTokens(this._tokens, other._tokens, sliceFromTokenIndex, sliceTokenCount);
+		if (native !== undefined) { return native; }
 		const from = (sliceFromTokenIndex << 1);
 		const to = from + (sliceTokenCount << 1);
 		for (let i = from; i < to; i++) {
@@ -228,6 +234,8 @@ export class LineTokens implements IViewLineTokens {
 		if (insertTokens.length === 0) {
 			return this;
 		}
+		const native = tryInsertRustLineTokens(this._tokens, this._tokensCount, this._text, insertTokens);
+		if (native) { return new LineTokens(native[0], native[1], this.languageIdCodec); }
 
 		let nextOriginalTokenIdx = 0;
 		let nextInsertTokenIdx = 0;
@@ -269,6 +277,11 @@ export class LineTokens implements IViewLineTokens {
 
 	public getTokensInRange(range: OffsetRange): TokenArray {
 		const builder = new TokenArrayBuilder();
+		const native = tryExtractRustLineTokens(this, LineTokens.prototype, range.start, range.endExclusive);
+		if (native) {
+			for (let index = 0; index < native.length; index += 2) { builder.add(native[index], native[index + 1]); }
+			return builder.build();
+		}
 
 		const startTokenIndex = this.findTokenIndexAtOffset(range.start);
 		const endTokenIndex = this.findTokenIndexAtOffset(range.endExclusive);
@@ -324,8 +337,13 @@ class SliceLineTokens implements IViewLineTokens {
 		this._startOffset = startOffset;
 		this._endOffset = endOffset;
 		this._deltaOffset = deltaOffset;
-		this._firstTokenIndex = source.findTokenIndexAtOffset(startOffset);
+		const native = trySliceRustLineTokens(source, LineTokens.prototype, startOffset, endOffset);
+		this._firstTokenIndex = native ? native[0] : source.findTokenIndexAtOffset(startOffset);
 		this.languageIdCodec = source.languageIdCodec;
+		if (native) {
+			this._tokensCount = native[1];
+			return;
+		}
 
 		this._tokensCount = 0;
 		for (let i = this._firstTokenIndex, len = source.getCount(); i < len; i++) {

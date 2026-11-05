@@ -5,6 +5,8 @@
 
 import { IDisposable, toDisposable } from '../../../base/common/lifecycle.js';
 import { IRange, Range } from '../core/range.js';
+import { decodeUTF16, encodeUTF16 } from '../core/utf16Transfer.js';
+import type { LineTokens } from './lineTokens.js';
 import type { SparseLineTokens, SparseMultilineTokens } from './sparseMultilineTokens.js';
 import type { ContiguousMultilineTokens } from './contiguousMultilineTokens.js';
 
@@ -21,6 +23,12 @@ export interface IRustTokensModule {
 	serialize_contiguous_token_blocks(blocks: ContiguousMultilineTokens[], standardSize: () => number, standardWrite: (destination: Uint8Array, offset: number) => number, destination: Uint8Array, offset: number, includeCount: boolean): number | undefined;
 	encode_contiguous_token_blocks(blocks: ContiguousMultilineTokens[], standardSize: () => number, standardWrite: (destination: Uint8Array, offset: number) => number): Uint8Array | undefined;
 	decode_contiguous_token_blocks(source: Uint8Array, offset: number, includeCount: boolean): [number, [number, Uint32Array[]][]] | undefined;
+	line_token_index(tokens: Uint32Array, desired: number): number | undefined;
+	line_token_slice_info(tokens: Uint32Array, start: number, end: number): Float64Array | undefined;
+	convert_line_token_offsets(tokens: Uint32Array, length: number): boolean;
+	line_tokens_equal(first: Uint32Array, second: Uint32Array, from: number, count: number): boolean | undefined;
+	line_tokens_in_range(tokens: Uint32Array, start: number, end: number): Float64Array | undefined;
+	insert_line_tokens(tokens: Uint32Array, text: Uint16Array, insertedText: Uint16Array, parameters: Float64Array): [Uint32Array, Uint16Array] | undefined;
 	WasmContiguousTokensStore: { new(empty: ArrayBuffer): IRustContiguousTokensStore };
 	WasmSparseTokensStore: { new(standardEdit?: SparseMultilineTokens['acceptEdit']): IRustSparseTokensStore };
 }
@@ -53,7 +61,7 @@ let registeredModule: IRustTokensModule | undefined;
 
 /** Installs token composition for the initialized core's disposable scope. */
 export function registerRustTokens(module: IRustTokensModule): IDisposable {
-	if (typeof module.tokens_abi_version !== 'function' || module.tokens_abi_version() !== 7 || typeof module.merge_semantic_tokens !== 'function' || typeof module.update_sparse_tokens !== 'function' || typeof module.split_sparse_tokens !== 'function' || typeof module.update_contiguous_tokens !== 'function' || typeof module.append_contiguous_tokens !== 'function' || typeof module.edit_contiguous_tokens_block !== 'function' || typeof module.contiguous_token_blocks_size !== 'function' || typeof module.serialize_contiguous_token_blocks !== 'function' || typeof module.encode_contiguous_token_blocks !== 'function' || typeof module.decode_contiguous_token_blocks !== 'function' || typeof module.WasmContiguousTokensStore !== 'function' || typeof module.WasmSparseTokensStore !== 'function') {
+	if (typeof module.tokens_abi_version !== 'function' || module.tokens_abi_version() !== 8 || typeof module.merge_semantic_tokens !== 'function' || typeof module.update_sparse_tokens !== 'function' || typeof module.split_sparse_tokens !== 'function' || typeof module.update_contiguous_tokens !== 'function' || typeof module.append_contiguous_tokens !== 'function' || typeof module.edit_contiguous_tokens_block !== 'function' || typeof module.contiguous_token_blocks_size !== 'function' || typeof module.serialize_contiguous_token_blocks !== 'function' || typeof module.encode_contiguous_token_blocks !== 'function' || typeof module.decode_contiguous_token_blocks !== 'function' || typeof module.line_token_index !== 'function' || typeof module.line_token_slice_info !== 'function' || typeof module.convert_line_token_offsets !== 'function' || typeof module.line_tokens_equal !== 'function' || typeof module.line_tokens_in_range !== 'function' || typeof module.insert_line_tokens !== 'function' || typeof module.WasmContiguousTokensStore !== 'function' || typeof module.WasmSparseTokensStore !== 'function') {
 		throw new Error('The Rust token bindings do not match the current metadata contract');
 	}
 	if (registeredModule) { throw new Error('A Rust token module is already registered'); }
@@ -61,6 +69,78 @@ export function registerRustTokens(module: IRustTokensModule): IDisposable {
 	return toDisposable(() => {
 		if (registeredModule === module) { registeredModule = undefined; }
 	});
+}
+
+/** Searches the original typed array directly without transferring a complete source stream. */
+export function tryFindRustLineTokenIndex(tokens: Uint32Array, desired: number): number | undefined {
+	if (!registeredModule || tokens.length % 2 !== 0 || tokens.length > 4 * 1024 * 1024 || Number.isNaN(desired)) { return undefined; }
+	const result = registeredModule.line_token_index(tokens, desired);
+	if (result !== undefined && (!Number.isSafeInteger(result) || result < 0 || result >= Math.max(1, tokens.length / 2))) { throw new Error('The Rust line token index does not match the editor contract'); }
+	return result;
+}
+
+/** Converts end offsets through mutable copyback while keeping every provider alias. */
+export function tryConvertRustLineTokenOffsets(tokens: Uint32Array, length: number): boolean {
+	if (!registeredModule || tokens.length === 0 || tokens.length % 2 !== 0 || tokens.length > 4 * 1024 * 1024 || !Number.isSafeInteger(length) || Math.abs(length) > 2 ** 40) { return false; }
+	return registeredModule.convert_line_token_offsets(tokens, length);
+}
+
+/** Retains cached text/count checks at the caller and delegates only the original word comparison. */
+export function tryCompareRustLineTokens(first: Uint32Array, second: Uint32Array, from: number, count: number): boolean | undefined {
+	if (!registeredModule || first.length === 0 || second.length === 0 || first.length > 4 * 1024 * 1024 || second.length > 4 * 1024 * 1024 || ![from, count].every(value => Number.isSafeInteger(value) && value >= 0 && value <= 0x3FFFFFFF)) { return undefined; }
+	return registeredModule.line_tokens_equal(first, second, from, count);
+}
+
+/** Keeps virtual/accessor overrides on their existing path instead of replacing their callbacks. */
+function standardLineTokens(source: LineTokens, prototype: LineTokens): boolean {
+	return Object.getPrototypeOf(source) === prototype && !['getCount', 'getEncodedTokens', 'findTokenIndexAtOffset', 'getStartOffset', 'getEndOffset', 'getMetadata'].some(name => Object.hasOwn(source, name));
+}
+
+/** Captures the existing slice's fixed first index and count over the current mutable encoding. */
+export function trySliceRustLineTokens(source: LineTokens, prototype: LineTokens, start: number, end: number): Float64Array | undefined {
+	if (!registeredModule || !standardLineTokens(source, prototype)) { return undefined; }
+	const tokens = source.getEncodedTokens();
+	if (tokens.length / 2 !== source.getCount()) { return undefined; }
+	const result = registeredModule.line_token_slice_info(tokens, start, end);
+	if (result && (result.length !== 2 || !Number.isSafeInteger(result[0]) || result[0] < 0 || result[0] > source.getCount() || !Number.isSafeInteger(result[1]) || result[1] < 0 || result[1] > source.getCount())) { throw new Error('The Rust line token slice does not match the editor contract'); }
+	return result;
+}
+
+/** Extracts ordered length/metadata pairs for the existing TokenArray builder. */
+export function tryExtractRustLineTokens(source: LineTokens, prototype: LineTokens, start: number, end: number): Float64Array | undefined {
+	if (!registeredModule || !standardLineTokens(source, prototype)) { return undefined; }
+	const tokens = source.getEncodedTokens();
+	if (tokens.length === 0) { return undefined; }
+	const result = registeredModule.line_tokens_in_range(tokens, start, end);
+	if (result && (result.length % 2 !== 0 || Array.from(result).some(value => !Number.isSafeInteger(value) || value < 0))) { throw new Error('The Rust line token range does not match the editor contract'); }
+	return result;
+}
+
+/** Packs inserted text losslessly and retains the original token ties, substring rules, and sources. */
+export function tryInsertRustLineTokens(tokens: Uint32Array, count: number, text: string, inserted: { offset: number; text: string; tokenMetadata: number }[]): [Uint32Array, string] | undefined {
+	if (!registeredModule || tokens.length % 2 !== 0 || tokens.length / 2 !== count || tokens.length > 4 * 1024 * 1024 || text.length > 4 * 1024 * 1024 || inserted.length > 262144) { return undefined; }
+	const parameters = new Float64Array(inserted.length * 4);
+	const texts: string[] = [];
+	let length = 0;
+	for (let index = 0; index < inserted.length; index++) {
+		const item = inserted[index];
+		if (!['offset', 'text', 'tokenMetadata'].every(name => Object.getOwnPropertyDescriptor(item, name)?.value !== undefined)) { return undefined; }
+		if (!Number.isSafeInteger(item.offset) || Math.abs(item.offset) > 2 ** 40 || typeof item.text !== 'string' || typeof item.tokenMetadata !== 'number') { return undefined; }
+		parameters.set([item.offset, length, item.text.length, item.tokenMetadata >>> 0], index * 4);
+		texts.push(item.text);
+		length += item.text.length;
+		if (length > 4 * 1024 * 1024) { return undefined; }
+	}
+	const insertedText = new Uint16Array(length);
+	let offset = 0;
+	for (const text of texts) {
+		insertedText.set(encodeUTF16(text), offset);
+		offset += text.length;
+	}
+	const result = registeredModule.insert_line_tokens(tokens, encodeUTF16(text), insertedText, parameters);
+	if (!result) { return undefined; }
+	if (!Array.isArray(result) || result.length !== 2 || !(result[0] instanceof Uint32Array) || result[0].length % 2 !== 0 || !(result[1] instanceof Uint16Array) || (result[0].length > 1 ? result[0][result[0].length - 2] : 0) !== result[1].length) { throw new Error('The Rust line token insertion result does not match the editor contract'); }
+	return [result[0], decodeUTF16(result[1])];
 }
 
 /** The caller immediately registers the owning store's generated free method for disposal. */

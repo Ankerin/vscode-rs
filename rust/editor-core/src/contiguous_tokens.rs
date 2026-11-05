@@ -120,21 +120,7 @@ pub fn append_contiguous_tokens(
 }
 
 fn find_index(tokens: &[[u32; 2]], desired: i64) -> usize {
-	let mut low = 0;
-	let mut high = tokens.len() - 1;
-	while low < high {
-		let mid = low + (high - low) / 2;
-		let end = i64::from(tokens[mid][0]);
-		if end == desired {
-			return mid + 1;
-		}
-		if end < desired {
-			low = mid + 1;
-		} else {
-			high = mid;
-		}
-	}
-	low
+	crate::find_line_token_index(tokens.len(), desired as f64, |index| tokens[index][0])
 }
 
 #[cfg(test)]

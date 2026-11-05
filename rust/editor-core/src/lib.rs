@@ -9,6 +9,7 @@ mod contiguous_tokens;
 mod folding;
 mod guides;
 mod indentation;
+mod line_tokens;
 mod model_edits;
 mod search;
 mod sequence_diff;
@@ -26,6 +27,10 @@ pub use contiguous_tokens::{
 pub use folding::{IndentationFoldingRanges, compute_indentation_folding};
 pub use guides::{ActiveIndentGuide, compute_active_indent_guide, compute_indent_guides};
 pub use indentation::{GuessedIndentation, guess_indentation};
+pub use line_tokens::{
+	InsertedLineTokens, LineTokenInsertion, convert_line_token_offsets, find_line_token_index,
+	insert_line_tokens, line_token_slice, line_tokens_equal, line_tokens_in_range,
+};
 pub use model_edits::{
 	MAX_MODEL_EDIT_UNITS, MAX_MODEL_EDITS, ModelEdit, ModelEditOptions, ModelTextFlags,
 	PreparedModelEdit, PreparedModelEdits, prepare_model_edits,
