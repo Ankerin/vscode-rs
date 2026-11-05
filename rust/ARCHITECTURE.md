@@ -78,11 +78,13 @@ Do not introduce a second message protocol before a real native service requires
 
 Positions remain one-based; offsets remain zero-based UTF-16 code units. A Rust `String` byte offset is not an editor offset. Preserve lone surrogate code units, CR, LF, CRLF, cross-chunk CRLF, BOM, RTL flags, and unusual line terminators. File decoding/encoding stays at the existing boundary until that service migrates.
 
-The implemented core is a persistent AVL rope with leaves bounded to 1,024 code units. Each node caches length and line-ending counts. Combining summaries accounts for CRLF split across children. Replacement splits and joins shared trees; snapshots retain an immutable root. Native batch edits validate all original ranges before committing. No handwritten unsafe Rust is permitted by workspace lint policy.
+The implemented core is a persistent AVL rope with leaves bounded to 1,024 code units. Latin-1 leaf payloads use one byte per code unit; other leaves retain UTF-16. Split views share an immutable payload and line-ending index, including splits inside CRLF. Each node caches length and line-ending counts. Combining summaries accounts for CRLF split across children. Replacement splits and joins shared trees; whole-document and range snapshots retain an immutable version with lazy, sequential traversal. Native batch edits validate all original ranges before committing. No handwritten unsafe Rust is permitted by workspace lint policy.
 
 The current adapter replaces storage beneath `PieceTreeTextBuffer`. It retains the existing edit validation, reverse edit generation, whitespace handling, events, model versioning, and undo service. It explicitly frees model bindings on disposal and snapshot bindings at stream exhaustion. The default buffer path and its implementation-specific tests remain available.
 
-Before promoting this implementation, measure persistent-node overhead, ASCII storage, leaf sizing, fragmented editing, save/snapshot cost, and string conversion across the WebAssembly boundary. Introduce compact leaf representation or shared transfer buffers only when measurements and parity tests justify the change.
+The adapter detects consecutive line reads and prefetches one cache of up to 64 lines and 32,768 code units; isolated reads copy one line directly, and the first line may exceed that budget so long lines are never truncated. UTF-8 bindings transfer surrogate-free input and ASCII output. Other output uses lossless UTF-16 typed arrays and native JavaScript decoding, with explicit handling of sparse or dense lone surrogates. This avoids transcoding non-ASCII text to UTF-8 and back. Plain literal search scans Rust leaf views with KMP and compact-leaf `memchr` skipping, without decoding each line. Case folding, word classification, captures, regular expressions, and multiline search retain their existing compatibility implementation.
+
+Before promoting this implementation, measure persistent-node and shared-index overhead, ASCII/Latin-1/Unicode storage, leaf sizing, fragmented editing, random and sequential line reads, save/snapshot cost, and string conversion across the WebAssembly boundary. Compact payload size alone does not establish application resource savings. Worker, browser, packaging, and cross-platform gates remain required.
 
 ## Migration sequence
 
@@ -90,7 +92,7 @@ Before promoting this implementation, measure persistent-node overhead, ASCII st
 | --- | --- | --- | --- |
 | 0 | Baselines, architecture, toolchain, formatting, validation commands | Reproducible native/WASM builds and explicit compatibility gates | Architecture and build/test foundation implemented; complete application baselines pending |
 | 1 | Text storage | Differential tests against real buffer/model operations, resource lifetime checks, workload benchmarks, worker/web parity | Desktop storage adapter implemented behind an internal flag; promotion gates pending |
-| 2 | Remaining editor model | Undo/redo, edits, selections, decorations, search, diff, bracket/folding state, tokens, Unicode behavior ported with existing contracts | Planned |
+| 2 | Remaining editor model | Undo/redo, edits, selections, decorations, search, diff, bracket/folding state, tokens, Unicode behavior ported with existing contracts | Plain storage-level literal search implemented; remaining model algorithms planned |
 | 3 | Native platform services | Files/encoding/watchers, workspace search, storage/configuration, process management, clipboard, dialogs, trust, lifecycle migrated individually | Planned |
 | 4 | Terminal and development tools | PTY/ConPTY, shell integration, terminal state, tasks, Git/SCM, LSP/DAP, debug sessions, diagnostics retain behavior | Planned |
 | 5 | Extensions and rich editors | Extension API and built-in contributions, webviews, notebook models/renderers, custom editors, authentication, synchronization retain contracts | Planned |

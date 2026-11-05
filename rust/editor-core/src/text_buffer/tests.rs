@@ -12,7 +12,7 @@ fn units(text: &str) -> Vec<u16> {
 fn collect_snapshot(mut snapshot: TextSnapshot) -> Vec<u16> {
 	let mut result = Vec::new();
 	while let Some(chunk) = snapshot.read() {
-		result.extend_from_slice(chunk);
+		chunk.copy_to(&mut result);
 	}
 	result
 }
@@ -82,6 +82,76 @@ fn preserves_all_utf16_units_and_line_endings() {
 		units("\r\n\r\n\r\r\n\n\n"),
 	] {
 		assert_matches(&TextBuffer::new(&text), &text);
+	}
+}
+
+#[test]
+fn unicode_string_construction_and_edits_keep_utf16_coordinates() {
+	let multiline = "ASCII\r\n".repeat(2048);
+	for text in [
+		"",
+		multiline.as_str(),
+		"\0\u{80}\u{9F}\u{FF}\u{FEFF}\u{1F600}\r\n",
+	] {
+		let mut buffer = TextBuffer::from_text(text);
+		let mut expected = units(text);
+		assert_matches(&buffer, &expected);
+		let inserted = "new\u{1F600}\r\n";
+		buffer.replace_text(0..0, inserted).unwrap();
+		expected.splice(0..0, units(inserted));
+		assert_matches(&buffer, &expected);
+	}
+}
+
+#[test]
+fn bounded_line_batches_preserve_mixed_endings_empty_lines_and_long_lines() {
+	let buffer = TextBuffer::new(&units("one\r\n\rtwo\nthree\r\n"));
+	let observations: Vec<_> = [
+		(1, 64, 0),
+		(1, 64, 5),
+		(1, 2, 100),
+		(2, 64, 100),
+		(3, 1, 100),
+		(5, 64, 100),
+	]
+	.into_iter()
+	.map(|(line, count, budget)| buffer.line_batch(line, count, budget).unwrap())
+	.collect();
+	assert_eq!(
+		observations,
+		["one", "one\r\n", "one\r\n", "\rtwo\nthree\r\n", "two", ""].map(units)
+	);
+	assert_eq!(
+		buffer.line_batch(1, 0, 100),
+		Err(BufferError::InvalidPosition)
+	);
+	let text = format!("short\n{}\nlast", "x".repeat(40000));
+	let long = TextBuffer::from_text(&text);
+	assert_eq!(long.line_batch(1, 64, 32768).unwrap(), units("short"));
+	assert_eq!(long.line_batch(2, 64, 32768).unwrap(), vec![120; 40000]);
+	assert_eq!(
+		long.line_batch(2, usize::MAX, usize::MAX).unwrap(),
+		units(&text[6..])
+	);
+}
+
+#[test]
+fn range_snapshots_start_and_stop_inside_compact_wide_and_split_surrogate_leaves() {
+	let mut text = vec![65; 8192];
+	for offset in [1023, 3071, 6143] {
+		text[offset] = 0xD800;
+		text[offset + 1] = 0xDC00;
+	}
+	let mut buffer = TextBuffer::new(&text);
+	let ranges = [0..0, 0..1, 1000..1024, 1024..2049, 3071..7000, 8192..8192];
+	let snapshots: Vec<_> = ranges
+		.iter()
+		.map(|range| buffer.snapshot_range(range.clone()).unwrap())
+		.collect();
+	buffer.replace_text(0..buffer.len(), "changed").unwrap();
+	drop(buffer);
+	for (range, snapshot) in ranges.into_iter().zip(snapshots) {
+		assert_eq!(collect_snapshot(snapshot), text[range]);
 	}
 }
 

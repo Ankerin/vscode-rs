@@ -92,6 +92,12 @@ function compareBuffers(reference: PieceTreeTextBuffer, actual: PieceTreeTextBuf
 	assert.ok(actual.equals(reference) && reference.equals(actual));
 }
 
+test('Rust storage rejects stale bindings before registering a model factory', () => {
+	assert.throws(() => registerRustTextBuffer({ ...rust, text_buffer_abi_version: () => 1 }), /storage contract/);
+	const registration = registerRustTextBuffer(rust);
+	registration.dispose();
+});
+
 test('Rust storage preserves chunked UTF-16 input, BOM, and both default EOLs', context => {
 	for (const chunks of [
 		[''],
@@ -104,6 +110,68 @@ test('Rust storage preserves chunked UTF-16 input, BOM, and both default EOLs', 
 			compareBuffers(reference, actual);
 		}
 	}
+});
+
+test('Rust storage preserves lossless string transfers and invalidates bounded line caches', context => {
+	const alphabet = String.fromCharCode(...Array.from({ length: 256 }, (_, index) => index)).replace(/[\r\n]/g, '');
+	const lines = Array.from({ length: 130 }, (_, index) => `line ${index} ${alphabet}\uFEFF${index % 2 ? '\uD800' : '\uD83D\uDE00'}`);
+	lines[70] = 'long'.repeat(10000);
+	lines.push('');
+	const [reference, actual] = createPair(context, [lines.join('\r\n')]);
+	for (const line of [1, 63, 64, 65, 70, 71, 72, 128, 130, 131, 129, 2, 1]) {
+		assert.deepStrictEqual([actual.getLineContent(line), actual.getLineLength(line)], [reference.getLineContent(line), reference.getLineLength(line)]);
+	}
+	const edits = annotate([
+		{ range: new Range(2, 1, 2, 4), text: 'changed\nline' },
+		{ range: new Range(63, 1, 68, 2), text: '' }
+	]);
+	reference.applyEdits(edits, false, false);
+	actual.applyEdits(edits, false, false);
+	compareBuffers(reference, actual);
+	reference.setEOL('\n');
+	actual.setEOL('\n');
+	compareBuffers(reference, actual);
+});
+
+test('Rust bindings transfer ASCII strings and UTF-16 arrays without changing code units', () => {
+	const texts = ['ASCII\u0000', '\u0080\u009F\u00FF\uFEFF', 'a'.repeat(1023) + '\uD83D\uDE00', '\uD800x\uDFFF', 'x'.repeat(65535) + '\uD800\uDC00', '\uD800x'.repeat(2048), 'valid\uFEFF\uD83D\uDE00'.repeat(2048) + '\uDFFF'];
+	for (const text of texts) {
+		const original = new Uint16Array(text.length);
+		for (let index = 0; index < text.length; index++) { original[index] = text.charCodeAt(index); }
+		const buffer = new rust.WasmTextBuffer(original);
+		try {
+			const decode = (value: string | Uint16Array) => typeof value === 'string' ? value : Array.from(value, unit => String.fromCharCode(unit)).join('');
+			const transferred = buffer.slice_text(0, text.length);
+			assert.strictEqual(decode(transferred), text);
+			assert.strictEqual(typeof transferred, /[^\u0000-\u007F]/.test(text) ? 'object' : 'string');
+			const snapshot = buffer.snapshot();
+			try {
+				const chunks: string[] = [];
+				let chunk: string | Uint16Array | undefined;
+				while ((chunk = snapshot.read()) !== undefined) { chunks.push(decode(chunk)); }
+				assert.strictEqual(chunks.join(''), text);
+			} finally { snapshot.free(); }
+		} finally { buffer.free(); }
+	}
+});
+
+test('Rust literal search matches the existing engine across leaf and edit boundaries', context => {
+	const [reference, actual] = createPair(context, ['a'.repeat(1023) + 'ababa\uD800x\uDFFF\uD83D\uDE00\r\n' + 'ababa aaba\r\n'.repeat(130)]);
+	const searches = ['aba', 'aaba', '\uD800x', '\uDFFF', '\uD83D\uDE00', 'missing'];
+	const compare = () => {
+		const full = new Range(1, 1, reference.getLineCount(), reference.getLineLength(reference.getLineCount()) + 1);
+		for (const search of searches) {
+			for (const limit of [1, 3, 1000]) {
+				const data = new SearchParams(search, false, true, null).parseSearchRequest()!;
+				assert.deepStrictEqual(actual.findMatchesLineByLine(full, data, false, limit), reference.findMatchesLineByLine(full, data, false, limit));
+			}
+		}
+	};
+	compare();
+	const edits = annotate([{ range: new Range(1, 1024, 1, 1024), text: 'ab' }, { range: new Range(64, 2, 64, 3), text: 'aba' }]);
+	reference.applyEdits(edits, false, false);
+	actual.applyEdits(edits, false, false);
+	compare();
 });
 
 test('Rust storage produces identical edits, inverse edits, and notifications', context => {
@@ -149,7 +217,7 @@ test('Rust storage preserves literal search, regex captures, boundaries, and res
 	]) {
 		const data = search.parseSearchRequest()!;
 		for (const captures of [true, false]) {
-			for (const limit of [1, 3, 100]) {
+			for (const limit of [-1, 0, 1, 1.5, 3, 100, Number.POSITIVE_INFINITY, Number.NaN]) {
 				assert.deepStrictEqual(actual.findMatchesLineByLine(range, data, captures, limit), reference.findMatchesLineByLine(range, data, captures, limit));
 			}
 		}

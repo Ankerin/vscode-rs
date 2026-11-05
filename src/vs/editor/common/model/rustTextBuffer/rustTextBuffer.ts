@@ -16,10 +16,14 @@ export interface IRustTextBuffer {
 	length(): number;
 	line_count(): number;
 	replace(offset: number, length: number, units: Uint16Array): void;
+	replace_text(offset: number, length: number, text: string): void;
 	slice(offset: number, length: number): Uint16Array;
+	slice_text(offset: number, length: number): string | Uint16Array;
 	offset_at(lineNumber: number, column: number): number;
 	position_at(offset: number): Uint32Array;
 	line_content(lineNumber: number): Uint16Array;
+	line_batch(startLine: number, maxLines: number, maxUnits: number): string | Uint16Array;
+	find_literal(startLine: number, startColumn: number, endLine: number, endColumn: number, needle: Uint16Array, limit: number): Uint32Array;
 	line_length(lineNumber: number): number;
 	char_code(offset: number): number;
 	nearest_chunk(offset: number): Uint16Array;
@@ -29,12 +33,16 @@ export interface IRustTextBuffer {
 }
 
 interface IRustTextSnapshot {
-	read(): Uint16Array | undefined;
+	read(): string | Uint16Array | undefined;
 	free(): void;
 }
 
 export interface IRustTextBufferModule {
-	WasmTextBuffer: new (units: Uint16Array) => IRustTextBuffer;
+	text_buffer_abi_version(): number;
+	WasmTextBuffer: {
+		new(units: Uint16Array): IRustTextBuffer;
+		from_text(text: string): IRustTextBuffer;
+	};
 }
 
 function toUnits(text: string): Uint16Array {
@@ -47,13 +55,42 @@ function toUnits(text: string): Uint16Array {
 
 const utf16Decoder = new TextDecoder('utf-16le', { fatal: true, ignoreBOM: true });
 const isLittleEndian = new Uint8Array(new Uint16Array([0x0102]).buffer)[0] === 0x02;
+// UTF-8 bindings replace lone surrogates. Keep all surrogate-bearing input on the code-unit path.
+const containsSurrogates = /[\uD800-\uDFFF]/;
 
-function fromUnits(units: Uint16Array): string {
+function fromUnits(units: string | Uint16Array): string {
+	if (typeof units === 'string') {
+		return units;
+	}
 	if (isLittleEndian) {
 		try {
 			return utf16Decoder.decode(new Uint8Array(units.buffer, units.byteOffset, units.byteLength));
 		} catch {
-			// JavaScript permits unpaired surrogates; preserve them through the code-unit fallback.
+			// Decode valid spans separately when lone surrogates are sparse, preserving every code unit.
+			const offsets: number[] = [];
+			for (let index = 0; index < units.length && offsets.length <= 1024; index++) {
+				const unit = units[index];
+				if (unit >= 0xD800 && unit <= 0xDBFF && units[index + 1] >= 0xDC00 && units[index + 1] <= 0xDFFF) {
+					index++;
+				} else if (unit >= 0xD800 && unit <= 0xDFFF) {
+					offsets.push(index);
+				}
+			}
+			if (offsets.length <= 1024) {
+				const chunks: string[] = [];
+				let start = 0;
+				for (const offset of offsets) {
+					if (offset > start) {
+						chunks.push(utf16Decoder.decode(new Uint8Array(units.buffer, units.byteOffset + start * 2, (offset - start) * 2)));
+					}
+					chunks.push(String.fromCharCode(units[offset]));
+					start = offset + 1;
+				}
+				if (start < units.length) {
+					chunks.push(utf16Decoder.decode(new Uint8Array(units.buffer, units.byteOffset + start * 2, (units.length - start) * 2)));
+				}
+				return chunks.join('');
+			}
 		}
 	}
 	const chunks: string[] = [];
@@ -67,13 +104,14 @@ function fromUnits(units: Uint16Array): string {
 class RustTextBufferStorage implements ITextBufferStorage, IDisposable {
 	private readonly _buffer: IRustTextBuffer;
 	private _disposed = false;
-	private _cachedLine: { lineNumber: number; text: string } | undefined;
+	private _cachedLines: { startLine: number; lines: string[] } | undefined;
 
 	constructor(module: IRustTextBufferModule, chunks: StringBuffer[], private _eol: '\r\n' | '\n', private _eolNormalized: boolean) {
-		this._buffer = new module.WasmTextBuffer(new Uint16Array(0));
+		const first = chunks[0]?.buffer ?? '';
+		this._buffer = containsSurrogates.test(first) ? new module.WasmTextBuffer(toUnits(first)) : module.WasmTextBuffer.from_text(first);
 		try {
-			for (const chunk of chunks) {
-				this._buffer.replace(this._buffer.length(), 0, toUnits(chunk.buffer));
+			for (let index = 1; index < chunks.length; index++) {
+				this.replace(this._buffer.length(), 0, chunks[index].buffer);
 			}
 		} catch (error) {
 			this._buffer.free();
@@ -84,7 +122,7 @@ class RustTextBufferStorage implements ITextBufferStorage, IDisposable {
 	public dispose(): void {
 		if (!this._disposed) {
 			this._disposed = true;
-			this._cachedLine = undefined;
+			this._cachedLines = undefined;
 			this._buffer.free();
 		}
 	}
@@ -92,11 +130,14 @@ class RustTextBufferStorage implements ITextBufferStorage, IDisposable {
 	public getEOL(): '\r\n' | '\n' { return this._eol; }
 	public getLength(): number { return this._buffer.length(); }
 	public getLineCount(): number { return this._buffer.line_count(); }
-	public getLineLength(lineNumber: number): number { return this._buffer.line_length(lineNumber); }
+	public getLineLength(lineNumber: number): number { return this.getCachedLine(lineNumber)?.length ?? this._buffer.line_length(lineNumber); }
 	public getOffsetAt(lineNumber: number, column: number): number { return this._buffer.offset_at(lineNumber, column); }
 	public getNearestChunk(offset: number): string { return fromUnits(this._buffer.nearest_chunk(offset)); }
 	public getCharCode(offset: number): number { return Math.max(0, this._buffer.char_code(offset)); }
-	public getLineCharCode(lineNumber: number, index: number): number { return this.getCharCode(this.getOffsetAt(lineNumber, index + 1)); }
+	public getLineCharCode(lineNumber: number, index: number): number {
+		const line = this.getCachedLine(lineNumber);
+		return line !== undefined && index >= 0 && index < line.length ? line.charCodeAt(index) : this.getCharCode(this.getOffsetAt(lineNumber, index + 1));
+	}
 
 	public getPositionAt(offset: number): Position {
 		const position = this._buffer.position_at(Math.min(this.getLength(), Math.max(0, Math.floor(offset))));
@@ -104,15 +145,25 @@ class RustTextBufferStorage implements ITextBufferStorage, IDisposable {
 	}
 
 	public getLineContent(lineNumber: number): string {
-		if (this._cachedLine?.lineNumber !== lineNumber) {
-			this._cachedLine = { lineNumber, text: fromUnits(this._buffer.line_content(lineNumber)) };
+		const cached = this.getCachedLine(lineNumber);
+		if (cached !== undefined) {
+			return cached;
 		}
-		return this._cachedLine.text;
+		const consecutive = this._cachedLines && lineNumber === this._cachedLines.startLine + this._cachedLines.lines.length;
+		const text = fromUnits(this._buffer.line_batch(lineNumber, consecutive ? 64 : 1, 32768));
+		const lines = consecutive ? text.split(/\r\n|\r|\n/) : [text];
+		this._cachedLines = { startLine: lineNumber, lines };
+		return lines[0];
+	}
+
+	private getCachedLine(lineNumber: number): string | undefined {
+		return this._cachedLines?.lines[lineNumber - this._cachedLines.startLine];
 	}
 
 	public getLinesContent(): string[] {
 		const lines: string[] = [];
-		for (let lineNumber = 1; lineNumber <= this.getLineCount(); lineNumber++) {
+		const lineCount = this.getLineCount();
+		for (let lineNumber = 1; lineNumber <= lineCount; lineNumber++) {
 			lines.push(this.getLineContent(lineNumber));
 		}
 		return lines;
@@ -121,7 +172,7 @@ class RustTextBufferStorage implements ITextBufferStorage, IDisposable {
 	public getValueInRange(range: Range, eol?: string): string {
 		const start = this.getOffsetAt(range.startLineNumber, range.startColumn);
 		const end = this.getOffsetAt(range.endLineNumber, range.endColumn);
-		const text = fromUnits(this._buffer.slice(start, end - start));
+		const text = fromUnits(this._buffer.slice_text(start, end - start));
 		return eol && (eol !== this._eol || !this._eolNormalized) ? text.replace(/\r\n|\r|\n/g, eol) : text;
 	}
 
@@ -129,18 +180,26 @@ class RustTextBufferStorage implements ITextBufferStorage, IDisposable {
 		this._buffer.normalize_eol(eol === '\r\n');
 		this._eol = eol;
 		this._eolNormalized = true;
-		this._cachedLine = undefined;
+		this._cachedLines = undefined;
 	}
 
 	public insert(offset: number, value: string, eolNormalized: boolean = false): void {
-		this._buffer.replace(offset, 0, toUnits(value));
+		this.replace(offset, 0, value);
 		this._eolNormalized = this._eolNormalized && eolNormalized;
-		this._cachedLine = undefined;
+		this._cachedLines = undefined;
 	}
 
 	public delete(offset: number, length: number): void {
 		this._buffer.replace(offset, length, new Uint16Array(0));
-		this._cachedLine = undefined;
+		this._cachedLines = undefined;
+	}
+
+	private replace(offset: number, length: number, text: string): void {
+		if (containsSurrogates.test(text)) {
+			this._buffer.replace(offset, length, toUnits(text));
+		} else {
+			this._buffer.replace_text(offset, length, text);
+		}
 	}
 
 	public createSnapshot(BOM: string): ITextSnapshot {
@@ -169,6 +228,15 @@ class RustTextBufferStorage implements ITextBufferStorage, IDisposable {
 
 	public findMatchesLineByLine(searchRange: Range, searchData: SearchData, captureMatches: boolean, limitResultCount: number): FindMatch[] {
 		const result: FindMatch[] = [];
+		if (!captureMatches && searchData.simpleSearch && !searchData.wordSeparators) {
+			const search = searchData.simpleSearch;
+			const limit = Number.isNaN(limitResultCount) ? 0xFFFFFFFF : Math.min(0xFFFFFFFF, Math.max(1, Math.ceil(limitResultCount)));
+			const matches = this._buffer.find_literal(searchRange.startLineNumber, searchRange.startColumn, searchRange.endLineNumber, searchRange.endColumn, toUnits(search), limit);
+			for (let index = 0; index < matches.length; index += 2) {
+				result.push(new FindMatch(new Range(matches[index], matches[index + 1], matches[index], matches[index + 1] + search.length), null));
+			}
+			return result;
+		}
 		const searcher = new Searcher(searchData.wordSeparators, searchData.regex);
 		for (let lineNumber = searchRange.startLineNumber; lineNumber <= searchRange.endLineNumber; lineNumber++) {
 			const start = lineNumber === searchRange.startLineNumber ? searchRange.startColumn - 1 : 0;
@@ -208,5 +276,8 @@ class RustTextBufferStorage implements ITextBufferStorage, IDisposable {
 
 /** Installs an initialized Rust module for new models. Dispose the registration to restore defaults. */
 export function registerRustTextBuffer(module: IRustTextBufferModule): IDisposable {
+	if (typeof module.text_buffer_abi_version !== 'function' || module.text_buffer_abi_version() !== 2) {
+		throw new Error('The Rust text buffer bindings do not match the current storage contract');
+	}
 	return registerTextBufferStorageFactory((chunks, eol, eolNormalized) => new RustTextBufferStorage(module, chunks, eol, eolNormalized));
 }

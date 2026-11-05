@@ -5,6 +5,7 @@
 
 use std::{error::Error, fmt, ops::Range};
 
+use crate::TextChunk;
 use crate::tree::{self, Tree};
 
 /// A one-based editor position. Columns count UTF-16 code units, including unpaired surrogates.
@@ -53,6 +54,13 @@ impl TextBuffer {
 		}
 	}
 
+	/// Constructs known-valid Unicode text. The UTF-16 constructor remains available for arbitrary code units.
+	pub fn from_text(text: &str) -> Self {
+		Self {
+			root: tree::from_text(text),
+		}
+	}
+
 	pub fn len(&self) -> usize {
 		self.root.as_ref().map_or(0, |root| root.summary.length)
 	}
@@ -88,13 +96,23 @@ impl TextBuffer {
 
 	pub fn replace(&mut self, range: Range<usize>, units: &[u16]) -> Result<(), BufferError> {
 		self.validate_range(&range)?;
-		if range.is_empty() && units.is_empty() {
-			return Ok(());
+		self.replace_tree(range, tree::from_units(units));
+		Ok(())
+	}
+
+	pub fn replace_text(&mut self, range: Range<usize>, text: &str) -> Result<(), BufferError> {
+		self.validate_range(&range)?;
+		self.replace_tree(range, tree::from_text(text));
+		Ok(())
+	}
+
+	fn replace_tree(&mut self, range: Range<usize>, inserted: Tree) {
+		if range.is_empty() && inserted.is_none() {
+			return;
 		}
 		let (before, tail) = tree::split(self.root.clone(), range.start);
 		let (_, after) = tree::split(tail, range.len());
-		self.root = tree::concat(tree::concat(before, tree::from_units(units)), after);
-		Ok(())
+		self.root = tree::concat(tree::concat(before, inserted), after);
 	}
 
 	/// Applies sorted, nonoverlapping edits atomically. Equal-offset insertions keep input order.
@@ -158,13 +176,50 @@ impl TextBuffer {
 		self.slice(self.line_range(line_number)?)
 	}
 
+	/// Transfers complete adjacent lines with their original separators. A long first line is never truncated.
+	pub fn line_batch(
+		&self,
+		start_line: usize,
+		max_lines: usize,
+		max_units: usize,
+	) -> Result<Vec<u16>, BufferError> {
+		self.slice(self.line_batch_range(start_line, max_lines, max_units)?)
+	}
+
+	/// Resolves a bounded complete-line transfer without allocating its text.
+	pub fn line_batch_range(
+		&self,
+		start_line: usize,
+		max_lines: usize,
+		max_units: usize,
+	) -> Result<Range<usize>, BufferError> {
+		if max_lines == 0 {
+			return Err(BufferError::InvalidPosition);
+		}
+		if max_lines == 1 {
+			return self.line_range(start_line);
+		}
+		let start = self.line_start(start_line)?;
+		let budget_end = start.saturating_add(max_units).min(self.len());
+		let mut end_line = start_line
+			.saturating_add(max_lines - 1)
+			.min(self.line_count())
+			.min(self.position_at(budget_end).line_number);
+		let mut end = self.line_range(end_line)?.end;
+		if end_line > start_line && end > budget_end {
+			end_line -= 1;
+			end = self.line_range(end_line)?.end;
+		}
+		Ok(start..end)
+	}
+
 	/// Rewrites only line-ending units; all other UTF-16 units are preserved verbatim.
 	pub fn normalize_eol(&mut self, crlf: bool) {
 		let mut units = Vec::with_capacity(self.len());
 		let mut previous_cr = false;
 		let mut snapshot = self.snapshot();
 		while let Some(chunk) = snapshot.read() {
-			for &unit in chunk {
+			for unit in chunk.iter() {
 				if unit == 10 && previous_cr {
 					previous_cr = false;
 					continue;
@@ -185,20 +240,33 @@ impl TextBuffer {
 
 	pub fn snapshot(&self) -> TextSnapshot {
 		TextSnapshot {
-			buffer: self.clone(),
-			offset: 0,
+			chunks: self.chunks_at(0),
+			remaining: self.len(),
 		}
 	}
 
+	/// Retains an immutable range without copying its text or walking the tree at creation.
+	pub fn snapshot_range(&self, range: Range<usize>) -> Result<TextSnapshot, BufferError> {
+		self.validate_range(&range)?;
+		Ok(TextSnapshot {
+			chunks: self.chunks_at(range.start),
+			remaining: range.len(),
+		})
+	}
+
 	/// Returns a leaf suffix without allocating or collecting the whole document.
-	pub fn chunk_at(&self, offset: usize) -> &[u16] {
+	pub fn chunk_at(&self, offset: usize) -> TextChunk<'_> {
 		if offset >= self.len() {
-			return &[];
+			return TextChunk::Latin1(&[]);
 		}
 		self.root
 			.as_ref()
 			.expect("A nonempty document has a root")
 			.chunk_at(offset)
+	}
+
+	pub(crate) fn chunks_at(&self, offset: usize) -> tree::Chunks {
+		tree::Chunks::new(self.root.clone(), offset)
 	}
 
 	fn line_start(&self, line_number: usize) -> Result<usize, BufferError> {
@@ -250,18 +318,23 @@ impl TextBuffer {
 /// A streaming immutable document version. Later edits cannot alter its contents.
 #[derive(Debug)]
 pub struct TextSnapshot {
-	buffer: TextBuffer,
-	offset: usize,
+	chunks: tree::Chunks,
+	remaining: usize,
 }
 
 impl TextSnapshot {
-	pub fn read(&mut self) -> Option<&[u16]> {
-		let chunk = self.buffer.chunk_at(self.offset);
-		if chunk.is_empty() {
+	pub fn read(&mut self) -> Option<TextChunk<'_>> {
+		if self.remaining == 0 {
 			return None;
 		}
-		self.offset += chunk.len();
-		Some(chunk)
+		let chunk = self.chunks.read()?;
+		let count = self.remaining.min(chunk.len());
+		self.remaining -= count;
+		Some(chunk.slice(0..count))
+	}
+
+	pub fn remaining_len(&self) -> usize {
+		self.remaining
 	}
 }
 

@@ -5,6 +5,8 @@
 
 use std::sync::Arc;
 
+use crate::TextChunk;
+
 const LEAF_CAPACITY: usize = 1024;
 const CR: u16 = 13;
 const LF: u16 = 10;
@@ -53,12 +55,89 @@ impl Summary {
 }
 
 #[derive(Debug)]
+enum LeafUnits {
+	Latin1(Box<[u8]>),
+	Utf16(Box<[u16]>),
+}
+
+#[derive(Debug)]
+struct LeafData {
+	units: LeafUnits,
+	line_ends: Box<[u16]>,
+}
+
+impl LeafData {
+	fn new(units: &[u16]) -> Arc<Self> {
+		let units = if units.iter().all(|&unit| unit <= 255) {
+			LeafUnits::Latin1(units.iter().map(|&unit| unit as u8).collect())
+		} else {
+			LeafUnits::Utf16(units.into())
+		};
+		Self::from_storage(units)
+	}
+
+	fn from_storage(units: LeafUnits) -> Arc<Self> {
+		let mut data = Self {
+			units,
+			line_ends: Box::default(),
+		};
+		let content = data.chunk();
+		let mut line_ends = Vec::new();
+		let mut offset = 0;
+		while offset < content.len() {
+			let unit = content.get(offset).expect("The leaf offset exists");
+			offset += 1;
+			if unit == CR || unit == LF {
+				if unit == CR && content.get(offset) == Some(LF) {
+					offset += 1;
+				}
+				line_ends.push(offset as u16);
+			}
+		}
+		data.line_ends = line_ends.into_boxed_slice();
+		Arc::new(data)
+	}
+
+	fn chunk(&self) -> TextChunk<'_> {
+		match &self.units {
+			LeafUnits::Latin1(units) => TextChunk::Latin1(units),
+			LeafUnits::Utf16(units) => TextChunk::Utf16(units),
+		}
+	}
+
+	fn summary(&self, start: usize, end: usize) -> Summary {
+		let content = self.chunk();
+		let length = end - start;
+		let last = if length == 0 {
+			None
+		} else {
+			content.get(end - 1)
+		};
+		Summary {
+			length,
+			line_breaks: self
+				.line_ends
+				.partition_point(|&offset| usize::from(offset) <= end)
+				- self
+					.line_ends
+					.partition_point(|&offset| usize::from(offset) <= start)
+				+ usize::from(last == Some(CR) && content.get(end) == Some(LF)),
+			first: if length == 0 {
+				None
+			} else {
+				content.get(start)
+			},
+			last,
+		}
+	}
+}
+
+#[derive(Debug)]
 enum Content {
 	Leaf {
-		units: Arc<[u16]>,
+		data: Arc<LeafData>,
 		start: usize,
 		end: usize,
-		line_ends: Box<[u16]>,
 	},
 	Branch {
 		left: Arc<Node>,
@@ -74,33 +153,10 @@ pub(crate) struct Node {
 }
 
 impl Node {
-	fn leaf(units: Arc<[u16]>, start: usize, end: usize) -> Arc<Self> {
-		let content = &units[start..end];
-		let mut line_ends = Vec::new();
-		let mut offset = 0;
-		while offset < content.len() {
-			let unit = content[offset];
-			offset += 1;
-			if unit == CR || unit == LF {
-				if unit == CR && content.get(offset) == Some(&LF) {
-					offset += 1;
-				}
-				line_ends.push(offset as u16);
-			}
-		}
+	fn leaf(data: Arc<LeafData>, start: usize, end: usize) -> Arc<Self> {
 		Arc::new(Self {
-			summary: Summary {
-				length: content.len(),
-				line_breaks: line_ends.len(),
-				first: content.first().copied(),
-				last: content.last().copied(),
-			},
-			content: Content::Leaf {
-				units,
-				start,
-				end,
-				line_ends: line_ends.into_boxed_slice(),
-			},
+			summary: data.summary(start, end),
+			content: Content::Leaf { data, start, end },
 			height: 1,
 		})
 	}
@@ -125,7 +181,7 @@ impl Node {
 			return None;
 		}
 		match &self.content {
-			Content::Leaf { units, start, .. } => Some(units[start + offset]),
+			Content::Leaf { data, start, .. } => data.chunk().get(start + offset),
 			Content::Branch { left, right } => {
 				if offset < left.summary.length {
 					left.char_at(offset)
@@ -136,11 +192,11 @@ impl Node {
 		}
 	}
 
-	pub fn chunk_at(&self, offset: usize) -> &[u16] {
+	pub fn chunk_at(&self, offset: usize) -> TextChunk<'_> {
 		match &self.content {
 			Content::Leaf {
-				units, start, end, ..
-			} => &units[start + offset..*end],
+				data, start, end, ..
+			} => data.chunk().slice(start + offset..*end),
 			Content::Branch { left, right } => {
 				if offset < left.summary.length {
 					left.chunk_at(offset)
@@ -163,23 +219,7 @@ impl Node {
 			return self.summary;
 		}
 		match &self.content {
-			Content::Leaf {
-				units,
-				start,
-				line_ends,
-				..
-			} => {
-				let content = &units[*start..start + length];
-				Summary {
-					length,
-					line_breaks: line_ends.partition_point(|&end| usize::from(end) <= length)
-						+ usize::from(
-							content.last() == Some(&CR) && units.get(start + length) == Some(&LF),
-						),
-					first: content.first().copied(),
-					last: content.last().copied(),
-				}
-			}
+			Content::Leaf { data, start, .. } => data.summary(*start, start + length),
 			Content::Branch { left, right } => {
 				if length <= left.summary.length {
 					left.prefix_summary(length)
@@ -195,7 +235,15 @@ impl Node {
 	pub fn line_break_end(&self, ordinal: usize) -> usize {
 		debug_assert!(ordinal > 0 && ordinal <= self.summary.line_breaks);
 		match &self.content {
-			Content::Leaf { line_ends, .. } => usize::from(line_ends[ordinal - 1]),
+			Content::Leaf { data, start, end } => {
+				let before = data
+					.line_ends
+					.partition_point(|&offset| usize::from(offset) <= *start);
+				data.line_ends
+					.get(before + ordinal - 1)
+					.map_or(*end, |&offset| usize::from(offset).min(*end))
+					- start
+			}
 			Content::Branch { left, right } => {
 				let joins_crlf = left.summary.joins_crlf(right.summary);
 				if ordinal <= left.summary.line_breaks {
@@ -220,9 +268,9 @@ impl Node {
 		}
 		match &self.content {
 			Content::Leaf {
-				units, start: base, ..
+				data, start: base, ..
 			} => {
-				output.extend_from_slice(&units[base + start..base + end]);
+				data.chunk().slice(base + start..base + end).copy_to(output);
 			}
 			Content::Branch { left, right } => {
 				let left_length = left.summary.length;
@@ -240,16 +288,35 @@ impl Node {
 pub(crate) fn from_units(units: &[u16]) -> Tree {
 	let leaves: Vec<_> = units
 		.chunks(LEAF_CAPACITY)
-		.map(|chunk| Node::leaf(Arc::from(chunk), 0, chunk.len()))
+		.map(|chunk| Node::leaf(LeafData::new(chunk), 0, chunk.len()))
 		.collect();
-	fn build(leaves: &[Arc<Node>]) -> Tree {
-		match leaves.len() {
-			0 => None,
-			1 => Some(Arc::clone(&leaves[0])),
-			length => concat(build(&leaves[..length / 2]), build(&leaves[length / 2..])),
-		}
-	}
 	build(&leaves)
+}
+
+pub(crate) fn from_text(text: &str) -> Tree {
+	if !text.is_ascii() {
+		return from_units(&text.encode_utf16().collect::<Vec<_>>());
+	}
+	let leaves: Vec<_> = text
+		.as_bytes()
+		.chunks(LEAF_CAPACITY)
+		.map(|chunk| {
+			Node::leaf(
+				LeafData::from_storage(LeafUnits::Latin1(chunk.into())),
+				0,
+				chunk.len(),
+			)
+		})
+		.collect();
+	build(&leaves)
+}
+
+fn build(leaves: &[Arc<Node>]) -> Tree {
+	match leaves.len() {
+		0 => None,
+		1 => Some(Arc::clone(&leaves[0])),
+		length => concat(build(&leaves[..length / 2]), build(&leaves[length / 2..])),
+	}
 }
 
 fn balance(left: Arc<Node>, right: Arc<Node>) -> Arc<Node> {
@@ -294,13 +361,13 @@ pub(crate) fn concat(left: Tree, right: Tree) -> Tree {
 	};
 	if let (
 		Content::Leaf {
-			units: left_units,
+			data: left_data,
 			start: left_start,
 			end: left_end,
 			..
 		},
 		Content::Leaf {
-			units: right_units,
+			data: right_data,
 			start: right_start,
 			end: right_end,
 			..
@@ -308,11 +375,27 @@ pub(crate) fn concat(left: Tree, right: Tree) -> Tree {
 	) = (&left.content, &right.content)
 		&& left.summary.length + right.summary.length <= LEAF_CAPACITY
 	{
-		let mut units = Vec::with_capacity(left.summary.length + right.summary.length);
-		units.extend_from_slice(&left_units[*left_start..*left_end]);
-		units.extend_from_slice(&right_units[*right_start..*right_end]);
-		let length = units.len();
-		return Some(Node::leaf(Arc::from(units), 0, length));
+		if Arc::ptr_eq(left_data, right_data) && left_end == right_start {
+			return Some(Node::leaf(Arc::clone(left_data), *left_start, *right_end));
+		}
+		let length = left.summary.length + right.summary.length;
+		let data = match (left_data.chunk(), right_data.chunk()) {
+			(TextChunk::Latin1(left_units), TextChunk::Latin1(right_units)) => {
+				let mut units = Vec::with_capacity(length);
+				units.extend_from_slice(&left_units[*left_start..*left_end]);
+				units.extend_from_slice(&right_units[*right_start..*right_end]);
+				LeafData::from_storage(LeafUnits::Latin1(units.into_boxed_slice()))
+			}
+			(left_units, right_units) => {
+				let mut units = Vec::with_capacity(length);
+				left_units.slice(*left_start..*left_end).copy_to(&mut units);
+				right_units
+					.slice(*right_start..*right_end)
+					.copy_to(&mut units);
+				LeafData::new(&units)
+			}
+		};
+		return Some(Node::leaf(data, 0, length));
 	}
 	if left.height > right.height + 1 {
 		let (left_left, left_right) = left.children();
@@ -343,10 +426,10 @@ pub(crate) fn split(tree: Tree, offset: usize) -> (Tree, Tree) {
 	}
 	match &node.content {
 		Content::Leaf {
-			units, start, end, ..
+			data, start, end, ..
 		} => (
-			Some(Node::leaf(Arc::clone(units), *start, start + offset)),
-			Some(Node::leaf(Arc::clone(units), start + offset, *end)),
+			Some(Node::leaf(Arc::clone(data), *start, start + offset)),
+			Some(Node::leaf(Arc::clone(data), start + offset, *end)),
 		),
 		Content::Branch { left, right } => {
 			if offset < left.summary.length {
@@ -360,6 +443,49 @@ pub(crate) fn split(tree: Tree, offset: usize) -> (Tree, Tree) {
 	}
 }
 
+/// Lazily walks one immutable version. Creation only retains the root; reads visit each node once.
+#[derive(Debug)]
+pub(crate) struct Chunks {
+	next: Tree,
+	offset: usize,
+	pending: Vec<Arc<Node>>,
+	current: Tree,
+}
+
+impl Chunks {
+	pub fn new(root: Tree, offset: usize) -> Self {
+		Self {
+			next: root.filter(|node| offset < node.summary.length),
+			offset,
+			pending: Vec::new(),
+			current: None,
+		}
+	}
+
+	pub fn read(&mut self) -> Option<TextChunk<'_>> {
+		self.current = None;
+		let mut node = self.next.take().or_else(|| self.pending.pop())?;
+		let mut offset = std::mem::take(&mut self.offset);
+		loop {
+			match &node.content {
+				Content::Branch { left, right } => {
+					if offset < left.summary.length {
+						self.pending.push(Arc::clone(right));
+						node = Arc::clone(left);
+					} else {
+						offset -= left.summary.length;
+						node = Arc::clone(right);
+					}
+				}
+				Content::Leaf { .. } => {
+					self.current = Some(node);
+					return self.current.as_ref().map(|node| node.chunk_at(offset));
+				}
+			}
+		}
+	}
+}
+
 #[cfg(test)]
 pub(crate) fn assert_invariants(tree: &Tree) -> (u32, Summary) {
 	let Some(node) = tree else {
@@ -367,10 +493,11 @@ pub(crate) fn assert_invariants(tree: &Tree) -> (u32, Summary) {
 	};
 	let (height, summary) = match &node.content {
 		Content::Leaf {
-			units, start, end, ..
+			data, start, end, ..
 		} => {
 			assert!(*start < *end && end - start <= LEAF_CAPACITY);
-			(1, Summary::from_units(&units[*start..*end]))
+			let units: Vec<_> = data.chunk().slice(*start..*end).iter().collect();
+			(1, Summary::from_units(&units))
 		}
 		Content::Branch { left, right } => {
 			let (left_height, left_summary) = assert_invariants(&Some(Arc::clone(left)));
@@ -384,4 +511,58 @@ pub(crate) fn assert_invariants(tree: &Tree) -> (u32, Summary) {
 	};
 	assert_eq!((node.height, node.summary), (height, summary));
 	(height, summary)
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn compact_storage_preserves_the_entire_latin1_alphabet() {
+		let units: Vec<_> = (0..=255).cycle().take(LEAF_CAPACITY).collect();
+		let data = LeafData::new(&units);
+		assert!(matches!(&data.units, LeafUnits::Latin1(bytes) if bytes.len() == units.len()));
+		assert_eq!(data.chunk().iter().collect::<Vec<_>>(), units);
+		let mut wide = units.clone();
+		wide[511] = 0xD800;
+		let wide_data = LeafData::new(&wide);
+		assert!(matches!(&wide_data.units, LeafUnits::Utf16(text) if text.len() == wide.len()));
+		assert_eq!(wide_data.chunk().iter().collect::<Vec<_>>(), wide);
+	}
+
+	#[test]
+	fn splits_share_backing_and_line_index_even_inside_crlf() {
+		let units: Vec<_> = [65, CR, LF, 0xD800]
+			.into_iter()
+			.cycle()
+			.take(1024)
+			.collect();
+		let original = from_units(&units);
+		for offset in 1..units.len() {
+			let (left, right) = split(original.clone(), offset);
+			assert_invariants(&left);
+			assert_invariants(&right);
+			let (Some(left_node), Some(right_node)) = (&left, &right) else {
+				panic!("Both split ranges contain text");
+			};
+			let (
+				Content::Leaf {
+					data: left_data, ..
+				},
+				Content::Leaf {
+					data: right_data, ..
+				},
+			) = (&left_node.content, &right_node.content)
+			else {
+				panic!("Splitting a leaf produces leaf views");
+			};
+			assert!(Arc::ptr_eq(left_data, right_data));
+			let original_data = Arc::clone(left_data);
+			let joined = concat(left, right).unwrap();
+			let Content::Leaf { data, .. } = &joined.content else {
+				panic!("Adjacent shared views coalesce");
+			};
+			assert!(Arc::ptr_eq(data, &original_data));
+		}
+	}
 }

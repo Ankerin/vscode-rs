@@ -8,7 +8,7 @@ See [Architecture](ARCHITECTURE.md) for the complete target, subsystem boundarie
 
 | Directory | Responsibility | Status |
 | --- | --- | --- |
-| `editor-core/` | Platform-independent UTF-16 text storage, positions, edits, and immutable snapshots | Implemented and tested natively |
+| `editor-core/` | Platform-independent UTF-16 text storage, positions, edits, literal search, and immutable snapshots | Implemented and tested natively |
 | `editor-wasm/` | Typed WebAssembly bindings for the same Rust core | Implemented and tested against existing editor models |
 | `../src/vs/editor/common/model/rustTextBuffer/` | Storage adapter beneath `PieceTreeTextBuffer` | Implemented; opt-in |
 | `../src/vs/editor/browser/model/` | Browser resource loading of generated bindings | Implemented for desktop startup |
@@ -39,7 +39,7 @@ From the repository root:
 pnpm run build-rust-editor
 ```
 
-The command builds a release WebAssembly module and generates JavaScript bindings and declarations under `out/vs/editor/common/model/rustTextBuffer/`. Generated files are ignored by Git. The generator must exactly match the pinned `wasm-bindgen` crate version. Run this command after any client build that replaces `out/`.
+The command builds a release WebAssembly module and generates JavaScript bindings and declarations under `out/vs/editor/common/model/rustTextBuffer/`. Generated files are ignored by Git. The generator must exactly match the pinned `wasm-bindgen` crate version. The adapter validates storage ABI version 2 before registering a factory, so stale assets are rejected during initialization and desktop startup retains the existing storage. Run this command after any client build that replaces `out/`.
 
 From `rust/`, a native build of the core is also available:
 
@@ -81,9 +81,11 @@ From the repository root, after building the bindings:
 pnpm run test-rust-editor
 ```
 
-The compatibility runner bundles the current TypeScript sources with the repository's existing esbuild dependency and runs them in Node against the generated WebAssembly module. It does not require Electron to test the storage boundary. It checks chunked input, BOM, UTF-16, default EOL selection, positions, edits, inverse edits, events, snapshots, literal and public regex search, model undo/redo, version tracking, and repeated document disposal. Native tests also check AVL balance, cached metadata, atomic invalid batches, cross-leaf CRLF, and seeded edits against a flat reference.
+The compatibility runner bundles the current TypeScript sources with the repository's existing esbuild dependency and runs them in Node against the generated WebAssembly module. It does not require Electron to test the storage boundary. It checks chunked input, BOM, UTF-16, default EOL selection, positions, edits, inverse edits, events, snapshots, literal and public regex search, model undo/redo, version tracking, and repeated document disposal. It also checks all Latin-1 values, bounded line-cache invalidation, long lines, and lossless transfers with surrogate pairs spanning leaves and snapshot batches. Native tests check AVL balance, shared leaf indexes, cached metadata, atomic invalid batches, immutable range snapshots, cross-leaf CRLF, and seeded edits and literal queries against flat references.
 
 These checks establish compatibility for the covered scenarios. They do not establish complete feature parity, desktop visual parity, or an application-wide performance improvement. Those remain migration gates in [Architecture](ARCHITECTURE.md).
+
+The November 5, 2026 desktop validation attempt used the repository-pinned Node `24.22.1` and Electron `43.8.6` after building the client and built-in extensions. The application exited before workbench restoration because its existing `@vscode/policy-watcher` native binding was missing. Rebuilding the native dependencies reported MSBuild `MSB8040`: the selected MSVC toolset lacks its required Spectre libraries. No desktop screenshot or live editing result was obtained. Prepare the required Visual Studio components and native dependencies through the existing repository setup before repeating this gate.
 
 To run the existing model, search, edit, undo, and decoration suites through the canonical Node unit runner with both storage implementations:
 
@@ -103,13 +105,13 @@ From the repository root, after building the bindings:
 pnpm run benchmark-rust-editor
 ```
 
-The runner alternates three fresh processes for each implementation, exercises the same input and operations, verifies an output checksum, prints median timings, and saves raw runs plus process-memory observations to the ignored `.build/rust/benchmark.json`. See [Performance](PERFORMANCE.md) for the current measurements and their limits. Timings are diagnostic and are not flaky pass/fail assertions.
+The runner alternates three fresh processes for each implementation and fixture: ASCII source, Latin-1, Unicode with supplementary characters, and long lines. It exercises the same input and operations, checks a matching output checksum within each fixture, prints median timings, and saves raw runs plus process-memory observations to the ignored `.build/rust/benchmark.json`. Literal searches cover both present and absent results after distributed editing. See [Performance](PERFORMANCE.md) for the current measurements and their limits. Timings are diagnostic and are not flaky pass/fail assertions.
 
 ## Current limits
 
-- The Rust rope uses UTF-16 leaf storage and shared immutable nodes. It preserves JavaScript code units, including unpaired surrogates. UTF-16 storage may cost more than V8's single-byte strings for ASCII files; compact leaf encoding must be evaluated before making memory claims.
-- Converting strings to typed arrays and copying results across WebAssembly has a cost. Line reads retain only the most recent decoded line. Whole-document extraction and EOL normalization still allocate document-sized output.
+- The Rust rope uses one-byte Latin-1 leaves when all units fit, and two-byte UTF-16 leaves otherwise. Split leaves share their backing and line-ending indexes. The compact encoding reduces that leaf's text payload by half compared with the previous Rust representation; node, index, allocator, snapshot, and application overhead must still be measured before making total-memory claims.
+- Surrogate-free input uses UTF-8 bindings, while surrogate-bearing input retains the UTF-16 path. ASCII output uses strings; other output retains UTF-16 typed arrays and native JavaScript decoding, preserving lone surrogates explicitly. Snapshot traversal is lazy and sequential; consecutive line reads prefetch a single batch of up to 64 lines and 32,768 units, allowing an untruncated first long line. Isolated reads copy one line directly. Whole-document extraction and EOL normalization still allocate document-sized output.
 - Drained snapshots explicitly release their Rust version. An abandoned snapshot is retained until its generated binding is collected through `FinalizationRegistry`, because the existing `ITextSnapshot` contract has no disposal method.
-- JavaScript search and edit/undo orchestration are still compatibility layers. The adapter's optimized search is used by the existing model for single-line literal searches; public regex and multiline search continue through the unchanged `TextModelSearch` implementation.
+- Rust performs the storage adapter's plain literal search without copying lines, with nonoverlapping matches and existing start-column range semantics. The core uses KMP across leaf boundaries and the `memchr` safe API to skip compact-leaf prefixes. Case folding, word boundaries, capture groups, public regex/multiline search, and edit/undo orchestration remain in their existing JavaScript implementations.
 - `getPieceTree()` is an existing implementation-specific test helper. It is available only for the original storage; Rust models expose the normal `ITextBuffer` API instead.
 - Tauri is not introduced. Changing the rendering engine is a separate decision that must pass the cross-platform visual and interaction gates.

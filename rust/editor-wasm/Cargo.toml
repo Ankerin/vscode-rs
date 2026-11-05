@@ -12,6 +12,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 vscode-editor-core = { path = "../editor-core" }
 wasm-bindgen = "=0.2.130"
+js-sys = { version = "=0.3.107", default-features = false }
 
 [lints]
 workspace = true
