@@ -10,7 +10,7 @@ import { Position } from '../core/position.js';
 import { Range } from '../core/range.js';
 import { EndOfLinePreference, FindMatch, SearchData } from '../model.js';
 import { TextModel } from './textModel.js';
-import { IRustTextSearchHost, IRustSearchNavigationHost, IRustSearchCollectionHost, RustSearchNavigationOperation, RustSearchCollectionOperation, createRustSearchOffsets, tryRunRustTextSearch, tryRustWordBoundary, tryRustLineMatches, tryRustLineFeedScan, tryRustLineFeedCount, tryRustMultilineMatchRange, tryRustSearchNavigation, tryRustSearchCollection, tryRustRegexSource, tryRustFindMatch, tryRustSearchRequest } from './rustTextSearch.js';
+import { IRustTextSearchHost, IRustSearchNavigationHost, IRustSearchCollectionHost, IRustSearchDispatchHost, IRustMultilineNavigationHost, RustSearchNavigationOperation, RustSearchCollectionOperation, RustSearchDispatchOperation, createRustSearchOffsets, tryRunRustTextSearch, tryRustWordBoundary, tryRustLineMatches, tryRustLineFeedScan, tryRustLineFeedCount, tryRustMultilineMatchRange, tryRustSearchNavigation, tryRustSearchCollection, tryRustRegexSource, tryRustFindMatch, tryRustSearchRequest, tryRustSearchDispatch, tryRustMultilineNavigation } from './rustTextSearch.js';
 
 const LIMIT_FIND_COUNT = 999;
 
@@ -215,6 +215,8 @@ class LineFeedCounter {
 export class TextModelSearch {
 
 	public static findMatches(model: TextModel, searchParams: SearchParams, searchRange: Range, captureMatches: boolean, limitResultCount: number): FindMatch[] {
+		const native = tryRustSearchDispatch(RustSearchDispatchOperation.All, () => TextModelSearch.createRustDispatchHost(this, model, searchParams, searchRange, null, captureMatches, limitResultCount));
+		if (native !== undefined) { return native.value as FindMatch[]; }
 		const searchData = searchParams.parseSearchRequest();
 		if (!searchData) {
 			return [];
@@ -378,6 +380,8 @@ export class TextModelSearch {
 	}
 
 	public static findNextMatch(model: TextModel, searchParams: SearchParams, searchStart: Position, captureMatches: boolean): FindMatch | null {
+		const native = tryRustSearchDispatch(RustSearchDispatchOperation.Next, () => TextModelSearch.createRustDispatchHost(this, model, searchParams, null, searchStart, captureMatches));
+		if (native !== undefined) { return native.value as FindMatch | null; }
 		const searchData = searchParams.parseSearchRequest();
 		if (!searchData) {
 			return null;
@@ -392,6 +396,8 @@ export class TextModelSearch {
 	}
 
 	private static _doFindNextMatchMultiline(model: TextModel, searchStart: Position, searcher: Searcher, captureMatches: boolean): FindMatch | null {
+		const native = tryRustMultilineNavigation(false, () => TextModelSearch.createRustMultilineNavigationHost(this, model, searchStart, searcher, captureMatches));
+		if (native !== undefined) { return native.match; }
 		const searchTextStart = new Position(searchStart.lineNumber, 1);
 		const deltaOffset = model.getOffsetAt(searchTextStart);
 		const lineCount = model.getLineCount();
@@ -460,6 +466,8 @@ export class TextModelSearch {
 	}
 
 	public static findPreviousMatch(model: TextModel, searchParams: SearchParams, searchStart: Position, captureMatches: boolean): FindMatch | null {
+		const native = tryRustSearchDispatch(RustSearchDispatchOperation.Previous, () => TextModelSearch.createRustDispatchHost(this, model, searchParams, null, searchStart, captureMatches));
+		if (native !== undefined) { return native.value as FindMatch | null; }
 		const searchData = searchParams.parseSearchRequest();
 		if (!searchData) {
 			return null;
@@ -474,6 +482,8 @@ export class TextModelSearch {
 	}
 
 	private static _doFindPreviousMatchMultiline(model: TextModel, searchStart: Position, searcher: Searcher, captureMatches: boolean): FindMatch | null {
+		const native = tryRustMultilineNavigation(true, () => TextModelSearch.createRustMultilineNavigationHost(this, model, searchStart, searcher, captureMatches));
+		if (native !== undefined) { return native.match; }
 		const matches = this._doFindMatchesMultiline(model, new Range(1, 1, searchStart.lineNumber, searchStart.column), searcher, captureMatches, 10 * LIMIT_FIND_COUNT);
 		if (matches.length > 0) {
 			return matches[matches.length - 1];
@@ -523,6 +533,49 @@ export class TextModelSearch {
 			bestResult = createFindMatch(new Range(lineNumber, m.index + 1, lineNumber, m.index + 1 + m[0].length), m, captureMatches);
 		}
 		return bestResult;
+	}
+
+	/** Public capabilities preserve flag reads and factory ordering before virtual dispatch. */
+	private static createRustDispatchHost(owner: typeof TextModelSearch, model: TextModel, params: SearchParams, range: Range | null, start: Position | null, captures: boolean, limit: number = 0): IRustSearchDispatchHost {
+		return {
+			emptyResult: () => [],
+			parse: () => params.parseSearchRequest(),
+			multiline: data => data.regex.multiline,
+			createSearcher: data => new Searcher(data.wordSeparators, data.regex),
+			allMultiline: data => owner._doFindMatchesMultiline(model, range!, new Searcher(data.wordSeparators, data.regex), captures, limit),
+			allLines: data => owner._doFindMatchesLineByLine(model, range!, data, captures, limit),
+			nextMultiline: searcher => owner._doFindNextMatchMultiline(model, start!, searcher, captures),
+			nextLines: searcher => owner._doFindNextMatchLineByLine(model, start!, searcher, captures),
+			previousMultiline: searcher => owner._doFindPreviousMatchMultiline(model, start!, searcher, captures),
+			previousLines: searcher => owner._doFindPreviousMatchLineByLine(model, start!, searcher, captures)
+		};
+	}
+
+	/** Multiline capabilities preserve model preparation, original array aliases, and virtual retries. */
+	private static createRustMultilineNavigationHost(owner: typeof TextModelSearch, model: TextModel, start: Position, searcher: Searcher, captures: boolean): IRustMultilineNavigationHost {
+		return {
+			prepareForward: () => {
+				const searchTextStart = new Position(start.lineNumber, 1);
+				const deltaOffset = model.getOffsetAt(searchTextStart);
+				const lineCount = model.getLineCount();
+				const text = model.getValueInRange(new Range(searchTextStart.lineNumber, searchTextStart.column, lineCount, model.getLineMaxColumn(lineCount)), EndOfLinePreference.LF);
+				const counter = model.getEOL() === '\r\n' ? new LineFeedCounter(text) : null;
+				return { deltaOffset, text, counter };
+			},
+			resetForward: () => searcher.reset(start.column - 1),
+			nextForward: context => searcher.next(context.text),
+			forwardMatch: (context, matched) => createFindMatch(owner._getMultilineMatchRange(model, context.deltaOffset, context.text, context.counter, matched.index, matched[0]), matched, captures),
+			startLine: () => start.lineNumber,
+			startColumn: () => start.column,
+			retryForward: () => owner._doFindNextMatchMultiline(model, new Position(1, 1), searcher, captures),
+			previousMatches: () => owner._doFindMatchesMultiline(model, new Range(1, 1, start.lineNumber, start.column), searcher, captures, 10 * LIMIT_FIND_COUNT),
+			length: matches => matches.length,
+			positive: value => value > 0,
+			lastMatch: matches => matches[matches.length - 1],
+			lineCount: () => model.getLineCount(),
+			maxColumn: count => model.getLineMaxColumn(count),
+			retryPrevious: count => owner._doFindPreviousMatchMultiline(model, new Position(count, model.getLineMaxColumn(count)), searcher, captures)
+		};
 	}
 
 	/** Scoped capabilities keep line slicing, virtual collectors, and multiline preparation ordered. */

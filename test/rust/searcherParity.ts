@@ -880,3 +880,103 @@ test('Rust SearchParams preserves unusual runtime property values and original e
 		}
 	}
 });
+
+test('Rust public search dispatch and multiline navigation execute all integrated operations', () => {
+	const dispatches = [0, 0, 0];
+	const navigation = [0, 0];
+	const module: IRustTextSearchModule = {
+		...rust,
+		dispatch_text_search: (host, operation) => { dispatches[operation]++; return rust.dispatch_text_search(host, operation); },
+		navigate_text_search_multiline: (host, previous) => { navigation[previous ? 1 : 0]++; return rust.navigate_text_search_multiline(host, previous); }
+	};
+	for (const source of ['', '[', '\\n', 'x', 'x\\n', '(?:x|\\n)+']) {
+		const run = () => {
+			const model = createTextModel('x\r\ny\r\nx');
+			try {
+				const params = new SearchParams(source, true, true, null);
+				return { all: TextModelSearch.findMatches(model, params, model.getFullModelRange(), true, 10), next: TextModelSearch.findNextMatch(model, params, new Position(2, 1), true), previous: TextModelSearch.findPreviousMatch(model, params, new Position(2, 1), true) };
+			} finally { model.dispose(); }
+		};
+		assert.deepStrictEqual(withRust(run, module), run());
+	}
+	assert.ok(dispatches.every(count => count >= 6) && navigation.every(count => count >= 3), 'Public dispatch and both multiline directions execute Rust');
+});
+
+test('Rust public search preserves regex factory/flag ordering, virtual receivers, and exact result identity', () => {
+	for (const multiline of [true, false]) {
+		for (const operation of ['all', 'next', 'previous']) {
+			const run = () => {
+				const observations: string[] = [];
+				const model = createTextModel('x\ny');
+				const target = new RegExp('x', multiline ? 'gm' : 'g');
+				const regex = new Proxy(target, { get: (target, key) => { observations.push(`regex:${String(key)}`); return Reflect.get(target, key, target); } });
+				const data = new Proxy(new SearchData(regex, null, null), { get: (target, key, receiver) => { observations.push(`data:${String(key)}`); return Reflect.get(target, key, receiver); } });
+				const params = new SearchParams('x', true, true, null);
+				params.parseSearchRequest = () => { observations.push('parse'); return data; };
+				const single = new FindMatch(new Range(1, 1, 1, 2), null);
+				const all = [single];
+				const owner = new Proxy(TextModelSearch, {
+					get: (target, key, receiver) => {
+						observations.push(`owner:${String(key)}`);
+						if (typeof key === 'string' && key.startsWith('_doFind')) {
+							const result = operation === 'all' ? all : single;
+							const provider = { invoke(this: typeof TextModelSearch) { observations.push(`invoke:${key}:${this === owner}`); return result; } };
+							return provider.invoke;
+						}
+						return Reflect.get(target, key, receiver);
+					}
+				});
+				try {
+					const result = operation === 'all' ? owner.findMatches(model, params, model.getFullModelRange(), false, 10) : operation === 'next' ? owner.findNextMatch(model, params, new Position(1, 1), false) : owner.findPreviousMatch(model, params, new Position(1, 1), false);
+					return { result, identity: result === (operation === 'all' ? all : single), observations };
+				} finally { model.dispose(); }
+			};
+			assert.deepStrictEqual(withRust(run), run());
+		}
+	}
+});
+
+test('Rust previous multiline navigation retains aliased result lengths, indices, retries, and coordinate short circuits', () => {
+	const navigation = TextModelSearch as unknown as { _doFindPreviousMatchMultiline(model: TextModel, start: Position, searcher: Searcher, captures: boolean): FindMatch | null };
+	for (const lengths of [[1, 1], [1, 0], [0, 0]]) {
+		const run = () => {
+			const observations: string[] = [];
+			const model = createTextModel('a\nb\nc');
+			const start = new Proxy(new Position(2, 1), { get: (target, key, receiver) => { observations.push(`start:${String(key)}`); return Reflect.get(target, key, receiver); } });
+			const match = new FindMatch(new Range(1, 1, 1, 2), null);
+			let reads = 0;
+			const results = new Proxy([match], { get: (target, key, receiver) => { observations.push(`matches:${String(key)}`); return key === 'length' ? lengths[Math.min(reads++, lengths.length - 1)] : Reflect.get(target, key, receiver); } });
+			const owner = new Proxy(TextModelSearch, {
+				get: (target, key, receiver) => {
+					observations.push(`owner:${String(key)}`);
+					if (key === '_doFindMatchesMultiline') { return () => results; }
+					if (key === '_doFindPreviousMatchMultiline') { return () => { observations.push('retry'); return match; }; }
+					return Reflect.get(target, key, receiver);
+				}
+			});
+			try {
+				const result = Reflect.apply(navigation._doFindPreviousMatchMultiline, owner, [model, start, new Searcher(null, /x/gm), true]);
+				return { result, identity: result === match, observations };
+			} finally { model.dispose(); }
+		};
+		assert.deepStrictEqual(withRust(run), run());
+	}
+});
+
+test('Rust public/multiline search preserves provider failure identities and atomic stale-core rejection', () => {
+	const failure = new Error('Original search orchestration failure');
+	for (const previous of [true, false]) {
+		const run = () => {
+			const model = createTextModel('a\nb');
+			model.getValueInRange = () => { throw failure; };
+			try {
+				const params = new SearchParams('\\n', true, true, null);
+				assert.throws(() => previous ? TextModelSearch.findPreviousMatch(model, params, new Position(2, 1), false) : TextModelSearch.findNextMatch(model, params, new Position(2, 1), false), error => error === failure);
+			} finally { model.dispose(); }
+		};
+		withRust(run);
+		run();
+	}
+	assert.throws(() => registerRustTextBuffer({ ...rust, text_search_abi_version: () => 8 }), /searcher control contract/);
+	assert.strictEqual(tryRustBracketLength(RustBracketLengthOperation.Pack, 1, 2), undefined);
+});

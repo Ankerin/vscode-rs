@@ -9,6 +9,7 @@ import { Position } from '../core/position.js';
 import { Range } from '../core/range.js';
 import { FindMatch, SearchData } from '../model.js';
 import { ownRustBracketArray } from './bracketPairsTextModelPart/bracketPairsTree/rustBracketNumberArray.js';
+import type { Searcher } from './textModelSearch.js';
 
 /** Live regex/property capabilities retain exact callbacks, results, and partial state writes. */
 export interface IRustTextSearchHost {
@@ -190,6 +191,41 @@ export interface IRustSearchRequestHost {
 }
 
 /** Generated text-search control participates in the core's atomic registration lifetime. */
+export const enum RustSearchDispatchOperation { All = 0, Next = 1, Previous = 2 }
+
+/** Public dispatch preserves the collection/navigation differences in regex flag/factory order. */
+export interface IRustSearchDispatchHost {
+	emptyResult(): FindMatch[];
+	parse(): SearchData | null;
+	multiline(data: SearchData): boolean;
+	createSearcher(data: SearchData): Searcher;
+	allMultiline(data: SearchData): FindMatch[];
+	allLines(data: SearchData): FindMatch[];
+	nextMultiline(searcher: Searcher): FindMatch | null;
+	nextLines(searcher: Searcher): FindMatch | null;
+	previousMultiline(searcher: Searcher): FindMatch | null;
+	previousLines(searcher: Searcher): FindMatch | null;
+}
+
+/** Multiline navigation retains original scoped contexts, aliased arrays, and virtual retries. */
+export interface IRustMultilineNavigationHost {
+	prepareForward(): IRustMultilineSearchContext;
+	resetForward(): void;
+	nextForward(context: IRustMultilineSearchContext): RegExpExecArray | null;
+	forwardMatch(context: IRustMultilineSearchContext, matched: RegExpExecArray): FindMatch;
+	startLine(): number;
+	startColumn(): number;
+	retryForward(): FindMatch | null;
+	previousMatches(): FindMatch[];
+	length(matches: FindMatch[]): number;
+	positive(value: number): boolean;
+	lastMatch(matches: FindMatch[]): FindMatch;
+	lineCount(): number;
+	maxColumn(count: number): number;
+	retryPrevious(count: number): FindMatch | null;
+}
+
+/** Generated text-search control participates in the core's atomic registration lifetime. */
 export interface IRustTextSearchModule {
 	text_search_abi_version(): number;
 	run_text_search(host: IRustTextSearchHost, reset: boolean): IRustTextSearchResult;
@@ -203,13 +239,15 @@ export interface IRustTextSearchModule {
 	is_text_search_multiline_source(host: IRustRegexSourceHost): boolean;
 	create_text_search_match(host: IRustFindMatchHost): FindMatch;
 	parse_text_search_request(host: IRustSearchRequestHost): SearchData | null;
+	dispatch_text_search(host: IRustSearchDispatchHost, operation: RustSearchDispatchOperation): FindMatch[] | FindMatch | null;
+	navigate_text_search_multiline(host: IRustMultilineNavigationHost, previous: boolean): FindMatch | null;
 }
 
 let registeredModule: IRustTextSearchModule | undefined;
 
 /** Installs text-search control without changing existing Searcher classes or regex objects. */
 export function registerRustTextSearch(module: IRustTextSearchModule): IDisposable {
-	if (typeof module.text_search_abi_version !== 'function' || module.text_search_abi_version() !== 8 || typeof module.run_text_search !== 'function' || typeof module.is_valid_text_search_match !== 'function' || typeof module.collect_text_search_matches !== 'function' || typeof module.scan_text_search_line_feeds !== 'function' || typeof module.count_text_search_line_feeds !== 'function' || typeof module.text_search_multiline_range !== 'function' || typeof module.run_text_search_navigation !== 'function' || typeof module.collect_text_search_range !== 'function' || typeof module.is_text_search_multiline_source !== 'function' || typeof module.create_text_search_match !== 'function' || typeof module.parse_text_search_request !== 'function') { throw new Error('The Rust text search bindings do not match the searcher control contract'); }
+	if (typeof module.text_search_abi_version !== 'function' || module.text_search_abi_version() !== 9 || typeof module.run_text_search !== 'function' || typeof module.is_valid_text_search_match !== 'function' || typeof module.collect_text_search_matches !== 'function' || typeof module.scan_text_search_line_feeds !== 'function' || typeof module.count_text_search_line_feeds !== 'function' || typeof module.text_search_multiline_range !== 'function' || typeof module.run_text_search_navigation !== 'function' || typeof module.collect_text_search_range !== 'function' || typeof module.is_text_search_multiline_source !== 'function' || typeof module.create_text_search_match !== 'function' || typeof module.parse_text_search_request !== 'function' || typeof module.dispatch_text_search !== 'function' || typeof module.navigate_text_search_multiline !== 'function') { throw new Error('The Rust text search bindings do not match the searcher control contract'); }
 	if (registeredModule) { throw new Error('A Rust text search module is already registered'); }
 	registeredModule = module;
 	return toDisposable(() => { if (registeredModule === module) { registeredModule = undefined; } });
@@ -282,4 +320,16 @@ export function tryRustFindMatch(createHost: () => IRustFindMatchHost): FindMatc
 export function tryRustSearchRequest(createHost: () => IRustSearchRequestHost): { data: SearchData | null } | undefined {
 	if (!registeredModule) { return undefined; }
 	return { data: registeredModule.parse_text_search_request(createHost()) };
+}
+
+/** Dispatches original public search paths without coercing their array/match/null results. */
+export function tryRustSearchDispatch(operation: RustSearchDispatchOperation, createHost: () => IRustSearchDispatchHost): { value: FindMatch[] | FindMatch | null } | undefined {
+	if (!registeredModule) { return undefined; }
+	return { value: registeredModule.dispatch_text_search(createHost(), operation) };
+}
+
+/** Navigates multiline matches through original model providers and virtual retry methods. */
+export function tryRustMultilineNavigation(previous: boolean, createHost: () => IRustMultilineNavigationHost): { match: FindMatch | null } | undefined {
+	if (!registeredModule) { return undefined; }
+	return { match: registeredModule.navigate_text_search_multiline(createHost(), previous) };
 }

@@ -45,6 +45,7 @@ mod text_search;
 mod text_search_collection;
 mod text_search_navigation;
 mod text_search_offsets;
+mod text_search_orchestration;
 mod text_search_request;
 mod token_array;
 mod tokens;
@@ -148,6 +149,10 @@ pub use text_search_navigation::{
 pub use text_search_offsets::{
 	LineFeedQueryHost, LineFeedScanHost, MultilineMatchHost, multiline_match_range,
 	scan_search_line_feeds, search_line_feeds_before,
+};
+pub use text_search_orchestration::{
+	MultilineNavigationHost, SearchDispatchHost, SearchDispatchOperation, dispatch_text_search,
+	next_multiline_search_match, previous_multiline_search_match,
 };
 pub use text_search_request::{
 	FindMatchHost, RegexSourceHost, SearchRequestHost, create_search_find_match,
