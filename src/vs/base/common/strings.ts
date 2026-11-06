@@ -7,6 +7,7 @@ import { LRUCachedFunction } from './cache.js';
 import { CharCode } from './charCode.js';
 import { Lazy } from './lazy.js';
 import { Constants } from './uint.js';
+import { isRustUnicodeRegistered, tryComputeRustCodePoint, tryComputeRustGraphemeOffset } from './rustUnicode.js';
 
 export function isFalsyOrWhitespace(str: string | undefined): boolean {
 	if (!str || typeof str !== 'string') {
@@ -525,6 +526,8 @@ export function computeCodePoint(highSurrogate: number, lowSurrogate: number): n
  * get the code point that begins at offset `offset`
  */
 export function getNextCodePoint(str: string, len: number, offset: number): number {
+	const native = tryComputeRustCodePoint(str, len, offset, false);
+	if (native !== undefined) { return native; }
 	const charCode = str.charCodeAt(offset);
 	if (isHighSurrogate(charCode) && offset + 1 < len) {
 		const nextCharCode = str.charCodeAt(offset + 1);
@@ -539,6 +542,8 @@ export function getNextCodePoint(str: string, len: number, offset: number): numb
  * get the code point that ends right before offset `offset`
  */
 function getPrevCodePoint(str: string, offset: number): number {
+	const native = typeof str === 'string' ? tryComputeRustCodePoint(str, str.length, offset, true) : undefined;
+	if (native !== undefined) { return native; }
 	const charCode = str.charCodeAt(offset - 1);
 	if (isLowSurrogate(charCode) && offset > 1) {
 		const prevCharCode = str.charCodeAt(offset - 2);
@@ -548,6 +553,9 @@ function getPrevCodePoint(str: string, offset: number): number {
 	}
 	return charCode;
 }
+
+const standardCodePointIterators = new WeakSet<CodePointIterator>();
+const standardGraphemeIterators = new WeakSet<GraphemeIterator>();
 
 export class CodePointIterator {
 
@@ -563,6 +571,7 @@ export class CodePointIterator {
 		this._str = str;
 		this._len = str.length;
 		this._offset = offset;
+		if (new.target === CodePointIterator) { standardCodePointIterators.add(this); }
 	}
 
 	public setOffset(offset: number): void {
@@ -596,9 +605,12 @@ export class GraphemeIterator {
 
 	constructor(str: string, offset: number = 0) {
 		this._iterator = new CodePointIterator(str, offset);
+		if (new.target === GraphemeIterator) { standardGraphemeIterators.add(this); }
 	}
 
 	public nextGraphemeLength(): number {
+		const native = tryComputeNativeGrapheme(this, false);
+		if (native !== undefined) { return native; }
 		const graphemeBreakTree = GraphemeBreakTree.getInstance();
 		const iterator = this._iterator;
 		const initialOffset = iterator.offset;
@@ -618,6 +630,8 @@ export class GraphemeIterator {
 	}
 
 	public prevGraphemeLength(): number {
+		const native = tryComputeNativeGrapheme(this, true);
+		if (native !== undefined) { return native; }
 		const graphemeBreakTree = GraphemeBreakTree.getInstance();
 		const iterator = this._iterator;
 		const initialOffset = iterator.offset;
@@ -668,6 +682,31 @@ export function charCount(str: string): number {
 		iterator.nextGraphemeLength();
 	}
 	return length;
+}
+
+const graphemeIteratorMethods = [
+	{ target: CodePointIterator.prototype, names: ['offset', 'prevCodePoint', 'nextCodePoint', 'setOffset', 'eol'] },
+	{ target: GraphemeIterator.prototype, names: ['nextGraphemeLength', 'prevGraphemeLength'] }
+].flatMap(({ target, names }) => names.map(name => ({ target, name, descriptor: Object.getOwnPropertyDescriptor(target, name) })));
+
+/** Preserves externally observable iterator fields and callbacks before fusing an entire step. */
+function tryComputeNativeGrapheme(grapheme: GraphemeIterator, previous: boolean): number | undefined {
+	if (!isRustUnicodeRegistered() || !standardGraphemeIterators.has(grapheme) || Object.getPrototypeOf(grapheme) !== GraphemeIterator.prototype || graphemeIteratorMethods.some(({ target, name, descriptor }) => {
+		const current = Object.getOwnPropertyDescriptor(target, name);
+		return current?.value !== descriptor?.value || current?.get !== descriptor?.get;
+	})) { return undefined; }
+	const iteratorField = Object.getOwnPropertyDescriptor(grapheme, '_iterator');
+	if (!iteratorField || !Object.hasOwn(iteratorField, 'value') || !standardCodePointIterators.has(iteratorField.value) || Object.getPrototypeOf(iteratorField.value) !== CodePointIterator.prototype) { return undefined; }
+	const iterator: CodePointIterator = iteratorField.value;
+	if (['offset', 'prevCodePoint', 'nextCodePoint', 'setOffset', 'eol'].some(name => Object.hasOwn(iterator, name))) { return undefined; }
+	const text = Object.getOwnPropertyDescriptor(iterator, '_str');
+	const length = Object.getOwnPropertyDescriptor(iterator, '_len');
+	const offset = Object.getOwnPropertyDescriptor(iterator, '_offset');
+	if (!text || !length || !offset || !Object.hasOwn(text, 'value') || !Object.hasOwn(length, 'value') || !Object.hasOwn(offset, 'value') || typeof text.value !== 'string' || length.value !== text.value.length || typeof offset.value !== 'number' || !offset.writable) { return undefined; }
+	const after = tryComputeRustGraphemeOffset(text.value, offset.value, previous);
+	if (after === undefined) { return undefined; }
+	iterator.setOffset(after);
+	return previous ? offset.value - after : after - offset.value;
 }
 
 let CONTAINS_RTL: RegExp | undefined = undefined;

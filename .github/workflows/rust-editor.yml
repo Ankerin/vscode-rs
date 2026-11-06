@@ -13,6 +13,8 @@ on:
       - 'src/vs/editor/common/diff/**'
       - 'src/vs/editor/common/core/**'
       - 'src/vs/base/common/strings.ts'
+      - 'src/vs/base/common/rustUnicode.ts'
+      - 'src/vs/editor/common/cursor/**'
       - 'src/vs/editor/common/tokens/**'
       - 'src/vs/editor/browser/services/**'
       - 'src/vs/editor/test/common/services/editorWebWorker.test.ts'

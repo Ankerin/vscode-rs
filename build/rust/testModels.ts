@@ -53,7 +53,8 @@ const testArgs = [
 	'--run', 'src/vs/editor/contrib/folding/test/browser/foldingRanges.test.ts',
 	'--run', 'src/vs/editor/test/common/core/lineTokens.test.ts',
 	'--run', 'src/vs/editor/test/common/core/cursorColumns.test.ts',
-	'--run', 'src/vs/editor/test/common/controller/cursorAtomicMoveOperations.test.ts'
+	'--run', 'src/vs/editor/test/common/controller/cursorAtomicMoveOperations.test.ts',
+	'--run', 'src/vs/base/test/common/strings.test.ts'
 ];
 for (const engine of ['existing', 'rust']) {
 	const args = engine === 'rust' ? ['--import', pathToFileURL(output).href] : [];

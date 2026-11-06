@@ -5,9 +5,10 @@
 
 import { IDisposable, toDisposable } from '../../../base/common/lifecycle.js';
 import { CodePointIterator, GraphemeIterator } from '../../../base/common/strings.js';
+import { IRustUnicodeModule, registerRustUnicode } from '../../../base/common/rustUnicode.js';
 
 /** Generated arithmetic and Unicode contracts for existing model/view cursor columns. */
-export interface IRustCursorColumnsModule {
+export interface IRustCursorColumnsModule extends IRustUnicodeModule {
 	cursor_columns_abi_version(): number;
 	cursor_column(text: string, column: number, tabSize: number, operation: number): number | undefined;
 	cursor_tab_stop(column: number, size: number, previous: boolean): number;
@@ -27,8 +28,12 @@ const standardMethods = [
 export function registerRustCursorColumns(module: IRustCursorColumnsModule): IDisposable {
 	if (typeof module.cursor_columns_abi_version !== 'function' || module.cursor_columns_abi_version() !== 2 || typeof module.cursor_column !== 'function' || typeof module.cursor_tab_stop !== 'function' || typeof module.cursor_whitespace_column !== 'function' || typeof module.cursor_atomic_position !== 'function' || typeof module.grapheme_break_type !== 'function') { throw new Error('The Rust cursor bindings do not match the current column contract'); }
 	if (registeredModule) { throw new Error('A Rust cursor column module is already registered'); }
+	const unicode = registerRustUnicode(module);
 	registeredModule = module;
-	return toDisposable(() => { if (registeredModule === module) { registeredModule = undefined; } });
+	return toDisposable(() => {
+		if (registeredModule === module) { registeredModule = undefined; }
+		unicode.dispose();
+	});
 }
 
 /** Uses a borrowed primitive string and leaves overridden iterator/string callbacks on their original path. */

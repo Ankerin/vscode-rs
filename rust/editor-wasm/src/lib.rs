@@ -25,6 +25,7 @@ mod token_array;
 mod token_iteration;
 mod token_serialization;
 mod tokens;
+mod unicode;
 
 /// Identifies the storage contract independently of the binding generator's version.
 #[wasm_bindgen]

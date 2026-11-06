@@ -39,16 +39,7 @@ pub fn cursor_column<E>(
 	while offset < length {
 		let (point, mut after_offset) = next_code_point(length, offset, &mut unit)?;
 		if !statusbar {
-			let mut previous = grapheme_break_type(point);
-			while after_offset < length {
-				let (next, next_offset) = next_code_point(length, after_offset, &mut unit)?;
-				let next = grapheme_break_type(next);
-				if break_between(previous, next) {
-					break;
-				}
-				after_offset = next_offset;
-				previous = next;
-			}
+			after_offset = grapheme_end(length, point, after_offset, &mut unit)?;
 		}
 		let after_visible = if point == 9 {
 			next_cursor_tab_stop(visible, tab_size)
@@ -117,6 +108,83 @@ pub fn grapheme_break_type(point: u32) -> Option<u32> {
 		}
 	}
 	Some(0)
+}
+
+/// Reads a forward or backward code point while retaining surrogate-interior coordinates.
+/// Callers must provide an in-bounds forward unit or a backward offset in `1..=length`.
+pub fn unicode_code_point<E>(
+	length: usize,
+	offset: usize,
+	previous: bool,
+	mut unit: impl FnMut(usize) -> Result<u16, E>,
+) -> Result<(u32, usize), E> {
+	if previous {
+		previous_code_point(offset, &mut unit)
+	} else {
+		next_code_point(length, offset, &mut unit)
+	}
+}
+
+/// Computes one original stateless grapheme step over borrowed units without retaining text.
+/// Callers must provide an in-bounds forward unit or a backward offset in `1..=length`.
+pub fn unicode_grapheme_offset<E>(
+	length: usize,
+	offset: usize,
+	previous: bool,
+	mut unit: impl FnMut(usize) -> Result<u16, E>,
+) -> Result<usize, E> {
+	if !previous {
+		let (point, after) = next_code_point(length, offset, &mut unit)?;
+		return grapheme_end(length, point, after, &mut unit);
+	}
+	let (point, mut before) = previous_code_point(offset, &mut unit)?;
+	let mut class = grapheme_break_type(point);
+	while before > 0 {
+		let (point, next) = previous_code_point(before, &mut unit)?;
+		let previous_class = grapheme_break_type(point);
+		if break_between(previous_class, class) {
+			break;
+		}
+		before = next;
+		class = previous_class;
+	}
+	Ok(before)
+}
+
+fn grapheme_end<E>(
+	length: usize,
+	point: u32,
+	mut after: usize,
+	unit: &mut impl FnMut(usize) -> Result<u16, E>,
+) -> Result<usize, E> {
+	let mut class = grapheme_break_type(point);
+	while after < length {
+		let (point, next) = next_code_point(length, after, unit)?;
+		let next_class = grapheme_break_type(point);
+		if break_between(class, next_class) {
+			break;
+		}
+		after = next;
+		class = next_class;
+	}
+	Ok(after)
+}
+
+fn previous_code_point<E>(
+	offset: usize,
+	unit: &mut impl FnMut(usize) -> Result<u16, E>,
+) -> Result<(u32, usize), E> {
+	let first = unit(offset - 1)?;
+	if (0xDC00..=0xDFFF).contains(&first) && offset > 1 {
+		let second = unit(offset - 2)?;
+		if (0xD800..=0xDBFF).contains(&second) {
+			return Ok((
+				0x10000 + ((u32::from(second) - 0xD800) << 10) + u32::from(first) - 0xDC00,
+				offset - 2,
+			));
+		}
+	}
+	Ok((u32::from(first), offset - 1))
 }
 
 fn next_code_point<E>(
@@ -221,5 +289,31 @@ mod tests {
 			},
 		);
 		assert_eq!((result, reads), (Err(17), vec![0]));
+	}
+
+	#[test]
+	fn unicode_steps_keep_reverse_graphemes_surrogate_interiors_and_bounded_reads() {
+		let text = [0xD83D, 0xDE00, 0x0301, 97];
+		let read = |index| Ok::<_, Infallible>(text[index]);
+		assert_eq!(
+			[
+				unicode_grapheme_offset(text.len(), 0, false, read).unwrap(),
+				unicode_grapheme_offset(text.len(), 3, true, read).unwrap(),
+				unicode_grapheme_offset(text.len(), 1, false, read).unwrap(),
+				unicode_grapheme_offset(text.len(), 1, true, read).unwrap(),
+			],
+			[3, 0, 3, 0]
+		);
+		assert_eq!(
+			unicode_code_point(text.len(), 2, true, read).unwrap(),
+			(0x1F600, 0)
+		);
+		let mut reads = Vec::new();
+		let result = unicode_grapheme_offset(1_000_000, 0, false, |index| {
+			reads.push(index);
+			Ok::<_, Infallible>(97)
+		})
+		.unwrap();
+		assert_eq!((result, reads), (1, vec![0, 1]));
 	}
 }

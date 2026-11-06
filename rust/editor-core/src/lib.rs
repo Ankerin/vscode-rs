@@ -31,7 +31,7 @@ pub use contiguous_tokens::{
 };
 pub use cursor_columns::{
 	CursorColumnOperation, cursor_column, grapheme_break_type, next_cursor_tab_stop,
-	previous_cursor_tab_stop,
+	previous_cursor_tab_stop, unicode_code_point, unicode_grapheme_offset,
 };
 pub use folding::{IndentationFoldingRanges, compute_indentation_folding};
 pub use guides::{ActiveIndentGuide, compute_active_indent_guide, compute_indent_guides};
