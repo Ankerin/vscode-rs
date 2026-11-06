@@ -11,7 +11,7 @@ import { BracketInfo, BracketPairWithMinIndentationInfo, IFoundBracket } from '.
 import { TextModel } from '../../textModel.js';
 import { IModelContentChangedEvent, IModelTokensChangedEvent } from '../../../textModelEvents.js';
 import { ResolvedLanguageConfiguration } from '../../../languages/languageConfigurationRegistry.js';
-import { AstNode, AstNodeKind } from './ast.js';
+import { AstNode, AstNodeKind, PairAstNode } from './ast.js';
 import { TextEditInfo } from './beforeEditPositionMapper.js';
 import { LanguageAgnosticBracketTokens } from './brackets.js';
 import { Length, lengthAdd, lengthGreaterThanEqual, lengthLessThan, lengthLessThanEqual, lengthsToRange, lengthZero, positionToLength, toLength } from './length.js';
@@ -23,6 +23,7 @@ import { Position } from '../../../core/position.js';
 import { CallbackIterable } from '../../../../../base/common/arrays.js';
 import { combineTextEditInfos } from './combineTextEditInfos.js';
 import { ClosingBracketKind, OpeningBracketKind } from '../../../languages/supports/languageBracketsConfiguration.js';
+import { IRustBracketCollectionHost, tryCollectRustBrackets } from './rustBracketCollection.js';
 
 export class BracketPairsTree extends Disposable {
 	private readonly didChangeEmitter;
@@ -303,6 +304,8 @@ function collectBrackets(
 	onlyColorizedBrackets: boolean,
 	parentPairIsIncomplete: boolean = false,
 ): boolean {
+	const native = tryCollectRustBrackets(node, nodeOffsetStart, nodeOffsetEnd, level, nestingLevelOfEqualBracketType, parentPairIsIncomplete, () => createRustBracketCollectionHost(startOffset, endOffset, push, levelPerBracketType, onlyColorizedBrackets));
+	if (native !== undefined) { return native.continued; }
 	if (level > 200) {
 		return true;
 	}
@@ -417,6 +420,33 @@ function collectBrackets(
 				return true;
 		}
 	}
+}
+
+/** Ordered capabilities retain the original range traversal's providers, maps, and callback values. */
+function createRustBracketCollectionHost(startOffset: Length, endOffset: Length, push: (item: BracketInfo) => boolean, levels: Map<string, number>, onlyColorizedBrackets: boolean): IRustBracketCollectionHost {
+	return {
+		truthy: value => !!value,
+		kind: node => node.kind,
+		childCount: node => node.childrenLength,
+		indexBefore: (index, count) => index < count,
+		child: (node, index) => node.getChild(index),
+		end: (start, child) => lengthAdd(start, child.length),
+		inRange: (start, end) => lengthLessThanEqual(start, endOffset) && lengthGreaterThanEqual(end, startOffset),
+		reachesEnd: end => lengthGreaterThanEqual(end, endOffset),
+		isBracket: node => node.kind === AstNodeKind.Bracket,
+		colorize: node => !onlyColorizedBrackets || !(node as PairAstNode).closingBracket || ((node as PairAstNode).closingBracket!.bracketInfo as ClosingBracketKind).closesColorized((node as PairAstNode).openingBracket.bracketInfo as OpeningBracketKind),
+		hasLevels: () => !!levels,
+		getLevel: node => levels.get((node as PairAstNode).openingBracket.text),
+		isUndefined: value => value === undefined,
+		increment: value => ++value,
+		addOne: value => value + 1,
+		setLevel: (node, value) => { levels.set((node as PairAstNode).openingBracket.text, value); },
+		restoreLevel: (node, value) => { levels?.set((node as PairAstNode).openingBracket.text, value); },
+		hasClosing: node => !!(node as PairAstNode).closingBracket,
+		collect: (node, start, end, level, equalLevel, incomplete) => collectBrackets(node, start, end, startOffset, endOffset, push, level, equalLevel, levels, onlyColorizedBrackets, incomplete),
+		emitUnexpected: (start, end, level) => { const range = lengthsToRange(start, end); return push(new BracketInfo(range, level - 1, 0, true)); },
+		emitBracket: (start, end, level, equalLevel, incomplete) => { const range = lengthsToRange(start, end); return push(new BracketInfo(range, level - 1, equalLevel - 1, incomplete)); }
+	};
 }
 
 class CollectBracketPairsContext {

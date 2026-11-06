@@ -12,6 +12,7 @@ use vscode_editor_core::{
 use wasm_bindgen::prelude::*;
 
 mod arrays;
+mod bracket_collection;
 mod bracket_edits;
 mod bracket_lengths;
 mod bracket_node_reader;
