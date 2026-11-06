@@ -50,6 +50,7 @@ import { IntervalNode, IntervalTree, recomputeMaxEnd } from './intervalTree.js';
 import { PieceTreeTextBuffer } from './pieceTreeTextBuffer/pieceTreeTextBuffer.js';
 import { PieceTreeTextBufferBuilder } from './pieceTreeTextBuffer/pieceTreeTextBufferBuilder.js';
 import { SearchParams, TextModelSearch } from './textModelSearch.js';
+import { IRustModelValidationHost, RustModelValidationOperation, tryRustModelValidation } from './rustModelValidation.js';
 import { AttachedViews } from './tokens/abstractSyntaxTokenBackend.js';
 import { TokenizationFontDecorationProvider } from './tokens/tokenizationFontDecorationsProvider.js';
 import { LineFontChangingDecoration, LineHeightChangingDecoration } from './decorationProvider.js';
@@ -919,11 +920,66 @@ export class TextModel extends Disposable implements model.ITextModel, IDecorati
 		return this._buffer.getLineLastNonWhitespaceColumn(lineNumber);
 	}
 
+	/** Keeps virtual model calls live while Rust owns validation control. */
+	private _createRustModelValidationHost(): IRustModelValidationHost {
+		return {
+			coordinate: (value, field) => {
+				switch (field) {
+					case 0: return (value as IPosition).lineNumber;
+					case 1: return (value as IPosition).column;
+					case 2: return (value as IRange).startLineNumber;
+					case 3: return (value as IRange).startColumn;
+					case 4: return (value as IRange).endLineNumber;
+					case 5: return (value as IRange).endColumn;
+					default: throw new BugIndicatingError('Invalid model coordinate field');
+				}
+			},
+			compare: (operation, first, second) => {
+				switch (operation) {
+					case 0: return first === second;
+					case 1: return first < second;
+					case 2: return first > second;
+					case 3: return first <= second;
+					case 4: return first >= second;
+					default: throw new BugIndicatingError('Invalid model coordinate comparison');
+				}
+			},
+			add: (value, amount) => value + amount,
+			subtract: (value, amount) => value - amount,
+			lineCount: () => this._buffer.getLineCount(),
+			maxColumn: line => this.getLineMaxColumn(line),
+			lineLength: line => this._buffer.getLineLength(line),
+			charCode: (line, index) => this._buffer.getLineCharCode(line, index),
+			assertAlive: () => this._assertNotDisposed(),
+			positionMethod: valid => {
+				const method = valid ? this._isValidPosition : this._validatePosition;
+				return (line, column, surrogates) => Reflect.apply(method, this, [line, column, surrogates ? StringOffsetValidationType.SurrogatePairs : StringOffsetValidationType.Relaxed]);
+			},
+			callIsValidPosition: (method, line, column, surrogates) => method(line, column, surrogates),
+			callValidatePosition: (method, line, column, surrogates) => method(line, column, surrogates),
+			charCodeMethod: () => {
+				const buffer = this._buffer;
+				const method = buffer.getLineCharCode;
+				return (line, index) => Reflect.apply(method, buffer, [line, index]);
+			},
+			callCharCode: (method, line, index) => method(line, index),
+			reusable: (value, range) => range ? value instanceof Range && !(value instanceof Selection) : value instanceof Position,
+			isValidPosition: (line, column, surrogates) => this._isValidPosition(line, column, surrogates ? StringOffsetValidationType.SurrogatePairs : StringOffsetValidationType.Relaxed),
+			validatePosition: (line, column, surrogates) => this._validatePosition(line, column, surrogates ? StringOffsetValidationType.SurrogatePairs : StringOffsetValidationType.Relaxed),
+			isValidRange: (range, surrogates) => this._isValidRange(range, surrogates ? StringOffsetValidationType.SurrogatePairs : StringOffsetValidationType.Relaxed),
+			publicIsValidRange: range => this._isValidRange(range, StringOffsetValidationType.SurrogatePairs),
+			makePosition: (line, column) => new Position(line, column),
+			makeRange: (startLine, startColumn, endLine, endColumn) => new Range(startLine, startColumn, endLine, endColumn)
+		};
+	}
+
 	/**
 	 * Validates `range` is within buffer bounds, but allows it to sit in between surrogate pairs, etc.
 	 * Will try to not allocate if possible.
 	 */
 	public _validateRangeRelaxedNoAllocations(range: IRange): Range {
+		const rust = tryRustModelValidation<Range>(RustModelValidationOperation.RelaxedRange, range, 0, 0, () => this._createRustModelValidationHost());
+		if (rust) { return rust.value; }
 		const linesCount = this._buffer.getLineCount();
 
 		const initialStartLineNumber = range.startLineNumber;
@@ -985,6 +1041,8 @@ export class TextModel extends Disposable implements model.ITextModel, IDecorati
 	}
 
 	private _isValidPosition(lineNumber: number, column: number, validationType: StringOffsetValidationType): boolean {
+		const rust = tryRustModelValidation<boolean>(RustModelValidationOperation.IsPosition, lineNumber, column, validationType, () => this._createRustModelValidationHost());
+		if (rust) { return rust.value; }
 		if (typeof lineNumber !== 'number' || typeof column !== 'number') {
 			return false;
 		}
@@ -1027,6 +1085,8 @@ export class TextModel extends Disposable implements model.ITextModel, IDecorati
 	}
 
 	private _validatePosition(_lineNumber: number, _column: number, validationType: StringOffsetValidationType): Position {
+		const rust = tryRustModelValidation<Position>(RustModelValidationOperation.ClampPosition, _lineNumber, _column, validationType, () => this._createRustModelValidationHost());
+		if (rust) { return rust.value; }
 		const lineNumber = Math.floor((typeof _lineNumber === 'number' && !isNaN(_lineNumber)) ? _lineNumber : 1);
 		const column = Math.floor((typeof _column === 'number' && !isNaN(_column)) ? _column : 1);
 		const lineCount = this._buffer.getLineCount();
@@ -1062,6 +1122,8 @@ export class TextModel extends Disposable implements model.ITextModel, IDecorati
 	}
 
 	public validatePosition(position: IPosition): Position {
+		const rust = tryRustModelValidation<Position>(RustModelValidationOperation.Position, position, 0, 1, () => this._createRustModelValidationHost());
+		if (rust) { return rust.value; }
 		const validationType = StringOffsetValidationType.SurrogatePairs;
 		this._assertNotDisposed();
 
@@ -1076,10 +1138,14 @@ export class TextModel extends Disposable implements model.ITextModel, IDecorati
 	}
 
 	public isValidRange(range: Range): boolean {
+		const rust = tryRustModelValidation<boolean>(RustModelValidationOperation.PublicIsRange, range, 0, 1, () => this._createRustModelValidationHost());
+		if (rust) { return rust.value; }
 		return this._isValidRange(range, StringOffsetValidationType.SurrogatePairs);
 	}
 
 	private _isValidRange(range: Range, validationType: StringOffsetValidationType): boolean {
+		const rust = tryRustModelValidation<boolean>(RustModelValidationOperation.IsRange, range, 0, validationType, () => this._createRustModelValidationHost());
+		if (rust) { return rust.value; }
 		const startLineNumber = range.startLineNumber;
 		const startColumn = range.startColumn;
 		const endLineNumber = range.endLineNumber;
@@ -1109,6 +1175,8 @@ export class TextModel extends Disposable implements model.ITextModel, IDecorati
 	}
 
 	public validateRange(_range: IRange): Range {
+		const rust = tryRustModelValidation<Range>(RustModelValidationOperation.Range, _range, 0, 1, () => this._createRustModelValidationHost());
+		if (rust) { return rust.value; }
 		const validationType = StringOffsetValidationType.SurrogatePairs;
 		this._assertNotDisposed();
 

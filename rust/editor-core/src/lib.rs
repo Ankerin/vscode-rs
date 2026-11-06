@@ -33,6 +33,7 @@ mod guides;
 mod indentation;
 mod line_tokens;
 mod model_edits;
+mod model_validation;
 mod normalize_indentation;
 mod search;
 mod sequence_diff;
@@ -117,6 +118,11 @@ pub use line_tokens::{
 pub use model_edits::{
 	MAX_MODEL_EDIT_UNITS, MAX_MODEL_EDITS, ModelEdit, ModelEditOptions, ModelTextFlags,
 	PreparedModelEdit, PreparedModelEdits, count_eol, prepare_model_edits,
+};
+pub use model_validation::{
+	ModelComparison, ModelCoordinate, ModelValidationHost, clamp_model_position,
+	is_valid_model_position, is_valid_model_range, validate_model_position, validate_model_range,
+	validate_relaxed_model_range,
 };
 pub use normalize_indentation::{NormalizedIndentation, normalize_indentation};
 pub use sequence_diff::{

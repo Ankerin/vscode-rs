@@ -36,6 +36,7 @@ mod decorations;
 mod fast_bracket_tokenizer;
 mod line_tokens;
 mod model_edits;
+mod model_validation;
 mod sequence_diff;
 mod small_immutable_set;
 mod sparse_tokens_store;
