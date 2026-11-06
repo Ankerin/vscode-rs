@@ -26,6 +26,7 @@ import { IRustSmallSetModule, registerRustSmallSet } from '../bracketPairsTextMo
 import { IRustBracketTreesModule, registerRustBracketTrees } from '../bracketPairsTextModelPart/bracketPairsTree/rustBracketTrees.js';
 import { IRustBracketNodeReaderModule, registerRustBracketNodeReader } from '../bracketPairsTextModelPart/bracketPairsTree/rustBracketNodeReader.js';
 import { IRustBracketPositionMapperModule, registerRustBracketPositionMapper } from '../bracketPairsTextModelPart/bracketPairsTree/rustBracketPositionMapper.js';
+import { IRustBracketParserModule, registerRustBracketParser } from '../bracketPairsTextModelPart/bracketPairsTree/rustBracketParser.js';
 
 /** The generated binding surface; UTF-16 arrays preserve JavaScript string semantics. */
 export interface IRustTextBuffer {
@@ -63,7 +64,7 @@ interface IRustTextSnapshot {
 	free(): void;
 }
 
-export interface IRustTextBufferModule extends IRustSequenceDiffModule, IRustTextChangeModule, IRustTokensModule, IRustCursorColumnsModule, IRustDecorationsModule, IRustTextShapeModule, IRustBracketEditsModule, IRustBracketLengthsModule, IRustSmallSetModule, IRustBracketTreesModule, IRustBracketNodeReaderModule, IRustBracketPositionMapperModule {
+export interface IRustTextBufferModule extends IRustSequenceDiffModule, IRustTextChangeModule, IRustTokensModule, IRustCursorColumnsModule, IRustDecorationsModule, IRustTextShapeModule, IRustBracketEditsModule, IRustBracketLengthsModule, IRustSmallSetModule, IRustBracketTreesModule, IRustBracketNodeReaderModule, IRustBracketPositionMapperModule, IRustBracketParserModule {
 	text_buffer_abi_version(): number;
 	WasmTextBuffer: {
 		new(units: Uint16Array): IRustTextBuffer;
@@ -375,6 +376,7 @@ export function registerRustTextBuffer(module: IRustTextBufferModule, initializa
 		registration.add(registerRustBracketTrees(module));
 		registration.add(registerRustBracketNodeReader(module));
 		registration.add(registerRustBracketPositionMapper(module));
+		registration.add(registerRustBracketParser(module));
 	} catch (error) {
 		registration.dispose();
 		throw error;
