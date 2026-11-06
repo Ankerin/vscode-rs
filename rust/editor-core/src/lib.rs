@@ -33,6 +33,7 @@ mod guides;
 mod indentation;
 mod line_tokens;
 mod model_content_events;
+mod model_decoration_events;
 mod model_edits;
 mod model_event_data;
 mod model_lifecycle;
@@ -125,6 +126,9 @@ pub use line_tokens::{
 };
 pub use model_content_events::{
 	ModelContentEventsHost, ModelContentEventsOperation, run_model_content_events,
+};
+pub use model_decoration_events::{
+	ModelDecorationEventsHost, ModelDecorationEventsOperation, run_model_decoration_events,
 };
 pub use model_edits::{
 	MAX_MODEL_EDIT_UNITS, MAX_MODEL_EDITS, ModelEdit, ModelEditOptions, ModelTextFlags,

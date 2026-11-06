@@ -59,6 +59,7 @@ import { IRustModelSearchHost, IRustModelSearchModule, RustModelSearchOperation,
 import { ownRustTextModel, releaseRustTextModel } from './rustModelState.js';
 import { IRustModelContentEventsHost, ownRustModelContentEmitter, releaseRustModelContentEmitter, RustModelContentEventsOperation, tryRustModelContentEvents } from './rustModelContentEvents.js';
 import { ownRustModelContentData } from './rustModelEventData.js';
+import { IRustAffectedDecorationLine, IRustModelDecorationEventsHost, ownRustModelDecorationEmitter, ownRustModelDecorationEvent, releaseRustModelDecorationEmitter, RustModelDecorationEventsOperation, rustModelDecorationEventFields, tryRustModelDecorationEvents } from './rustModelDecorationEvents.js';
 import { AttachedViews } from './tokens/abstractSyntaxTokenBackend.js';
 import { TokenizationFontDecorationProvider } from './tokens/tokenizationFontDecorationsProvider.js';
 import { LineFontChangingDecoration, LineHeightChangingDecoration } from './decorationProvider.js';
@@ -2932,7 +2933,7 @@ class DidChangeDecorationsEmitter extends Disposable {
 	private _affectsLineNumber: boolean;
 
 	constructor(private readonly handleBeforeFire: (affectedInjectedTextLines: Set<number> | null, affectedLineHeights: SetWithKey<LineHeightChangingDecoration> | null, affectedFontLines: SetWithKey<LineFontChangingDecoration> | null) => void) {
-		super();
+		super(ownRustModelDecorationEmitter);
 		this._deferredCnt = 0;
 		this._shouldFireDeferred = false;
 		this._affectsMinimap = false;
@@ -2941,15 +2942,65 @@ class DidChangeDecorationsEmitter extends Disposable {
 		this._affectsLineNumber = false;
 	}
 
+	/** Keeps callback lookup, affected-set aliases, event factories, and virtual delivery live. */
+	private _createRustHost(): IRustModelDecorationEventsHost {
+		return {
+			get: index => this[rustModelDecorationEventFields[index]],
+			set: (index, value) => {
+				switch (index) {
+					case 0: this._deferredCnt = value as number; break;
+					case 1: this._shouldFireDeferred = value as boolean; break;
+					case 2: this._affectsMinimap = value as boolean; break;
+					case 3: this._affectsOverviewRuler = value as boolean; break;
+					case 4: this._affectsGlyphMargin = value as boolean; break;
+					case 5: this._affectsLineNumber = value as boolean; break;
+					case 6: this._affectedInjectedTextLines = value as Set<number> | null; break;
+					case 7: this._affectedLineHeights = value as SetWithKey<LineHeightChangingDecoration> | null; break;
+					case 8: this._affectedFontLines = value as SetWithKey<LineFontChangingDecoration> | null; break;
+				}
+			},
+			increment: (value, increase) => { if (increase) { value++; } else { value--; } return value; },
+			hasListeners: () => this._actual.hasListeners(),
+			tryFire: () => this.tryFire(),
+			deliver: () => this.doFire(),
+			clear: set => set.clear(),
+			createSet: index => index === 6 ? new Set<number>() : index === 7 ? new SetWithKey<LineHeightChangingDecoration>([], LineHeightChangingDecoration.toKey) : new SetWithKey<LineFontChangingDecoration>([], LineFontChangingDecoration.toKey),
+			add: (index, input) => {
+				if (index === 6) { this._affectedInjectedTextLines!.add(input as number); }
+				else {
+					const line = input as IRustAffectedDecorationLine;
+					if (index === 7) { this._affectedLineHeights!.add(new LineHeightChangingDecoration(line.ownerId, line.decorationId, line.lineNumber, line.lineHeight)); }
+					else { this._affectedFontLines!.add(new LineFontChangingDecoration(line.ownerId, line.decorationId, line.lineNumber)); }
+				}
+			},
+			optionFlag: (input, index) => index === 0 ? !!input.minimap?.position : index === 1 ? !!input.overviewRuler?.color : index === 2 ? !!input.glyphMarginClassName : !!input.lineNumberClassName,
+			beforeMethod: () => { const method = this.handleBeforeFire; return (injected, heights, fonts) => method.call(this, injected, heights, fonts); },
+			before: (method, injected, heights, fonts) => method(injected, heights, fonts),
+			event: (affectsMinimap, affectsOverviewRuler, affectsGlyphMargin, affectsLineNumber) => ownRustModelDecorationEvent({ affectsMinimap, affectsOverviewRuler, affectsGlyphMargin, affectsLineNumber }),
+			fireEvent: event => this._actual.fire(event)
+		};
+	}
+
+	public override dispose(): void {
+		super.dispose();
+		releaseRustModelDecorationEmitter(this);
+	}
+
 	hasListeners(): boolean {
+		const rust = tryRustModelDecorationEvents<boolean>(RustModelDecorationEventsOperation.HasListeners, null, () => this._createRustHost());
+		if (rust) { return rust.value; }
 		return this._actual.hasListeners();
 	}
 
 	public beginDeferredEmit(): void {
+		const rust = tryRustModelDecorationEvents<void>(RustModelDecorationEventsOperation.Begin, null, () => this._createRustHost());
+		if (rust) { return rust.value; }
 		this._deferredCnt++;
 	}
 
 	public endDeferredEmit(): void {
+		const rust = tryRustModelDecorationEvents<void>(RustModelDecorationEventsOperation.End, null, () => this._createRustHost());
+		if (rust) { return rust.value; }
 		this._deferredCnt--;
 		if (this._deferredCnt === 0) {
 			if (this._shouldFireDeferred) {
@@ -2966,6 +3017,8 @@ class DidChangeDecorationsEmitter extends Disposable {
 	}
 
 	public recordLineAffectedByInjectedText(lineNumber: number): void {
+		const rust = tryRustModelDecorationEvents<void>(RustModelDecorationEventsOperation.Injected, lineNumber, () => this._createRustHost());
+		if (rust) { return rust.value; }
 		if (!this._affectedInjectedTextLines) {
 			this._affectedInjectedTextLines = new Set();
 		}
@@ -2973,6 +3026,8 @@ class DidChangeDecorationsEmitter extends Disposable {
 	}
 
 	public recordLineAffectedByLineHeightChange(ownerId: number, decorationId: string, lineNumber: number, lineHeight: number | null): void {
+		const rust = tryRustModelDecorationEvents<void>(RustModelDecorationEventsOperation.Height, { ownerId, decorationId, lineNumber, lineHeight }, () => this._createRustHost());
+		if (rust) { return rust.value; }
 		if (!this._affectedLineHeights) {
 			this._affectedLineHeights = new SetWithKey<LineHeightChangingDecoration>([], LineHeightChangingDecoration.toKey);
 		}
@@ -2980,6 +3035,8 @@ class DidChangeDecorationsEmitter extends Disposable {
 	}
 
 	public recordLineAffectedByFontChange(ownerId: number, decorationId: string, lineNumber: number): void {
+		const rust = tryRustModelDecorationEvents<void>(RustModelDecorationEventsOperation.Font, { ownerId, decorationId, lineNumber, lineHeight: null }, () => this._createRustHost());
+		if (rust) { return rust.value; }
 		if (!this._affectedFontLines) {
 			this._affectedFontLines = new SetWithKey<LineFontChangingDecoration>([], LineFontChangingDecoration.toKey);
 		}
@@ -2987,6 +3044,8 @@ class DidChangeDecorationsEmitter extends Disposable {
 	}
 
 	public checkAffectedAndFire(options: ModelDecorationOptions): void {
+		const rust = tryRustModelDecorationEvents<void>(RustModelDecorationEventsOperation.Check, options, () => this._createRustHost());
+		if (rust) { return rust.value; }
 		this._affectsMinimap ||= !!options.minimap?.position;
 		this._affectsOverviewRuler ||= !!options.overviewRuler?.color;
 		this._affectsGlyphMargin ||= !!options.glyphMarginClassName;
@@ -2995,6 +3054,8 @@ class DidChangeDecorationsEmitter extends Disposable {
 	}
 
 	public fire(): void {
+		const rust = tryRustModelDecorationEvents<void>(RustModelDecorationEventsOperation.Fire, null, () => this._createRustHost());
+		if (rust) { return rust.value; }
 		this._affectsMinimap = true;
 		this._affectsOverviewRuler = true;
 		this._affectsGlyphMargin = true;
@@ -3002,6 +3063,8 @@ class DidChangeDecorationsEmitter extends Disposable {
 	}
 
 	private tryFire() {
+		const rust = tryRustModelDecorationEvents<void>(RustModelDecorationEventsOperation.Try, null, () => this._createRustHost());
+		if (rust) { return rust.value; }
 		if (this._deferredCnt === 0) {
 			this.doFire();
 		} else {
@@ -3010,14 +3073,16 @@ class DidChangeDecorationsEmitter extends Disposable {
 	}
 
 	private doFire() {
+		const rust = tryRustModelDecorationEvents<void>(RustModelDecorationEventsOperation.Deliver, null, () => this._createRustHost());
+		if (rust) { return rust.value; }
 		this.handleBeforeFire(this._affectedInjectedTextLines, this._affectedLineHeights, this._affectedFontLines);
 
-		const event: IModelDecorationsChangedEvent = {
+		const event: IModelDecorationsChangedEvent = ownRustModelDecorationEvent({
 			affectsMinimap: this._affectsMinimap,
 			affectsOverviewRuler: this._affectsOverviewRuler,
 			affectsGlyphMargin: this._affectsGlyphMargin,
 			affectsLineNumber: this._affectsLineNumber,
-		};
+		});
 		this._shouldFireDeferred = false;
 		this._affectsMinimap = false;
 		this._affectsOverviewRuler = false;
