@@ -15,6 +15,48 @@ export interface IBracketNumberProperties {
 	attributes(index: number): number;
 }
 
+/** Native scalar/reference records share a collector-visible anchor protocol. */
+export interface IBracketNativeProperties {
+	get(index: number): BracketScalarValue;
+	attributes(index: number): number;
+	define(index: number, value: BracketScalarValue, writable: boolean, enumerable: boolean): void;
+	reference(index: number): number | undefined;
+	define_reference(index: number, reference: number, writable: boolean, enumerable: boolean): void;
+	remove(index: number): void;
+}
+
+/** Descriptor access retains exact host identities and releases obsolete reference anchors. */
+export interface IBracketPropertyAccess extends IBracketNumberProperties {
+	define(index: number, descriptor: PropertyDescriptor): void;
+	remove(index: number): void;
+	truncateReferences(length: number): void;
+	clearReferences(): void;
+}
+
+/** Keeps native handles independent of JavaScript graph roots, including cyclic facade references. */
+export function createBracketPropertyAccess(record: IBracketNativeProperties): IBracketPropertyAccess {
+	const references = new Map<number, object | symbol>();
+	return {
+		get: index => {
+			const reference = record.reference(index);
+			return reference === undefined ? record.get(index) : references.get(reference);
+		},
+		attributes: index => record.attributes(index),
+		define: (index, descriptor) => {
+			if (isBracketScalarValue(descriptor.value)) {
+				record.define(index, descriptor.value, !!descriptor.writable, !!descriptor.enumerable);
+				references.delete(index);
+			} else {
+				record.define_reference(index, index, !!descriptor.writable, !!descriptor.enumerable);
+				references.set(index, descriptor.value as object | symbol);
+			}
+		},
+		remove: index => { record.remove(index); references.delete(index); },
+		truncateReferences: length => { for (const index of references.keys()) { if (index >= length) { references.delete(index); } } },
+		clearReferences: () => references.clear()
+	};
+}
+
 /** Symbols remain on the host because they can be weak collection keys, just like objects. */
 export function isBracketScalarValue(value: unknown): value is BracketScalarValue {
 	return value === null || (typeof value !== 'object' && typeof value !== 'function' && typeof value !== 'symbol');

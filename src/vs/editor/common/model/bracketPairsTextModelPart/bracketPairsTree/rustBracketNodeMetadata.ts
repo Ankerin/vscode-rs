@@ -4,17 +4,11 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { IDisposable, toDisposable } from '../../../../../base/common/lifecycle.js';
-import { BracketPropertyValue, BracketScalarValue, bracketNumberDescriptor, isBracketScalarValue, mergeBracketNumberDescriptor } from './bracketNumericProperties.js';
+import { IBracketNativeProperties, bracketNumberDescriptor, createBracketPropertyAccess, mergeBracketNumberDescriptor } from './bracketNumericProperties.js';
 
 /** Native properties retain primitive payloads or handles into a collector-visible host anchor table. */
-interface IRustBracketNodeMetadata {
+interface IRustBracketNodeMetadata extends IBracketNativeProperties {
 	has(index: number): boolean;
-	get(index: number): BracketScalarValue;
-	attributes(index: number): number;
-	define(index: number, value: BracketScalarValue, writable: boolean, enumerable: boolean): void;
-	reference(index: number): number | undefined;
-	define_reference(index: number, reference: number, writable: boolean, enumerable: boolean): void;
-	remove(index: number): void;
 	free(): void;
 }
 
@@ -94,22 +88,7 @@ function ownRustBracketNumbers<T extends object>(node: T, fieldNames: readonly s
 		record.free?.();
 		throw new Error('The Rust bracket node metadata record does not match the owning AST contract');
 	}
-	// Strong host anchors are visible to the collector, including cycles back to the owning facade.
-	const references = new Map<number, object | symbol>();
-	const valueOf = (index: number): BracketPropertyValue => {
-		const reference = record!.reference(index);
-		return reference === undefined ? record!.get(index) : references.get(reference);
-	};
-	const properties = { get: valueOf, attributes: (index: number) => record!.attributes(index) };
-	const define = (index: number, descriptor: PropertyDescriptor) => {
-		if (isBracketScalarValue(descriptor.value)) {
-			record!.define(index, descriptor.value, !!descriptor.writable, !!descriptor.enumerable);
-			references.delete(index);
-		} else {
-			record!.define_reference(index, index, !!descriptor.writable, !!descriptor.enumerable);
-			references.set(index, descriptor.value as object | symbol);
-		}
-	};
+	const properties = createBracketPropertyAccess(record);
 	const indexOf = (key: string | symbol) => typeof key === 'string' ? fieldNames.findIndex(name => name === key) : -1;
 	const descriptorOf = (key: string | symbol): PropertyDescriptor | undefined => {
 		const index = indexOf(key);
@@ -125,7 +104,7 @@ function ownRustBracketNumbers<T extends object>(node: T, fieldNames: readonly s
 			const key = fieldNames[index];
 			const descriptor = Reflect.getOwnPropertyDescriptor(node, key);
 			if (descriptor?.configurable && Object.hasOwn(descriptor, 'value')) {
-				define(index, descriptor);
+				properties.define(index, descriptor);
 				transferred.push({ key, descriptor });
 			}
 		}
@@ -145,7 +124,7 @@ function ownRustBracketNumbers<T extends object>(node: T, fieldNames: readonly s
 	return new Proxy(node, {
 		get: (target, key, receiver) => {
 			const index = indexOf(key);
-			return record && index >= 0 && record.has(index) ? valueOf(index) : Reflect.get(target, key, receiver);
+			return record && index >= 0 && record.has(index) ? properties.get(index) : Reflect.get(target, key, receiver);
 		},
 		has: (target, key) => {
 			const index = indexOf(key);
@@ -164,14 +143,13 @@ function ownRustBracketNumbers<T extends object>(node: T, fieldNames: readonly s
 					return false;
 				}
 				if (next.configurable && Object.hasOwn(next, 'value')) {
-					define(index, next);
+					properties.define(index, next);
 					Reflect.deleteProperty(target, key);
 				} else {
 					if (!Reflect.defineProperty(target, key, next)) {
 						return false;
 					}
-					record.remove(index);
-					references.delete(index);
+					properties.remove(index);
 				}
 			} else if (!Reflect.defineProperty(target, key, descriptor)) {
 				return false;
@@ -194,8 +172,7 @@ function ownRustBracketNumbers<T extends object>(node: T, fieldNames: readonly s
 		deleteProperty: (target, key) => {
 			const index = indexOf(key);
 			if (record && index >= 0 && record.has(index)) {
-				record.remove(index);
-				references.delete(index);
+				properties.remove(index);
 			} else if (!Reflect.deleteProperty(target, key)) {
 				return false;
 			}
@@ -220,7 +197,7 @@ function ownRustBracketNumbers<T extends object>(node: T, fieldNames: readonly s
 				}
 				record.free();
 				record = undefined;
-				references.clear();
+				properties.clearReferences();
 			}
 			return Reflect.preventExtensions(target);
 		}

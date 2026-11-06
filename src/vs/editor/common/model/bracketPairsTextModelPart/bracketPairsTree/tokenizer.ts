@@ -13,6 +13,7 @@ import { SmallImmutableSet } from './smallImmutableSet.js';
 import { IRustBracketTokenizerHost, IRustPeekableBracketTokenizerHost, tryReadRustBracketToken, tryReadRustPeekableBracketToken, trySetRustBracketTokenPosition, trySkipRustBracketTokens } from './rustBracketTokenizer.js';
 import { IRustFastBracketTokenizerHost, tryBuildRustFastBracketTokens } from './rustFastBracketTokenizer.js';
 import { ownRustBracketNumericState, RustBracketNumericStateKind } from './rustBracketNodeMetadata.js';
+import { ownRustBracketArray } from './rustBracketNumberArray.js';
 
 export interface Tokenizer {
 	readonly offset: Length;
@@ -365,7 +366,7 @@ export class FastTokenizer implements Tokenizer {
 		const regExpStr = brackets.getRegExpStr();
 		const regexp = regExpStr ? new RegExp(regExpStr + '|\n', 'gi') : null;
 
-		const tokens: Token[] = [];
+		const tokens: Token[] = ownRustBracketArray([]);
 		const native = tryBuildRustFastBracketTokens(() => FastTokenizer.createRustHost(text, brackets, regexp, tokens));
 		if (native !== undefined) {
 			this.length = native.length;

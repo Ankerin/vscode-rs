@@ -4,16 +4,12 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { IDisposable, toDisposable } from '../../../../../base/common/lifecycle.js';
-import { bracketNumberDescriptor, mergeBracketNumberDescriptor } from './bracketNumericProperties.js';
+import { IBracketNativeProperties, bracketNumberDescriptor, createBracketPropertyAccess, mergeBracketNumberDescriptor } from './bracketNumericProperties.js';
 
-/** Numeric payloads retain holes and attributes while the host enforces array-length invariants. */
-interface IRustBracketNumberArray {
+/** Primitive/reference slots retain holes and attributes while the host enforces array length. */
+interface IRustBracketNumberArray extends IBracketNativeProperties {
 	prepare(index: number): boolean;
 	has(index: number): boolean;
-	get(index: number): number;
-	attributes(index: number): number;
-	define(index: number, value: number, writable: boolean, enumerable: boolean): void;
-	remove(index: number): void;
 	truncate(length: number): void;
 	indices(): Uint32Array;
 	free(): void;
@@ -30,7 +26,7 @@ let registeredModule: IRustBracketNumberArrayModule | undefined;
 
 /** Installs ownership for fresh internal arrays; retained stacks keep their initialized module. */
 export function registerRustBracketNumberArray(module: IRustBracketNumberArrayModule): IDisposable {
-	if (typeof module.bracket_number_array_abi_version !== 'function' || module.bracket_number_array_abi_version() !== 1 || typeof module.bracket_number_array_live_count !== 'function' || typeof module.WasmBracketNumberArray !== 'function') {
+	if (typeof module.bracket_number_array_abi_version !== 'function' || module.bracket_number_array_abi_version() !== 2 || typeof module.bracket_number_array_live_count !== 'function' || typeof module.WasmBracketNumberArray !== 'function') {
 		throw new Error('The Rust bracket number array bindings do not match the owning stack contract');
 	}
 	if (registeredModule) { throw new Error('A Rust bracket number array module is already registered'); }
@@ -46,35 +42,44 @@ function arrayIndex(key: string | symbol): number | undefined {
 }
 
 /** Transfers a fresh reader stack before its first alias escapes; its facade remains a real array. */
-export function ownRustBracketNumberArray<T>(array: T[]): T[] {
+export function ownRustBracketArray<T>(array: T[]): T[] {
 	if (!registeredModule) { return array; }
 	let record: IRustBracketNumberArray | undefined = new registeredModule.WasmBracketNumberArray();
-	if (typeof record.prepare !== 'function' || typeof record.has !== 'function' || typeof record.get !== 'function' || typeof record.attributes !== 'function' || typeof record.define !== 'function' || typeof record.remove !== 'function' || typeof record.truncate !== 'function' || typeof record.indices !== 'function' || typeof record.free !== 'function') {
+	if (typeof record.prepare !== 'function' || typeof record.has !== 'function' || typeof record.get !== 'function' || typeof record.attributes !== 'function' || typeof record.define !== 'function' || typeof record.reference !== 'function' || typeof record.define_reference !== 'function' || typeof record.remove !== 'function' || typeof record.truncate !== 'function' || typeof record.indices !== 'function' || typeof record.free !== 'function') {
 		record.free?.();
 		throw new Error('The Rust bracket number array record does not match the owning stack contract');
 	}
+	const properties = createBracketPropertyAccess(record);
 	const descriptorOf = (key: string | symbol): PropertyDescriptor | undefined => {
 		const index = arrayIndex(key);
-		return record && index !== undefined && record.has(index) ? bracketNumberDescriptor(record, index) : Reflect.getOwnPropertyDescriptor(array, key);
+		return record && index !== undefined && record.has(index) ? bracketNumberDescriptor(properties, index) : Reflect.getOwnPropertyDescriptor(array, key);
 	};
+	const entries: { key: string; index: number; descriptor: PropertyDescriptor }[] = [];
+	let deleted = 0;
 	try {
-		const entries: { key: string; index: number; descriptor: PropertyDescriptor }[] = [];
 		for (const key of Reflect.ownKeys(array)) {
 			const index = arrayIndex(key);
 			const descriptor = Reflect.getOwnPropertyDescriptor(array, key)!;
-			if (typeof key === 'string' && index !== undefined && descriptor.configurable && typeof descriptor.value === 'number' && record.prepare(index)) {
+			if (typeof key === 'string' && index !== undefined && descriptor.configurable && Object.hasOwn(descriptor, 'value') && record.prepare(index)) {
 				entries.push({ key, index, descriptor });
 			}
 		}
 		for (const { index, descriptor } of entries) {
-			record.define(index, descriptor.value, !!descriptor.writable, !!descriptor.enumerable);
+			properties.define(index, descriptor);
 		}
-		for (const { key } of entries) { Reflect.deleteProperty(array, key); }
-	} catch (error) { record.free(); throw error; }
+		for (const { key } of entries) {
+			if (!Reflect.deleteProperty(array, key)) { throw new Error('Cannot transfer the Rust bracket array property'); }
+			deleted++;
+		}
+	} catch (error) {
+		for (const { key, descriptor } of entries.slice(0, deleted)) { Reflect.defineProperty(array, key, descriptor); }
+		record.free();
+		throw error;
+	}
 	return new Proxy(array, {
 		get: (target, key, receiver) => {
 			const index = arrayIndex(key);
-			return record && index !== undefined && record.has(index) ? record.get(index) : Reflect.get(target, key, receiver);
+			return record && index !== undefined && record.has(index) ? properties.get(index) : Reflect.get(target, key, receiver);
 		},
 		has: (target, key) => {
 			const index = arrayIndex(key);
@@ -85,6 +90,7 @@ export function ownRustBracketNumberArray<T>(array: T[]): T[] {
 			if (key === 'length') {
 				const result = Reflect.defineProperty(target, key, descriptor);
 				record?.truncate(target.length);
+				properties.truncateReferences(target.length);
 				return result;
 			}
 			const index = arrayIndex(key);
@@ -93,17 +99,17 @@ export function ownRustBracketNumberArray<T>(array: T[]): T[] {
 			if (!current && !Reflect.isExtensible(target)) { return false; }
 			const next = mergeBracketNumberDescriptor(key, current, descriptor);
 			if (!next) { return false; }
-			if (next.configurable && typeof next.value === 'number') {
+			if (next.configurable && Object.hasOwn(next, 'value')) {
 				if (index >= target.length && !Reflect.getOwnPropertyDescriptor(target, 'length')!.writable) { return false; }
 				if (record.prepare(index)) {
 					if (index >= target.length && !Reflect.defineProperty(target, 'length', { value: index + 1 })) { return false; }
-					record.define(index, next.value, !!next.writable, !!next.enumerable);
+					properties.define(index, next);
 					Reflect.deleteProperty(target, key);
 					return true;
 				}
 			}
 			if (!Reflect.defineProperty(target, key, next)) { return false; }
-			record.remove(index);
+			properties.remove(index);
 			return true;
 		},
 		set: (target, key, value, receiver) => {
@@ -115,7 +121,7 @@ export function ownRustBracketNumberArray<T>(array: T[]): T[] {
 		},
 		deleteProperty: (target, key) => {
 			const index = arrayIndex(key);
-			if (record && index !== undefined && record.has(index)) { record.remove(index); return true; }
+			if (record && index !== undefined && record.has(index)) { properties.remove(index); return true; }
 			return Reflect.deleteProperty(target, key);
 		},
 		ownKeys: target => {
@@ -126,11 +132,14 @@ export function ownRustBracketNumberArray<T>(array: T[]): T[] {
 		},
 		preventExtensions: target => {
 			if (record) {
-				for (const index of record.indices()) { Reflect.defineProperty(target, String(index), bracketNumberDescriptor(record, index)); }
+				for (const index of record.indices()) { Reflect.defineProperty(target, String(index), bracketNumberDescriptor(properties, index)); }
 				record.free();
 				record = undefined;
+				properties.clearReferences();
 			}
 			return Reflect.preventExtensions(target);
 		}
 	});
 }
+
+export { ownRustBracketArray as ownRustBracketNumberArray };

@@ -20,7 +20,7 @@ pub struct WasmBracketNodeMetadata {
 }
 
 #[derive(Clone)]
-enum ScalarValue {
+pub(crate) enum ScalarValue {
 	Number(f64),
 	Boolean(bool),
 	Primitive(JsValue),
@@ -28,7 +28,7 @@ enum ScalarValue {
 }
 
 impl ScalarValue {
-	fn from_js(value: JsValue) -> Result<Self, JsValue> {
+	pub(crate) fn from_js(value: JsValue) -> Result<Self, JsValue> {
 		if let Some(number) = value.as_f64() {
 			return Ok(Self::Number(number));
 		}
@@ -43,7 +43,7 @@ impl ScalarValue {
 		))
 	}
 
-	fn into_js(self) -> JsValue {
+	pub(crate) fn into_js(self) -> JsValue {
 		match self {
 			Self::Number(value) => JsValue::from_f64(value),
 			Self::Boolean(value) => JsValue::from_bool(value),

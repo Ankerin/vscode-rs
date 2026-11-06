@@ -3,19 +3,24 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-//! Numeric reader stacks own their payloads without retaining host arrays or facade references.
+//! Bracket arrays own generic property payloads without retaining host arrays or facade references.
 
-use crate::BracketNodeNumber;
+use crate::BracketNodeProperty;
 
 const MAX_FIELDS: usize = 262_144;
 
-/// Sparse configurable numeric array entries preserve holes and data-property attributes.
-#[derive(Default)]
-pub struct BracketNumberArray {
-	fields: Vec<Option<BracketNodeNumber>>,
+/// Sparse configurable array entries preserve holes and data-property attributes.
+pub struct BracketNumberArray<V = f64> {
+	fields: Vec<Option<BracketNodeProperty<V>>>,
 }
 
-impl BracketNumberArray {
+impl<V> Default for BracketNumberArray<V> {
+	fn default() -> Self {
+		Self { fields: Vec::new() }
+	}
+}
+
+impl<V: Clone> BracketNumberArray<V> {
 	/// Reserves a supported slot before a host array-length change can commit.
 	pub fn prepare(&mut self, index: usize) -> Result<bool, &'static str> {
 		if index >= MAX_FIELDS {
@@ -25,18 +30,18 @@ impl BracketNumberArray {
 			self.fields
 				.try_reserve(index + 1 - self.fields.len())
 				.map_err(|_| "Unable to allocate Rust bracket number array")?;
-			self.fields.resize(index + 1, None);
+			self.fields.resize_with(index + 1, || None);
 		}
 		Ok(true)
 	}
 
-	/// Reads only an existing numeric entry; holes remain distinguishable from zero.
-	pub fn get(&self, index: usize) -> Option<BracketNodeNumber> {
-		self.fields.get(index).copied().flatten()
+	/// Reads only an existing entry; holes remain distinguishable from every stored payload.
+	pub fn get(&self, index: usize) -> Option<BracketNodeProperty<V>> {
+		self.fields.get(index).cloned().flatten()
 	}
 
 	/// Commits an already prepared slot without an allocation or a host callback.
-	pub fn define(&mut self, index: usize, field: BracketNodeNumber) -> bool {
+	pub fn define(&mut self, index: usize, field: BracketNodeProperty<V>) -> bool {
 		let Some(slot) = self.fields.get_mut(index) else {
 			return false;
 		};
@@ -44,7 +49,7 @@ impl BracketNumberArray {
 		true
 	}
 
-	/// Deletes a configurable numeric entry without shrinking the host array length.
+	/// Deletes a configurable entry without shrinking the host array length.
 	pub fn remove(&mut self, index: usize) {
 		if let Some(slot) = self.fields.get_mut(index) {
 			*slot = None;
@@ -69,6 +74,48 @@ impl BracketNumberArray {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::BracketNodeNumber;
+
+	#[test]
+	fn owned_payload_replacement_and_truncation_keep_prior_copies_and_release_holes() {
+		let mut array = BracketNumberArray::<String>::default();
+		array.prepare(2).unwrap();
+		array.define(
+			2,
+			BracketNodeProperty {
+				value: "original".to_owned(),
+				writable: true,
+				enumerable: true,
+			},
+		);
+		let original = array.get(2).unwrap().value;
+		array.define(
+			2,
+			BracketNodeProperty {
+				value: "replacement".to_owned(),
+				writable: false,
+				enumerable: true,
+			},
+		);
+		let replacement = array.get(2).unwrap();
+		array.truncate(2);
+		assert_eq!(
+			(
+				original,
+				replacement.value,
+				replacement.writable,
+				array.indices(),
+				array.get(2).is_none()
+			),
+			(
+				"original".to_owned(),
+				"replacement".to_owned(),
+				false,
+				vec![],
+				true
+			)
+		);
+	}
 
 	#[test]
 	fn sparse_stacks_keep_holes_number_bits_attributes_and_bounded_preflight() {

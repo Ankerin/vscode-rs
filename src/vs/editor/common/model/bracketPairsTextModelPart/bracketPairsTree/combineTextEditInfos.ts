@@ -7,6 +7,7 @@ import { ArrayQueue } from '../../../../../base/common/arrays.js';
 import { TextEditInfo } from './beforeEditPositionMapper.js';
 import { Length, lengthAdd, lengthDiffNonNegative, lengthEquals, lengthIsZero, lengthToObj, lengthZero, sumLengths } from './length.js';
 import { tryCombineRustBracketMappings } from './rustBracketEdits.js';
+import { ownRustBracketArray } from './rustBracketNumberArray.js';
 
 export function combineTextEditInfos(textEditInfoFirst: TextEditInfo[], textEditInfoSecond: TextEditInfo[]): TextEditInfo[] {
 	if (textEditInfoFirst.length === 0) {
@@ -26,7 +27,7 @@ export function combineTextEditInfos(textEditInfoFirst: TextEditInfo[], textEdit
 	const split = Object.getOwnPropertyDescriptor(LengthMapping.prototype, 'splitAt');
 	const native = split?.value === standardSplit?.value && split?.get === standardSplit?.get ? tryCombineRustBracketMappings(firstMappings, s1ToS2Map, mapping => standardMappings.has(mapping as LengthMapping) && Object.getPrototypeOf(mapping) === LengthMapping.prototype) : undefined;
 	if (native !== undefined) {
-		const result: TextEditInfo[] = [];
+		const result: TextEditInfo[] = ownRustBracketArray([]);
 		for (let index = 0; index < native.length; index += 4) {
 			const startOffset = native[index] as unknown as Length;
 			const endOffset = native[index + 1] as unknown as Length;
@@ -63,7 +64,7 @@ export function combineTextEditInfos(textEditInfoFirst: TextEditInfo[], textEdit
 		return result;
 	}
 
-	const result: TextEditInfo[] = [];
+	const result: TextEditInfo[] = ownRustBracketArray([]);
 
 	function pushEdit(startOffset: Length, endOffset: Length, newLength: Length): void {
 		if (result.length > 0 && lengthEquals(result[result.length - 1].endOffset, startOffset)) {
