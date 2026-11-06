@@ -42,6 +42,7 @@ mod text_buffer;
 mod text_change;
 mod text_chunk;
 mod text_search;
+mod text_search_collection;
 mod text_search_navigation;
 mod text_search_offsets;
 mod token_array;
@@ -135,6 +136,9 @@ pub use text_chunk::{TextChunk, TextChunkIter};
 pub use text_search::{
 	LineMatchHost, TextSearchHost, WordBoundaryHost, collect_line_matches, is_valid_word_match,
 	next_text_search_match, reset_text_search,
+};
+pub use text_search_collection::{
+	SearchCollectionHost, collect_search_line_ranges, collect_search_multiline_range,
 };
 pub use text_search_navigation::{
 	SearchNavigationHost, first_search_match_in_line, last_search_match_in_line,

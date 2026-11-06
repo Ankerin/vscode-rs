@@ -10,7 +10,7 @@ import { Position } from '../core/position.js';
 import { Range } from '../core/range.js';
 import { EndOfLinePreference, FindMatch, SearchData } from '../model.js';
 import { TextModel } from './textModel.js';
-import { IRustTextSearchHost, IRustSearchNavigationHost, RustSearchNavigationOperation, createRustSearchOffsets, tryRunRustTextSearch, tryRustWordBoundary, tryRustLineMatches, tryRustLineFeedScan, tryRustLineFeedCount, tryRustMultilineMatchRange, tryRustSearchNavigation } from './rustTextSearch.js';
+import { IRustTextSearchHost, IRustSearchNavigationHost, IRustSearchCollectionHost, RustSearchNavigationOperation, RustSearchCollectionOperation, createRustSearchOffsets, tryRunRustTextSearch, tryRustWordBoundary, tryRustLineMatches, tryRustLineFeedScan, tryRustLineFeedCount, tryRustMultilineMatchRange, tryRustSearchNavigation, tryRustSearchCollection } from './rustTextSearch.js';
 
 const LIMIT_FIND_COUNT = 999;
 
@@ -197,7 +197,7 @@ export class TextModelSearch {
 	 * Multiline search always executes on the lines concatenated with \n.
 	 * We must therefore compensate for the count of \n in case the model is CRLF
 	 */
-	private static _getMultilineMatchRange(model: TextModel, deltaOffset: number, text: string, lfCounter: LineFeedCounter | null, matchIndex: number, match0: string): Range {
+	private static _getMultilineMatchRange(model: TextModel, deltaOffset: number, text: string, lfCounter: Pick<LineFeedCounter, 'findLineFeedCountBeforeOffset'> | null, matchIndex: number, match0: string): Range {
 		const native = tryRustMultilineMatchRange(deltaOffset, matchIndex, () => ({
 			add: (first, second) => first + second,
 			subtract: (first, second) => first - second,
@@ -232,6 +232,8 @@ export class TextModelSearch {
 	}
 
 	private static _doFindMatchesMultiline(model: TextModel, searchRange: Range, searcher: Searcher, captureMatches: boolean, limitResultCount: number): FindMatch[] {
+		const native = tryRustSearchCollection(RustSearchCollectionOperation.MultilineRange, limitResultCount, () => TextModelSearch.createRustCollectionHost(this, model, searchRange, null, searcher, captureMatches, limitResultCount));
+		if (native !== undefined) { return native; }
 		const deltaOffset = model.getOffsetAt(searchRange.getStartPosition());
 		// We always execute multiline search over the lines joined with \n
 		// This makes it that \n will match the EOL for both CRLF and LF models
@@ -255,6 +257,8 @@ export class TextModelSearch {
 	}
 
 	private static _doFindMatchesLineByLine(model: TextModel, searchRange: Range, searchData: SearchData, captureMatches: boolean, limitResultCount: number): FindMatch[] {
+		const native = tryRustSearchCollection(RustSearchCollectionOperation.LineRanges, limitResultCount, () => TextModelSearch.createRustCollectionHost(this, model, searchRange, searchData, null, captureMatches, limitResultCount));
+		if (native !== undefined) { return native; }
 		const result: FindMatch[] = [];
 		let resultLen = 0;
 
@@ -486,6 +490,44 @@ export class TextModelSearch {
 			bestResult = createFindMatch(new Range(lineNumber, m.index + 1, lineNumber, m.index + 1 + m[0].length), m, captureMatches);
 		}
 		return bestResult;
+	}
+
+	/** Scoped capabilities keep line slicing, virtual collectors, and multiline preparation ordered. */
+	private static createRustCollectionHost(owner: typeof TextModelSearch, model: TextModel, range: Range, data: SearchData | null, searcher: Searcher | null, captures: boolean, limit: number): IRustSearchCollectionHost {
+		return {
+			add: (first, second) => first + second,
+			increment: value => { value++; return value; },
+			equal: (first, second) => first === second,
+			below: (first, second) => first < second,
+			atLeast: (first, second) => first >= second,
+			createResult: () => [],
+			startLine: () => range.startLineNumber,
+			endLine: () => range.endLineNumber,
+			singleLine: (result, count) => {
+				const text = model.getLineContent(range.startLineNumber).substring(range.startColumn - 1, range.endColumn - 1);
+				return owner._findMatchesInLine(data!, text, range.startLineNumber, range.startColumn - 1, count, result, captures, limit);
+			},
+			firstLine: (result, count) => {
+				const text = model.getLineContent(range.startLineNumber).substring(range.startColumn - 1);
+				return owner._findMatchesInLine(data!, text, range.startLineNumber, range.startColumn - 1, count, result, captures, limit);
+			},
+			middleLine: (line, result, count) => owner._findMatchesInLine(data!, model.getLineContent(line), line, 0, count, result, captures, limit),
+			lastLine: (result, count) => {
+				const text = model.getLineContent(range.endLineNumber).substring(0, range.endColumn - 1);
+				return owner._findMatchesInLine(data!, text, range.endLineNumber, 0, count, result, captures, limit);
+			},
+			prepareMultiline: () => {
+				const deltaOffset = model.getOffsetAt(range.getStartPosition());
+				const text = model.getValueInRange(range, EndOfLinePreference.LF);
+				const counter = model.getEOL() === '\r\n' ? new LineFeedCounter(text) : null;
+				return { deltaOffset, text, counter };
+			},
+			resetMultiline: () => searcher!.reset(0),
+			nextMultiline: context => searcher!.next(context.text),
+			writeMultiline: (context, result, index, matched) => {
+				result[index] = createFindMatch(owner._getMultilineMatchRange(model, context.deltaOffset, context.text, context.counter, matched.index, matched[0]), matched, captures);
+			}
+		};
 	}
 
 	/** Lazy capabilities preserve model fields, virtual method lookup, and searcher receivers. */

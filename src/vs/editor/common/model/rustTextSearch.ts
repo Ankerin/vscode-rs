@@ -125,6 +125,35 @@ export interface IRustSearchNavigationHost {
 }
 
 /** Generated text-search control participates in the core's atomic registration lifetime. */
+export const enum RustSearchCollectionOperation { LineRanges = 0, MultilineRange = 1 }
+
+interface IRustMultilineSearchContext {
+	deltaOffset: number;
+	text: string;
+	counter: { findLineFeedCountBeforeOffset(offset: number): number } | null;
+}
+
+/** Live range collectors retain slicing, virtual methods, scoped context, and result aliases. */
+export interface IRustSearchCollectionHost {
+	add(first: number, second: number): number;
+	increment(value: number): number;
+	equal(first: number, second: number): boolean;
+	below(first: number, second: number): boolean;
+	atLeast(first: number, second: number): boolean;
+	createResult(): FindMatch[];
+	startLine(): number;
+	endLine(): number;
+	singleLine(result: FindMatch[], count: number): number;
+	firstLine(result: FindMatch[], count: number): number;
+	middleLine(line: number, result: FindMatch[], count: number): number;
+	lastLine(result: FindMatch[], count: number): number;
+	prepareMultiline(): IRustMultilineSearchContext;
+	resetMultiline(): void;
+	nextMultiline(context: IRustMultilineSearchContext): RegExpExecArray | null;
+	writeMultiline(context: IRustMultilineSearchContext, result: FindMatch[], index: number, matched: RegExpExecArray): void;
+}
+
+/** Generated text-search control participates in the core's atomic registration lifetime. */
 export interface IRustTextSearchModule {
 	text_search_abi_version(): number;
 	run_text_search(host: IRustTextSearchHost, reset: boolean): IRustTextSearchResult;
@@ -134,13 +163,14 @@ export interface IRustTextSearchModule {
 	count_text_search_line_feeds(host: IRustLineFeedQueryHost, target: number): number;
 	text_search_multiline_range(host: IRustMultilineMatchHost, delta: number, index: number): Range;
 	run_text_search_navigation(host: IRustSearchNavigationHost, operation: RustSearchNavigationOperation): FindMatch | null;
+	collect_text_search_range(host: IRustSearchCollectionHost, operation: RustSearchCollectionOperation, limit: number): FindMatch[];
 }
 
 let registeredModule: IRustTextSearchModule | undefined;
 
 /** Installs text-search control without changing existing Searcher classes or regex objects. */
 export function registerRustTextSearch(module: IRustTextSearchModule): IDisposable {
-	if (typeof module.text_search_abi_version !== 'function' || module.text_search_abi_version() !== 5 || typeof module.run_text_search !== 'function' || typeof module.is_valid_text_search_match !== 'function' || typeof module.collect_text_search_matches !== 'function' || typeof module.scan_text_search_line_feeds !== 'function' || typeof module.count_text_search_line_feeds !== 'function' || typeof module.text_search_multiline_range !== 'function' || typeof module.run_text_search_navigation !== 'function') { throw new Error('The Rust text search bindings do not match the searcher control contract'); }
+	if (typeof module.text_search_abi_version !== 'function' || module.text_search_abi_version() !== 6 || typeof module.run_text_search !== 'function' || typeof module.is_valid_text_search_match !== 'function' || typeof module.collect_text_search_matches !== 'function' || typeof module.scan_text_search_line_feeds !== 'function' || typeof module.count_text_search_line_feeds !== 'function' || typeof module.text_search_multiline_range !== 'function' || typeof module.run_text_search_navigation !== 'function' || typeof module.collect_text_search_range !== 'function') { throw new Error('The Rust text search bindings do not match the searcher control contract'); }
 	if (registeredModule) { throw new Error('A Rust text search module is already registered'); }
 	registeredModule = module;
 	return toDisposable(() => { if (registeredModule === module) { registeredModule = undefined; } });
@@ -192,4 +222,9 @@ export function tryRustMultilineMatchRange(delta: number, index: number, createH
 export function tryRustSearchNavigation(operation: RustSearchNavigationOperation, createHost: () => IRustSearchNavigationHost): { match: FindMatch | null } | undefined {
 	if (!registeredModule) { return undefined; }
 	return { match: registeredModule.run_text_search_navigation(createHost(), operation) };
+}
+
+/** Collects a model range without replacing the original result array or overridable methods. */
+export function tryRustSearchCollection(operation: RustSearchCollectionOperation, limit: number, createHost: () => IRustSearchCollectionHost): FindMatch[] | undefined {
+	return registeredModule?.collect_text_search_range(createHost(), operation, limit);
 }

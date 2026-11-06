@@ -619,3 +619,104 @@ test('Rust navigation preserves provider failure identity and rejects stale navi
 	}
 	assert.throws(() => registerRustTextBuffer({ ...rust, text_search_abi_version: () => 4 }), /searcher control contract/);
 });
+
+test('Rust range collection preserves restricted lines, multiline CRLF ranges, captures, and unusual limits', () => {
+	const calls = [0, 0];
+	const module: IRustTextSearchModule = { ...rust, collect_text_search_range: (host, operation, limit) => { calls[operation]++; return rust.collect_text_search_range(host, operation, limit); } };
+	for (const eol of ['\n', '\r\n']) {
+		for (const captures of [true, false]) {
+			for (const pattern of ['x', '\\n', '(?:x|\\n)+', '(?:)']) {
+				for (const limit of [-1, 0, 1, 2, 10, Number.NaN, '2', null, 1n]) {
+					const run = () => {
+						const model = createTextModel(['x x', 'x xx', 'x x'].join(eol));
+						try {
+							const params = new SearchParams(pattern, true, true, null);
+							return [new Range(1, 2, 1, 4), new Range(1, 2, 3, 2), new Range(2, 1, 3, 4)].map(range => TextModelSearch.findMatches(model, params, range, captures, limit as number));
+						} finally { model.dispose(); }
+					};
+					assert.deepStrictEqual(withRust(run, module), run());
+				}
+			}
+		}
+	}
+	assert.ok(calls.every(count => count > 100), 'Both model-range collectors execute Rust');
+});
+
+test('Rust line range collection retains virtual collector lookup, range getters, and original result aliases', () => {
+	const collection = TextModelSearch as unknown as { _doFindMatchesLineByLine(model: TextModel, range: Range, data: SearchData, captures: boolean, limit: number): FindMatch[] };
+	for (const single of [true, false]) {
+		for (const limit of [0, 1, 2, 10]) {
+			const run = () => {
+				const observations: string[] = [];
+				const target = createTextModel('ax\nbx\ncx');
+				const model = new Proxy(target, { get: (target, key, receiver) => { observations.push(`model:${String(key)}`); return Reflect.get(target, key, receiver); } });
+				const range = new Proxy(new Range(1, 2, single ? 1 : 3, 3), { get: (target, key, receiver) => { observations.push(`range:${String(key)}`); return Reflect.get(target, key, receiver); } });
+				let alias: FindMatch[] | undefined;
+				const collector = (_data: SearchData, text: string, line: number, delta: number, count: number, result: FindMatch[], captures: boolean, limit: number) => {
+					observations.push(`collect:${text}:${line}:${delta}:${count}:${captures}:${limit}`);
+					alias ??= result;
+					assert.strictEqual(result, alias);
+					result.push(new FindMatch(new Range(line, 1, line, 2), null));
+					return count + 1;
+				};
+				const owner = new Proxy(TextModelSearch, { get: (target, key, receiver) => { observations.push(`owner:${String(key)}`); return key === '_findMatchesInLine' ? collector : Reflect.get(target, key, receiver); } });
+				try {
+					const result = Reflect.apply(collection._doFindMatchesLineByLine, owner, [model, range, new SearchData(/x/g, null, null), true, limit]);
+					return { result, identity: result === alias, observations };
+				} finally { target.dispose(); }
+			};
+			assert.deepStrictEqual(withRust(run), run());
+		}
+	}
+});
+
+test('Rust range collection retains partial result arrays and original provider/factory failure ordering', () => {
+	const collection = TextModelSearch as unknown as { _doFindMatchesLineByLine(model: TextModel, range: Range, data: SearchData, captures: boolean, limit: number): FindMatch[] };
+	const failure = new Error('Original range collector failure');
+	for (const mode of ['getter', 'collector', 'frozen']) {
+		const run = () => {
+			const observations: string[] = [];
+			const model = createTextModel('x\nx\nx');
+			const original = model.getLineContent;
+			model.getLineContent = line => { observations.push(`line:${line}`); return Reflect.apply(original, model, [line]); };
+			let alias: FindMatch[] | undefined;
+			let lookups = 0;
+			let calls = 0;
+			const collector = (_data: SearchData, _text: string, line: number, _delta: number, count: number, result: FindMatch[]) => {
+				observations.push(`collect:${line}`);
+				alias ??= result;
+				if (++calls === 2 && mode === 'collector') { throw failure; }
+				result.push(new FindMatch(new Range(line, 1, line, 2), null));
+				if (mode === 'frozen') { Object.freeze(result); }
+				return count + 1;
+			};
+			const owner = new Proxy(TextModelSearch, {
+				get: (target, key, receiver) => {
+					if (key === '_findMatchesInLine') { observations.push('collector:get'); if (++lookups === 2 && mode === 'getter') { throw failure; } return collector; }
+					return Reflect.get(target, key, receiver);
+				}
+			});
+			try {
+				assert.throws(() => Reflect.apply(collection._doFindMatchesLineByLine, owner, [model, model.getFullModelRange(), new SearchData(/x/g, null, null), false, 10]), error => mode === 'frozen' ? error instanceof TypeError : error === failure);
+				return { alias, observations };
+			} finally { model.dispose(); }
+		};
+		assert.deepStrictEqual(withRust(run), run());
+	}
+});
+
+test('Rust multiline range collection preserves post-write limit coercion and scoped match observations', () => {
+	const failure = new Error('Original multiline collection limit failure');
+	const run = () => {
+		const observations: string[] = [];
+		const target = createTextModel('x\r\nx\r\nx');
+		const model = new Proxy(target, { get: (target, key, receiver) => { observations.push(`model:${String(key)}`); return Reflect.get(target, key, receiver); } });
+		const dynamicLimit = { [Symbol.toPrimitive]: (hint: string) => { observations.push(`limit:${hint}`); throw failure; } };
+		const owner = new Proxy(TextModelSearch, { get: (target, key, receiver) => { observations.push(`owner:${String(key)}`); return Reflect.get(target, key, receiver); } });
+		try {
+			assert.throws(() => Reflect.apply(TextModelSearch.findMatches, owner, [model, new SearchParams('\\n', true, true, null), model.getFullModelRange(), true, dynamicLimit]), error => error === failure);
+			return observations;
+		} finally { target.dispose(); }
+	};
+	assert.deepStrictEqual(withRust(run), run());
+});
