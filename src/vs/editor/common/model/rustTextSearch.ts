@@ -5,6 +5,9 @@
 
 import { IDisposable, toDisposable } from '../../../base/common/lifecycle.js';
 import { WordCharacterClassifier } from '../core/wordCharacterClassifier.js';
+import { Position } from '../core/position.js';
+import { Range } from '../core/range.js';
+import { ownRustBracketArray } from './bracketPairsTextModelPart/bracketPairsTree/rustBracketNumberArray.js';
 
 /** Live regex/property capabilities retain exact callbacks, results, and partial state writes. */
 export interface IRustTextSearchHost {
@@ -69,18 +72,49 @@ export interface IRustLineMatchHost {
 }
 
 /** Generated text-search control participates in the core's atomic registration lifetime. */
+export interface IRustLineFeedScanHost {
+	textLength(): number;
+	below(index: number, length: number): boolean;
+	charCode(index: number): number;
+	write(index: number, offset: number): void;
+}
+
+/** Live offset arrays preserve property observations and target/element coercions. */
+export interface IRustLineFeedQueryHost {
+	length(): number;
+	subtractOne(value: number): number;
+	offset(index: number): number;
+	atMost(first: number, second: number): boolean;
+	atLeast(first: number, second: number): boolean;
+}
+
+/** Original LF counters and position/range providers remain caught model capabilities. */
+export interface IRustMultilineMatchHost {
+	add(first: number, second: number): number;
+	subtract(first: number, second: number): number;
+	hasCounter(): boolean;
+	countBefore(index: number): number;
+	matchLength(): number;
+	position(offset: number): Position;
+	range(start: Position, end: Position): Range;
+}
+
+/** Generated text-search control participates in the core's atomic registration lifetime. */
 export interface IRustTextSearchModule {
 	text_search_abi_version(): number;
 	run_text_search(host: IRustTextSearchHost, reset: boolean): IRustTextSearchResult;
 	is_valid_text_search_match(host: IRustWordBoundaryHost, textLength: number, start: number, length: number): boolean;
 	collect_text_search_matches(host: IRustLineMatchHost, count: number, delta: number, limit: number): number;
+	scan_text_search_line_feeds(host: IRustLineFeedScanHost): void;
+	count_text_search_line_feeds(host: IRustLineFeedQueryHost, target: number): number;
+	text_search_multiline_range(host: IRustMultilineMatchHost, delta: number, index: number): Range;
 }
 
 let registeredModule: IRustTextSearchModule | undefined;
 
 /** Installs text-search control without changing existing Searcher classes or regex objects. */
 export function registerRustTextSearch(module: IRustTextSearchModule): IDisposable {
-	if (typeof module.text_search_abi_version !== 'function' || module.text_search_abi_version() !== 3 || typeof module.run_text_search !== 'function' || typeof module.is_valid_text_search_match !== 'function' || typeof module.collect_text_search_matches !== 'function') { throw new Error('The Rust text search bindings do not match the searcher control contract'); }
+	if (typeof module.text_search_abi_version !== 'function' || module.text_search_abi_version() !== 4 || typeof module.run_text_search !== 'function' || typeof module.is_valid_text_search_match !== 'function' || typeof module.collect_text_search_matches !== 'function' || typeof module.scan_text_search_line_feeds !== 'function' || typeof module.count_text_search_line_feeds !== 'function' || typeof module.text_search_multiline_range !== 'function') { throw new Error('The Rust text search bindings do not match the searcher control contract'); }
 	if (registeredModule) { throw new Error('A Rust text search module is already registered'); }
 	registeredModule = module;
 	return toDisposable(() => { if (registeredModule === module) { registeredModule = undefined; } });
@@ -103,4 +137,27 @@ export function tryRustWordBoundary(textLength: number, start: number, length: n
 export function tryRustLineMatches(count: number, delta: number, limit: number, createHost: () => IRustLineMatchHost): { count: number } | undefined {
 	if (!registeredModule) { return undefined; }
 	return { count: registeredModule.collect_text_search_matches(createHost(), count, delta, limit) };
+}
+
+/** Reuses the core's generic owning array facade before an LF index escapes its constructor. */
+export function createRustSearchOffsets(): number[] {
+	return ownRustBracketArray<number>([]);
+}
+
+/** Scans cached-length UTF-16 text into the original LF-offset array. */
+export function tryRustLineFeedScan(createHost: () => IRustLineFeedScanHost): boolean {
+	if (!registeredModule) { return false; }
+	registeredModule.scan_text_search_line_feeds(createHost());
+	return true;
+}
+
+/** Counts LFs strictly before the requested offset through live array observations. */
+export function tryRustLineFeedCount(target: number, createHost: () => IRustLineFeedQueryHost): number | undefined {
+	return registeredModule?.count_text_search_line_feeds(createHost(), target);
+}
+
+/** Compensates CRLF offsets and retains the model's original range object and exceptions. */
+export function tryRustMultilineMatchRange(delta: number, index: number, createHost: () => IRustMultilineMatchHost): { range: Range } | undefined {
+	if (!registeredModule) { return undefined; }
+	return { range: registeredModule.text_search_multiline_range(createHost(), delta, index) };
 }

@@ -42,6 +42,7 @@ mod text_buffer;
 mod text_change;
 mod text_chunk;
 mod text_search;
+mod text_search_offsets;
 mod token_array;
 mod tokens;
 mod tree;
@@ -133,6 +134,10 @@ pub use text_chunk::{TextChunk, TextChunkIter};
 pub use text_search::{
 	LineMatchHost, TextSearchHost, WordBoundaryHost, collect_line_matches, is_valid_word_match,
 	next_text_search_match, reset_text_search,
+};
+pub use text_search_offsets::{
+	LineFeedQueryHost, LineFeedScanHost, MultilineMatchHost, multiline_match_range,
+	scan_search_line_feeds, search_line_feeds_before,
 };
 pub use token_array::{create_line_token_array, line_token_array, slice_token_array};
 pub use tokens::{TokensError, merge_semantic_tokens};

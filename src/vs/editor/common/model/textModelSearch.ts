@@ -10,7 +10,7 @@ import { Position } from '../core/position.js';
 import { Range } from '../core/range.js';
 import { EndOfLinePreference, FindMatch, SearchData } from '../model.js';
 import { TextModel } from './textModel.js';
-import { IRustTextSearchHost, tryRunRustTextSearch, tryRustWordBoundary, tryRustLineMatches } from './rustTextSearch.js';
+import { IRustTextSearchHost, createRustSearchOffsets, tryRunRustTextSearch, tryRustWordBoundary, tryRustLineMatches, tryRustLineFeedScan, tryRustLineFeedCount, tryRustMultilineMatchRange } from './rustTextSearch.js';
 
 const LIMIT_FIND_COUNT = 999;
 
@@ -115,7 +115,16 @@ class LineFeedCounter {
 	private readonly _lineFeedsOffsets: number[];
 
 	constructor(text: string) {
-		const lineFeedsOffsets: number[] = [];
+		const lineFeedsOffsets = createRustSearchOffsets();
+		if (tryRustLineFeedScan(() => ({
+			textLength: () => text.length,
+			below: (index, length) => index < length,
+			charCode: index => text.charCodeAt(index),
+			write: (index, offset) => { lineFeedsOffsets[index] = offset; }
+		}))) {
+			this._lineFeedsOffsets = lineFeedsOffsets;
+			return;
+		}
 		let lineFeedsOffsetsLen = 0;
 		for (let i = 0, textLen = text.length; i < textLen; i++) {
 			if (text.charCodeAt(i) === CharCode.LineFeed) {
@@ -126,6 +135,17 @@ class LineFeedCounter {
 	}
 
 	public findLineFeedCountBeforeOffset(offset: number): number {
+		const native = tryRustLineFeedCount(offset, () => {
+			const offsets = this._lineFeedsOffsets;
+			return {
+				length: () => offsets.length,
+				subtractOne: value => value - 1,
+				offset: index => offsets[index],
+				atMost: (first, second) => first <= second,
+				atLeast: (first, second) => first >= second
+			};
+		});
+		if (native !== undefined) { return native; }
 		const lineFeedsOffsets = this._lineFeedsOffsets;
 		let min = 0;
 		let max = lineFeedsOffsets.length - 1;
@@ -178,6 +198,16 @@ export class TextModelSearch {
 	 * We must therefore compensate for the count of \n in case the model is CRLF
 	 */
 	private static _getMultilineMatchRange(model: TextModel, deltaOffset: number, text: string, lfCounter: LineFeedCounter | null, matchIndex: number, match0: string): Range {
+		const native = tryRustMultilineMatchRange(deltaOffset, matchIndex, () => ({
+			add: (first, second) => first + second,
+			subtract: (first, second) => first - second,
+			hasCounter: () => !!lfCounter,
+			countBefore: index => lfCounter!.findLineFeedCountBeforeOffset(index),
+			matchLength: () => match0.length,
+			position: offset => model.getPositionAt(offset),
+			range: (start, end) => new Range(start.lineNumber, start.column, end.lineNumber, end.column)
+		}));
+		if (native !== undefined) { return native.range; }
 		let startOffset: number;
 		let lineFeedCountBeforeMatch = 0;
 		if (lfCounter) {

@@ -9,8 +9,12 @@ import { resolve } from 'node:path';
 import { test } from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { WordCharacterClass, WordCharacterClassifier } from '../../src/vs/editor/common/core/wordCharacterClassifier.js';
-import { Searcher, TextModelSearch, isValidMatch } from '../../src/vs/editor/common/model/textModelSearch.js';
-import { FindMatch, SearchData } from '../../src/vs/editor/common/model.js';
+import { SearchParams, Searcher, TextModelSearch, isValidMatch } from '../../src/vs/editor/common/model/textModelSearch.js';
+import { DefaultEndOfLine, FindMatch, SearchData } from '../../src/vs/editor/common/model.js';
+import { TextModel } from '../../src/vs/editor/common/model/textModel.js';
+import { Position } from '../../src/vs/editor/common/core/position.js';
+import { Range } from '../../src/vs/editor/common/core/range.js';
+import { createTextModel } from '../../src/vs/editor/test/common/testTextModel.js';
 import { IRustTextSearchModule, registerRustTextSearch } from '../../src/vs/editor/common/model/rustTextSearch.js';
 import { IRustTextBufferModule, registerRustTextBuffer } from '../../src/vs/editor/common/model/rustTextBuffer/rustTextBuffer.js';
 import { RustBracketLengthOperation, tryRustBracketLength } from '../../src/vs/editor/common/model/bracketPairsTextModelPart/bracketPairsTree/rustBracketLengths.js';
@@ -33,6 +37,26 @@ function state(searcher: Searcher, regex: RegExp): object {
 const lineSearch = TextModelSearch as unknown as {
 	_findMatchesInLine(searchData: SearchData, text: string, lineNumber: number, delta: number, count: number, result: FindMatch[], captures: boolean, limit: number): number;
 };
+
+interface ILineFeedCounter {
+	_lineFeedsOffsets: number[];
+	findLineFeedCountBeforeOffset(offset: number): number;
+}
+const multilineSearch = TextModelSearch as unknown as {
+	_getMultilineMatchRange(model: TextModel, delta: number, text: string, counter: ILineFeedCounter | null, index: number, match: string): Range;
+};
+
+function captureLineFeedCounter(): ILineFeedCounter {
+	const model = createTextModel('a\r\nb\r\nc', null, { defaultEOL: DefaultEndOfLine.CRLF });
+	let counter: ILineFeedCounter | undefined;
+	const original = multilineSearch._getMultilineMatchRange;
+	multilineSearch._getMultilineMatchRange = (...args) => { counter = args[3] ?? undefined; return original(...args); };
+	try {
+		TextModelSearch.findMatches(model, new SearchParams('\\n', true, true, null), model.getFullModelRange(), false, 1);
+		assert.ok(counter, 'Multiline search creates its real LF counter');
+		return counter;
+	} finally { multilineSearch._getMultilineMatchRange = original; model.dispose(); }
+}
 
 test('Rust Searcher preserves seeded regex captures, Unicode zero-width matches, word filtering, and resets', () => {
 	const patterns = ['(?:)', '^|$', '\\b', '(?=x)', '.', '(?<word>\\w*)', 'x+', '(?:😀|\\uD800)', '[\\r\\n]+', '(?<=x)y'];
@@ -354,6 +378,134 @@ test('Rust line search collection preserves failure identities and partially wri
 				try { lineSearch._findMatchesInLine(new SearchData(regex, null, literal ? 'x' : null), 'x x', 1, 0, 0, result, false, limit); }
 				catch (error) { if (mode === 'frozen') { assert.ok(error instanceof TypeError); caught = 'TypeError'; } else { assert.strictEqual(error, failure); caught = 'original'; } }
 				return { result, calls, lastIndex: regex.lastIndex, caught };
+			};
+			assert.deepStrictEqual(withRust(run), run());
+		}
+	}
+});
+
+test('Rust multiline offsets preserve public LF/CRLF results, surrogate coordinates, and navigation', () => {
+	const calls = { scan: 0, count: 0, range: 0 };
+	const module: IRustTextSearchModule = {
+		...rust,
+		scan_text_search_line_feeds: host => { calls.scan++; return rust.scan_text_search_line_feeds(host); },
+		count_text_search_line_feeds: (host, target) => { calls.count++; return rust.count_text_search_line_feeds(host, target); },
+		text_search_multiline_range: (...args) => { calls.range++; return rust.text_search_multiline_range(...args); }
+	};
+	for (const eol of ['\n', '\r\n']) {
+		for (const lines of [['', '', ''], ['x', 'y', 'x'], ['\uD83D\uDE00', '\uD800x', '\uDC00'], ['axb', 'x', 'z']]) {
+			for (const pattern of ['\\n', '^', 'x\\n', '[\\W]', '(?:x|\\n)+']) {
+				const run = () => {
+					const model = createTextModel(lines.join(eol));
+					try {
+						const params = new SearchParams(pattern, true, true, null);
+						const range = model.getFullModelRange();
+						return {
+							all: TextModelSearch.findMatches(model, params, range, true, 30),
+							next: TextModelSearch.findNextMatch(model, params, new Position(2, 1), true),
+							previous: TextModelSearch.findPreviousMatch(model, params, new Position(2, 1), true)
+						};
+					} finally { model.dispose(); }
+				};
+				assert.deepStrictEqual(withRust(run, module), run());
+			}
+		}
+	}
+	assert.ok(calls.scan > 10 && calls.count > 20 && calls.range > 20, 'Public multiline search executes the native offset boundaries');
+});
+
+test('Rust LF queries retain live arrays, reordered offsets, target coercions, and original failures', () => {
+	for (const offsets of [[], [0], [1, 3, 5], [5, 1, 3], [1, 1, 3]]) {
+		for (const target of [-1, 0, 1, 2, 3, 5, 10, Number.NaN, Number.POSITIVE_INFINITY, '2', 0n, null]) {
+			const run = () => {
+				const counter = captureLineFeedCounter();
+				const observations: string[] = [];
+				counter._lineFeedsOffsets = new Proxy([...offsets], { get: (array, key, receiver) => { observations.push(String(key)); return Reflect.get(array, key, receiver); } });
+				const count = counter.findLineFeedCountBeforeOffset(target as number);
+				return { count, observations };
+			};
+			assert.deepStrictEqual(withRust(run), run());
+		}
+	}
+	const failure = new Error('Original LF offset failure');
+	const run = () => {
+		const counter = captureLineFeedCounter();
+		const observations: string[] = [];
+		const target = { [Symbol.toPrimitive]: (hint: string) => { observations.push(`target:${hint}`); return 3; } };
+		counter._lineFeedsOffsets = new Proxy([1, 3, 5], { get: (array, key, receiver) => { observations.push(String(key)); if (key === '1') { throw failure; } return Reflect.get(array, key, receiver); } });
+		assert.throws(() => counter.findLineFeedCountBeforeOffset(target as unknown as number), error => error === failure);
+		return observations;
+	};
+	assert.deepStrictEqual(withRust(run), run());
+});
+
+test('Rust multiline ranges retain repeated length reads, counter/provider order, and failure identity', () => {
+	const failure = new Error('Original multiline range failure');
+	for (const useCounter of [false, true]) {
+		for (const failingPosition of [0, 1, 2]) {
+			const run = () => {
+				const observations: string[] = [];
+				const model = createTextModel('x\r\ny');
+				try {
+					let positions = 0;
+					model.getPositionAt = offset => {
+						observations.push(`position:${offset}`);
+						if (++positions === failingPosition) { throw failure; }
+						return new Proxy(new Position(2, offset + 1), { get: (target, key, receiver) => { observations.push(`position:${String(key)}`); return Reflect.get(target, key, receiver); } });
+					};
+					const match = { get length() { observations.push('match:length'); return 2; } };
+					const counter = { _lineFeedsOffsets: [], findLineFeedCountBeforeOffset: (index: number) => { observations.push(`counter:${index}`); return index < 3 ? 0 : 1; } };
+					let range: Range | undefined;
+					let caught = false;
+					try { range = multilineSearch._getMultilineMatchRange(model, 4, '', useCounter ? counter : null, 1, match as unknown as string); }
+					catch (error) { assert.strictEqual(error, failure); caught = true; }
+					return { range, observations, caught };
+				} finally { model.dispose(); }
+			};
+			assert.deepStrictEqual(withRust(run), run());
+		}
+	}
+});
+
+test('Rust LF offset arrays use native ownership and materialize original descriptors when frozen', () => {
+	const registration = registerRustTextBuffer(rust);
+	try {
+		const counter = captureLineFeedCounter();
+		const array = counter._lineFeedsOffsets;
+		assert.deepStrictEqual([Array.isArray(array), [...array], Object.keys(array)], [true, [1, 3], ['0', '1']]);
+		array[0] = 0;
+		array.push(5);
+		assert.strictEqual(counter.findLineFeedCountBeforeOffset(4), 2);
+		const active = rust.bracket_number_array_live_count();
+		Object.freeze(array);
+		assert.deepStrictEqual([rust.bracket_number_array_live_count(), Object.getOwnPropertyDescriptor(array, '0'), counter.findLineFeedCountBeforeOffset(5)], [active - 1, { value: 0, writable: false, enumerable: true, configurable: false }, 2]);
+	} finally { registration.dispose(); }
+});
+
+test('Rust LF scans retain borrowed text callbacks, strict character equality, and failure identity', () => {
+	const failure = new Error('Original LF scan failure');
+	for (const lineFeed of [10, '10', 10n, Symbol('line-feed')]) {
+		for (const fail of [false, true]) {
+			const run = () => {
+				const observations: string[] = [];
+				const model = createTextModel('a\r\nb\r\nc');
+				const content = 'a\nb\nc';
+				const text = {
+					get length() { observations.push('text:length'); return content.length; },
+					get charCodeAt() {
+						observations.push('text:method');
+						return (index: number) => { observations.push(`text:unit:${index}`); if (fail && index === 3) { throw failure; } return content[index] === '\n' ? lineFeed : content.charCodeAt(index); };
+					},
+					[Symbol.toPrimitive]: () => { observations.push('text:primitive'); return content; }
+				};
+				model.getValueInRange = () => text as unknown as string;
+				try {
+					let result: FindMatch[] | undefined;
+					let caught = false;
+					try { result = TextModelSearch.findMatches(model, new SearchParams('\\n', true, true, null), model.getFullModelRange(), false, 10); }
+					catch (error) { assert.strictEqual(error, failure); caught = true; }
+					return { result, observations, caught };
+				} finally { model.dispose(); }
 			};
 			assert.deepStrictEqual(withRust(run), run());
 		}
