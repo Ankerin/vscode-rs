@@ -10,6 +10,7 @@ import { Position } from '../core/position.js';
 import { Range } from '../core/range.js';
 import { EndOfLinePreference, FindMatch, SearchData } from '../model.js';
 import { TextModel } from './textModel.js';
+import { IRustTextSearchHost, tryRunRustTextSearch } from './rustTextSearch.js';
 
 const LIMIT_FIND_COUNT = 999;
 
@@ -505,12 +506,15 @@ export class Searcher {
 	}
 
 	public reset(lastIndex: number): void {
+		if (tryRunRustTextSearch(true, () => Searcher.createRustHost(this, '', lastIndex)) !== undefined) { return; }
 		this._searchRegex.lastIndex = lastIndex;
 		this._prevMatchStartIndex = -1;
 		this._prevMatchLength = 0;
 	}
 
 	public next(text: string): RegExpExecArray | null {
+		const native = tryRunRustTextSearch(false, () => Searcher.createRustHost(this, text));
+		if (native !== undefined) { return native.match as RegExpExecArray | null; }
 		const textLength = text.length;
 
 		let m: RegExpExecArray | null;
@@ -551,5 +555,27 @@ export class Searcher {
 		} while (m);
 
 		return null;
+	}
+
+	/** Static capabilities preserve private property receivers and regex method/argument order. */
+	private static createRustHost(searcher: Searcher, text: string, lastIndex: number = 0): IRustTextSearchHost {
+		return {
+			textLength: () => text.length,
+			previousStart: () => searcher._prevMatchStartIndex,
+			previousLength: () => searcher._prevMatchLength,
+			add: (first, second) => first + second,
+			equal: (first, second) => first === second,
+			exec: () => searcher._searchRegex.exec(text),
+			matchStart: match => match.index,
+			matchLength: match => match[0].length,
+			nextCodePoint: textLength => strings.getNextCodePoint(text, textLength, searcher._searchRegex.lastIndex),
+			aboveBmp: value => value > 0xFFFF,
+			advance: count => { searcher._searchRegex.lastIndex += count; },
+			setPreviousStart: value => { searcher._prevMatchStartIndex = value; },
+			setPreviousLength: value => { searcher._prevMatchLength = value; },
+			hasWords: () => !!searcher._wordSeparators,
+			validMatch: (textLength, start, length) => isValidMatch(searcher._wordSeparators!, text, textLength, start, length),
+			resetRegex: () => { searcher._searchRegex.lastIndex = lastIndex; }
+		};
 	}
 }

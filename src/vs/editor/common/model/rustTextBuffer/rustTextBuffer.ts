@@ -39,6 +39,7 @@ import { IRustBracketMutationModule, registerRustBracketMutation } from '../brac
 import { IRustBracketTransformModule, registerRustBracketTransform } from '../bracketPairsTextModelPart/bracketPairsTree/rustBracketTransform.js';
 import { IRustBracketNodeMetadataModule, registerRustBracketNodeMetadata } from '../bracketPairsTextModelPart/bracketPairsTree/rustBracketNodeMetadata.js';
 import { IRustBracketNumberArrayModule, registerRustBracketNumberArray } from '../bracketPairsTextModelPart/bracketPairsTree/rustBracketNumberArray.js';
+import { IRustTextSearchModule, registerRustTextSearch } from '../rustTextSearch.js';
 
 /** The generated binding surface; UTF-16 arrays preserve JavaScript string semantics. */
 export interface IRustTextBuffer {
@@ -76,7 +77,7 @@ interface IRustTextSnapshot {
 	free(): void;
 }
 
-export interface IRustTextBufferModule extends IRustSequenceDiffModule, IRustTextChangeModule, IRustTokensModule, IRustCursorColumnsModule, IRustDecorationsModule, IRustTextShapeModule, IRustBracketEditsModule, IRustBracketLengthsModule, IRustSmallSetModule, IRustBracketTreesModule, IRustBracketNodeReaderModule, IRustBracketPositionMapperModule, IRustBracketParserModule, IRustBracketTokenizerModule, IRustFastBracketTokenizerModule, IRustBracketCollectionModule, IRustBracketPairCollectionModule, IRustBracketSearchModule, IRustBracketLifecycleModule, IRustBracketIndentationModule, IRustBracketAstModule, IRustBracketMutationModule, IRustBracketTransformModule, IRustBracketNodeMetadataModule, IRustBracketNumberArrayModule {
+export interface IRustTextBufferModule extends IRustSequenceDiffModule, IRustTextChangeModule, IRustTokensModule, IRustCursorColumnsModule, IRustDecorationsModule, IRustTextShapeModule, IRustBracketEditsModule, IRustBracketLengthsModule, IRustSmallSetModule, IRustBracketTreesModule, IRustBracketNodeReaderModule, IRustBracketPositionMapperModule, IRustBracketParserModule, IRustBracketTokenizerModule, IRustFastBracketTokenizerModule, IRustBracketCollectionModule, IRustBracketPairCollectionModule, IRustBracketSearchModule, IRustBracketLifecycleModule, IRustBracketIndentationModule, IRustBracketAstModule, IRustBracketMutationModule, IRustBracketTransformModule, IRustBracketNodeMetadataModule, IRustBracketNumberArrayModule, IRustTextSearchModule {
 	text_buffer_abi_version(): number;
 	WasmTextBuffer: {
 		new(units: Uint16Array): IRustTextBuffer;
@@ -401,6 +402,7 @@ export function registerRustTextBuffer(module: IRustTextBufferModule, initializa
 		registration.add(registerRustBracketTransform(module));
 		registration.add(registerRustBracketNodeMetadata(module));
 		registration.add(registerRustBracketNumberArray(module));
+		registration.add(registerRustTextSearch(module));
 	} catch (error) {
 		registration.dispose();
 		throw error;

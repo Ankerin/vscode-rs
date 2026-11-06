@@ -1,0 +1,286 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+//! Stateful text search retains ECMAScript regex behavior, UTF-16 advancement, and word filtering.
+
+/// Caught regex and property capabilities preserve original receivers and partial state changes.
+pub trait TextSearchHost {
+	type Value;
+	type Error;
+
+	fn number(&self, value: f64) -> Self::Value;
+	fn null(&self) -> Self::Value;
+	fn text_length(&self) -> Result<Self::Value, Self::Error>;
+	fn previous_start(&self) -> Result<Self::Value, Self::Error>;
+	fn previous_length(&self) -> Result<Self::Value, Self::Error>;
+	fn add(&self, first: &Self::Value, second: &Self::Value) -> Result<Self::Value, Self::Error>;
+	fn equal(&self, first: &Self::Value, second: &Self::Value) -> Result<bool, Self::Error>;
+	fn exec(&self) -> Result<Self::Value, Self::Error>;
+	fn truthy(&self, value: &Self::Value) -> bool;
+	fn match_start(&self, value: &Self::Value) -> Result<Self::Value, Self::Error>;
+	fn match_length(&self, value: &Self::Value) -> Result<Self::Value, Self::Error>;
+	fn next_code_point(&self, text_length: &Self::Value) -> Result<Self::Value, Self::Error>;
+	fn above_bmp(&self, value: &Self::Value) -> Result<bool, Self::Error>;
+	fn advance(&self, count: u32) -> Result<(), Self::Error>;
+	fn set_previous_start(&self, value: &Self::Value) -> Result<(), Self::Error>;
+	fn set_previous_length(&self, value: &Self::Value) -> Result<(), Self::Error>;
+	fn has_words(&self) -> Result<bool, Self::Error>;
+	fn valid_match(
+		&self,
+		text_length: &Self::Value,
+		start: &Self::Value,
+		length: &Self::Value,
+	) -> Result<bool, Self::Error>;
+	fn reset_regex(&self) -> Result<(), Self::Error>;
+}
+
+/// Resets the regex before committing the previous-match fields in their original order.
+pub fn reset_text_search<H: TextSearchHost>(host: &H) -> Result<(), H::Error> {
+	host.reset_regex()?;
+	host.set_previous_start(&host.number(-1.0))?;
+	host.set_previous_length(&host.number(0.0))
+}
+
+/// Finds the next accepted match and advances repeated empty matches by one UTF-16 code point.
+pub fn next_text_search_match<H: TextSearchHost>(host: &H) -> Result<H::Value, H::Error> {
+	let text_length = host.text_length()?;
+	loop {
+		let previous_start = host.previous_start()?;
+		let previous_length = host.previous_length()?;
+		let end = host.add(&previous_start, &previous_length)?;
+		if host.equal(&end, &text_length)? {
+			return Ok(host.null());
+		}
+		let matched = host.exec()?;
+		if !host.truthy(&matched) {
+			return Ok(host.null());
+		}
+		let start = host.match_start(&matched)?;
+		let length = host.match_length(&matched)?;
+		if host.equal(&start, &host.previous_start()?)?
+			&& host.equal(&length, &host.previous_length()?)?
+		{
+			if host.equal(&length, &host.number(0.0))? {
+				let point = host.next_code_point(&text_length)?;
+				host.advance(if host.above_bmp(&point)? { 2 } else { 1 })?;
+				continue;
+			}
+			return Ok(host.null());
+		}
+		host.set_previous_start(&start)?;
+		host.set_previous_length(&length)?;
+		if !host.has_words()? || host.valid_match(&text_length, &start, &length)? {
+			return Ok(matched);
+		}
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use std::cell::{Cell, RefCell};
+	use std::collections::VecDeque;
+
+	#[derive(Debug, PartialEq)]
+	enum Value {
+		Number(f64),
+		Match(f64, f64),
+		Null,
+	}
+	fn numeric(value: &Value) -> f64 {
+		if let Value::Number(value) = value {
+			*value
+		} else {
+			unreachable!()
+		}
+	}
+	struct Host {
+		matches: RefCell<VecDeque<(f64, f64)>>,
+		previous: Cell<(f64, f64)>,
+		regex_index: Cell<f64>,
+		advances: RefCell<Vec<u32>>,
+		writes: RefCell<Vec<char>>,
+		words: bool,
+		fail_length: bool,
+	}
+	impl TextSearchHost for Host {
+		type Value = Value;
+		type Error = &'static str;
+		fn number(&self, value: f64) -> Value {
+			Value::Number(value)
+		}
+		fn null(&self) -> Value {
+			Value::Null
+		}
+		fn text_length(&self) -> Result<Value, Self::Error> {
+			Ok(Value::Number(5.0))
+		}
+		fn previous_start(&self) -> Result<Value, Self::Error> {
+			Ok(Value::Number(self.previous.get().0))
+		}
+		fn previous_length(&self) -> Result<Value, Self::Error> {
+			Ok(Value::Number(self.previous.get().1))
+		}
+		fn add(&self, first: &Value, second: &Value) -> Result<Value, Self::Error> {
+			Ok(Value::Number(numeric(first) + numeric(second)))
+		}
+		fn equal(&self, first: &Value, second: &Value) -> Result<bool, Self::Error> {
+			Ok(numeric(first) == numeric(second))
+		}
+		fn exec(&self) -> Result<Value, Self::Error> {
+			self.writes.borrow_mut().push('e');
+			Ok(
+				if let Some((start, length)) = self.matches.borrow_mut().pop_front() {
+					self.regex_index.set(start + length);
+					Value::Match(start, length)
+				} else {
+					Value::Null
+				},
+			)
+		}
+		fn truthy(&self, value: &Value) -> bool {
+			!matches!(value, Value::Null)
+		}
+		fn match_start(&self, value: &Value) -> Result<Value, Self::Error> {
+			if let Value::Match(start, _) = value {
+				Ok(Value::Number(*start))
+			} else {
+				unreachable!()
+			}
+		}
+		fn match_length(&self, value: &Value) -> Result<Value, Self::Error> {
+			if let Value::Match(_, length) = value {
+				Ok(Value::Number(*length))
+			} else {
+				unreachable!()
+			}
+		}
+		fn next_code_point(&self, _: &Value) -> Result<Value, Self::Error> {
+			Ok(Value::Number(if self.regex_index.get() == 0.0 {
+				0x1F600 as f64
+			} else {
+				120.0
+			}))
+		}
+		fn above_bmp(&self, value: &Value) -> Result<bool, Self::Error> {
+			Ok(numeric(value) > 65535.0)
+		}
+		fn advance(&self, count: u32) -> Result<(), Self::Error> {
+			self.regex_index
+				.set(self.regex_index.get() + f64::from(count));
+			self.advances.borrow_mut().push(count);
+			Ok(())
+		}
+		fn set_previous_start(&self, value: &Value) -> Result<(), Self::Error> {
+			self.writes.borrow_mut().push('s');
+			self.previous.set((numeric(value), self.previous.get().1));
+			Ok(())
+		}
+		fn set_previous_length(&self, value: &Value) -> Result<(), Self::Error> {
+			self.writes.borrow_mut().push('l');
+			if self.fail_length {
+				return Err("length");
+			}
+			self.previous.set((self.previous.get().0, numeric(value)));
+			Ok(())
+		}
+		fn has_words(&self) -> Result<bool, Self::Error> {
+			Ok(self.words)
+		}
+		fn valid_match(&self, _: &Value, start: &Value, _: &Value) -> Result<bool, Self::Error> {
+			Ok(numeric(start) != 0.0)
+		}
+		fn reset_regex(&self) -> Result<(), Self::Error> {
+			self.writes.borrow_mut().push('r');
+			self.regex_index.set(9.0);
+			Ok(())
+		}
+	}
+	fn host(matches: &[(f64, f64)]) -> Host {
+		Host {
+			matches: RefCell::new(matches.iter().copied().collect()),
+			previous: Cell::new((-1.0, 0.0)),
+			regex_index: Cell::new(0.0),
+			advances: RefCell::new(Vec::new()),
+			writes: RefCell::new(Vec::new()),
+			words: false,
+			fail_length: false,
+		}
+	}
+
+	#[test]
+	fn repeated_empty_matches_advance_by_utf16_code_point_and_nonempty_duplicates_stop() {
+		let host = host(&[(0.0, 0.0), (0.0, 0.0), (2.0, 0.0), (2.0, 0.0), (3.0, 1.0)]);
+		let results: Vec<_> = (0..4)
+			.map(|_| next_text_search_match(&host).unwrap())
+			.collect();
+		assert_eq!(
+			(results, host.advances.into_inner(), host.previous.get()),
+			(
+				vec![
+					Value::Match(0.0, 0.0),
+					Value::Match(2.0, 0.0),
+					Value::Match(3.0, 1.0),
+					Value::Null
+				],
+				vec![2, 1],
+				(3.0, 1.0)
+			)
+		);
+		let duplicate = super::tests::host(&[(0.0, 1.0), (0.0, 1.0)]);
+		assert_eq!(
+			(
+				next_text_search_match(&duplicate),
+				next_text_search_match(&duplicate),
+				duplicate.advances.into_inner()
+			),
+			(Ok(Value::Match(0.0, 1.0)), Ok(Value::Null), vec![])
+		);
+	}
+
+	#[test]
+	fn word_rejection_commits_state_and_reset_failures_preserve_ordered_partial_writes() {
+		let filtered = Host {
+			words: true,
+			..host(&[(0.0, 1.0), (2.0, 1.0)])
+		};
+		let failing = Host {
+			fail_length: true,
+			..host(&[(2.0, 1.0)])
+		};
+		assert_eq!(
+			(
+				next_text_search_match(&filtered),
+				next_text_search_match(&failing),
+				failing.previous.get()
+			),
+			(Ok(Value::Match(2.0, 1.0)), Err("length"), (2.0, 0.0))
+		);
+		assert_eq!(
+			(
+				reset_text_search(&failing),
+				failing.previous.get(),
+				failing.regex_index.get(),
+				failing.writes.into_inner()
+			),
+			(
+				Err("length"),
+				(-1.0, 0.0),
+				9.0,
+				vec!['e', 's', 'l', 'r', 's', 'l']
+			)
+		);
+		let ended = host(&[(5.0, 0.0)]);
+		ended.previous.set((5.0, 0.0));
+		assert_eq!(
+			(
+				next_text_search_match(&ended),
+				ended.matches.borrow().len(),
+				ended.writes.into_inner()
+			),
+			(Ok(Value::Null), 1, vec![])
+		);
+	}
+}
