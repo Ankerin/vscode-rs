@@ -26,6 +26,8 @@ Decorations ABI 1 performs endpoint computation in Rust while original interval 
 
 Cursor-columns ABI 3 scans word-part boundaries through borrowed host units and returns one scalar column. Adjacent pairs and acronym lookahead still require individual host reads, while model callbacks, Position construction, and higher-level word segmentation remain in JavaScript. Shared model storage and complete cursor-operation ownership remain Phase 2 opportunities. No benchmark campaign or performance gain claim accompanies this migration.
 
+Text-shape ABI 1 encodes/transfers complete UTF-16 input for EOL counts and reuses the model scanner, including its text-flag classification. This keeps the exact model contract but adds temporary copying and unnecessary flags for count-only consumers. Indentation normalization uses per-prefix host reads and transfers a newly allocated ASCII prefix plus its suffix coordinate. Shared model text, fused edit/token consumers, a count-only scanner mode, and reduced prefix/result allocation remain Phase 2 opportunities. No performance improvement is claimed for this Phase 1 boundary.
+
 ## Method
 
 Run `pnpm run build-rust-editor` followed by `pnpm run benchmark-rust-editor`. The benchmark alternates the original and Rust implementations in three fresh Node processes per fixture each. Both use the actual existing `PieceTreeTextBuffer` wrapper and its model construction path. Rust uses a release WebAssembly build; the reference uses the current TypeScript sources bundled with the same esbuild recipe. Eight construction/disposal iterations warm the adapter and allocator before timing. The runner verifies matching workload checksums within each fixture. Keep other builds and workload-heavy processes stopped during measurement.

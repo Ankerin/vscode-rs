@@ -21,6 +21,7 @@ mod model_edits;
 mod sequence_diff;
 mod sparse_tokens_store;
 mod text_change;
+mod text_shape;
 mod text_transfer;
 mod token_array;
 mod token_iteration;

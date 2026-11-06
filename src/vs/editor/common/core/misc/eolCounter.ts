@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { CharCode } from '../../../../base/common/charCode.js';
+import { tryCountRustEOL } from '../rustTextShape.js';
 
 export const enum StringEOL {
 	Unknown = 0,
@@ -13,6 +14,8 @@ export const enum StringEOL {
 }
 
 export function countEOL(text: string): [number, number, number, StringEOL] {
+	const native = tryCountRustEOL(text);
+	if (native !== undefined) { return native; }
 	let eolCount = 0;
 	let firstLineLength = 0;
 	let lastLineStart = 0;

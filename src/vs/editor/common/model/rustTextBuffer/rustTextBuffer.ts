@@ -19,6 +19,7 @@ import type { IActiveIndentGuideInfo } from '../../textModelGuides.js';
 import { IRustTokensModule, registerRustTokens } from '../../tokens/rustTokens.js';
 import { IRustCursorColumnsModule, registerRustCursorColumns } from '../../core/rustCursorColumns.js';
 import { IRustDecorationsModule, registerRustDecorations } from '../rustDecorations.js';
+import { IRustTextShapeModule, registerRustTextShape } from '../../core/rustTextShape.js';
 
 /** The generated binding surface; UTF-16 arrays preserve JavaScript string semantics. */
 export interface IRustTextBuffer {
@@ -56,7 +57,7 @@ interface IRustTextSnapshot {
 	free(): void;
 }
 
-export interface IRustTextBufferModule extends IRustSequenceDiffModule, IRustTextChangeModule, IRustTokensModule, IRustCursorColumnsModule, IRustDecorationsModule {
+export interface IRustTextBufferModule extends IRustSequenceDiffModule, IRustTextChangeModule, IRustTokensModule, IRustCursorColumnsModule, IRustDecorationsModule, IRustTextShapeModule {
 	text_buffer_abi_version(): number;
 	WasmTextBuffer: {
 		new(units: Uint16Array): IRustTextBuffer;
@@ -361,6 +362,7 @@ export function registerRustTextBuffer(module: IRustTextBufferModule, initializa
 		registration.add(registerRustTokens(module));
 		registration.add(registerRustCursorColumns(module));
 		registration.add(registerRustDecorations(module));
+		registration.add(registerRustTextShape(module));
 	} catch (error) {
 		registration.dispose();
 		throw error;

@@ -111,6 +111,17 @@ impl TextStatistics {
 	}
 }
 
+/// Reuses the model's exact UTF-16 line-ending classification for existing string consumers.
+pub fn count_eol(text: &[u16]) -> [usize; 4] {
+	let statistics = TextStatistics::scan(text);
+	[
+		statistics.line_breaks,
+		statistics.first_line_length,
+		statistics.last_line_length,
+		usize::from(statistics.endings),
+	]
+}
+
 /// Prepares and applies a complete batch to a shared version without mutating the source.
 /// Unsupported allocation/coordinate domains return `None`, preserving the existing path.
 pub fn prepare_model_edits<'a>(
@@ -468,6 +479,19 @@ fn is_rtl(unit: u16, next: Option<u16>) -> bool {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn eol_statistics_keep_mixed_endings_empty_lines_and_surrogate_coordinates() {
+		assert_eq!(
+			[
+				count_eol(&[]),
+				count_eol(&[65, 66]),
+				count_eol(&[0xD800, 13, 10, 0xDC00, 10, 65]),
+				count_eol(&[13, 13, 10, 10]),
+			],
+			[[0, 0, 0, 0], [0, 2, 2, 0], [2, 1, 1, 3], [3, 0, 0, 3]]
+		);
+	}
 
 	fn range(start: usize, end: usize) -> TextRange {
 		TextRange {

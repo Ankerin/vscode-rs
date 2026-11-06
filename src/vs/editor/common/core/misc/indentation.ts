@@ -5,6 +5,7 @@
 
 import * as strings from '../../../../base/common/strings.js';
 import { CursorColumns } from '../cursorColumns.js';
+import { tryNormalizeRustIndentation } from '../rustTextShape.js';
 
 function _normalizeIndentationFromWhitespace(str: string, indentSize: number, insertSpaces: boolean): string {
 	let spacesCnt = 0;
@@ -33,9 +34,16 @@ function _normalizeIndentationFromWhitespace(str: string, indentSize: number, in
 }
 
 export function normalizeIndentation(str: string, indentSize: number, insertSpaces: boolean): string {
+	const native = indentationMethods.every(({ name, descriptor }) => {
+		const current = Object.getOwnPropertyDescriptor(CursorColumns, name);
+		return current?.value === descriptor?.value && current?.get === descriptor?.get;
+	}) ? tryNormalizeRustIndentation(str, indentSize, insertSpaces) : undefined;
+	if (native !== undefined) { return native; }
 	let firstNonWhitespaceIndex = strings.firstNonWhitespaceIndex(str);
 	if (firstNonWhitespaceIndex === -1) {
 		firstNonWhitespaceIndex = str.length;
 	}
 	return _normalizeIndentationFromWhitespace(str.substring(0, firstNonWhitespaceIndex), indentSize, insertSpaces) + str.substring(firstNonWhitespaceIndex);
 }
+
+const indentationMethods = ['nextIndentTabStop', 'nextRenderTabStop'].map(name => ({ name, descriptor: Object.getOwnPropertyDescriptor(CursorColumns, name) }));

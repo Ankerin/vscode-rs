@@ -14,6 +14,7 @@ mod guides;
 mod indentation;
 mod line_tokens;
 mod model_edits;
+mod normalize_indentation;
 mod search;
 mod sequence_diff;
 mod sparse_tokens;
@@ -46,8 +47,9 @@ pub use line_tokens::{
 };
 pub use model_edits::{
 	MAX_MODEL_EDIT_UNITS, MAX_MODEL_EDITS, ModelEdit, ModelEditOptions, ModelTextFlags,
-	PreparedModelEdit, PreparedModelEdits, prepare_model_edits,
+	PreparedModelEdit, PreparedModelEdits, count_eol, prepare_model_edits,
 };
+pub use normalize_indentation::{NormalizedIndentation, normalize_indentation};
 pub use sequence_diff::{
 	CharacterDiffOptions, CharacterDiffResult, CharacterSequence, DetailedLineDiff,
 	DocumentDiffOptions, DocumentDiffResult, LineDiffResult, LineEqualityScores,
