@@ -18,6 +18,7 @@ mod bracket_edits;
 mod bracket_indentation;
 mod bracket_lengths;
 mod bracket_lifecycle;
+mod bracket_mutation;
 mod bracket_node_reader;
 mod bracket_pair_collection;
 mod bracket_parser;

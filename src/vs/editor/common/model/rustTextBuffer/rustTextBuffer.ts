@@ -35,6 +35,7 @@ import { IRustBracketSearchModule, registerRustBracketSearch } from '../bracketP
 import { IRustBracketLifecycleModule, registerRustBracketLifecycle } from '../bracketPairsTextModelPart/bracketPairsTree/rustBracketLifecycle.js';
 import { IRustBracketIndentationModule, registerRustBracketIndentation } from '../bracketPairsTextModelPart/bracketPairsTree/rustBracketIndentation.js';
 import { IRustBracketAstModule, registerRustBracketAst } from '../bracketPairsTextModelPart/bracketPairsTree/rustBracketAst.js';
+import { IRustBracketMutationModule, registerRustBracketMutation } from '../bracketPairsTextModelPart/bracketPairsTree/rustBracketMutation.js';
 
 /** The generated binding surface; UTF-16 arrays preserve JavaScript string semantics. */
 export interface IRustTextBuffer {
@@ -72,7 +73,7 @@ interface IRustTextSnapshot {
 	free(): void;
 }
 
-export interface IRustTextBufferModule extends IRustSequenceDiffModule, IRustTextChangeModule, IRustTokensModule, IRustCursorColumnsModule, IRustDecorationsModule, IRustTextShapeModule, IRustBracketEditsModule, IRustBracketLengthsModule, IRustSmallSetModule, IRustBracketTreesModule, IRustBracketNodeReaderModule, IRustBracketPositionMapperModule, IRustBracketParserModule, IRustBracketTokenizerModule, IRustFastBracketTokenizerModule, IRustBracketCollectionModule, IRustBracketPairCollectionModule, IRustBracketSearchModule, IRustBracketLifecycleModule, IRustBracketIndentationModule, IRustBracketAstModule {
+export interface IRustTextBufferModule extends IRustSequenceDiffModule, IRustTextChangeModule, IRustTokensModule, IRustCursorColumnsModule, IRustDecorationsModule, IRustTextShapeModule, IRustBracketEditsModule, IRustBracketLengthsModule, IRustSmallSetModule, IRustBracketTreesModule, IRustBracketNodeReaderModule, IRustBracketPositionMapperModule, IRustBracketParserModule, IRustBracketTokenizerModule, IRustFastBracketTokenizerModule, IRustBracketCollectionModule, IRustBracketPairCollectionModule, IRustBracketSearchModule, IRustBracketLifecycleModule, IRustBracketIndentationModule, IRustBracketAstModule, IRustBracketMutationModule {
 	text_buffer_abi_version(): number;
 	WasmTextBuffer: {
 		new(units: Uint16Array): IRustTextBuffer;
@@ -393,6 +394,7 @@ export function registerRustTextBuffer(module: IRustTextBufferModule, initializa
 		registration.add(registerRustBracketLifecycle(module));
 		registration.add(registerRustBracketIndentation(module));
 		registration.add(registerRustBracketAst(module));
+		registration.add(registerRustBracketMutation(module));
 	} catch (error) {
 		registration.dispose();
 		throw error;

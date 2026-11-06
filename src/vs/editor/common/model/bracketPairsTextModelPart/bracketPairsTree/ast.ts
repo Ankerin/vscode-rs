@@ -12,6 +12,7 @@ import { SmallImmutableSet } from './smallImmutableSet.js';
 import { OpeningBracketId } from './tokenizer.js';
 import { IRustBracketIndentationHost, RustBracketIndentationOperation, tryComputeRustBracketIndentation } from './rustBracketIndentation.js';
 import { IRustBracketAstHost, RustBracketAstOperation, tryRunRustBracketAst } from './rustBracketAst.js';
+import { IRustBracketMutationHost, RustBracketMutationOperation, tryMutateRustBracketList } from './rustBracketMutation.js';
 
 export const enum AstNodeKind {
 	Text = 0,
@@ -468,6 +469,8 @@ class TwoThreeListAstNode extends ListAstNode {
 	}
 
 	public appendChildOfSameHeight(node: AstNode): void {
+		const native = tryMutateRustBracketList(RustBracketMutationOperation.Append, true, () => TwoThreeListAstNode.createRustCompactMutationHost(this, node));
+		if (native !== undefined) { return; }
 		if (this._item3) {
 			throw new Error('Cannot append to a full (2,3) tree node');
 		}
@@ -477,6 +480,8 @@ class TwoThreeListAstNode extends ListAstNode {
 	}
 
 	public unappendChild(): AstNode | undefined {
+		const native = tryMutateRustBracketList(RustBracketMutationOperation.Unappend, true, () => TwoThreeListAstNode.createRustCompactMutationHost(this));
+		if (native !== undefined) { return native.value; }
 		if (!this._item3) {
 			throw new Error('Cannot remove from a non-full (2,3) tree node');
 		}
@@ -488,6 +493,8 @@ class TwoThreeListAstNode extends ListAstNode {
 	}
 
 	public prependChildOfSameHeight(node: AstNode): void {
+		const native = tryMutateRustBracketList(RustBracketMutationOperation.Prepend, true, () => TwoThreeListAstNode.createRustCompactMutationHost(this, node));
+		if (native !== undefined) { return; }
 		if (this._item3) {
 			throw new Error('Cannot prepend to a full (2,3) tree node');
 		}
@@ -499,6 +506,8 @@ class TwoThreeListAstNode extends ListAstNode {
 	}
 
 	public unprependChild(): AstNode | undefined {
+		const native = tryMutateRustBracketList(RustBracketMutationOperation.Unprepend, true, () => TwoThreeListAstNode.createRustCompactMutationHost(this));
+		if (native !== undefined) { return native.value; }
 		if (!this._item3) {
 			throw new Error('Cannot remove from a non-full (2,3) tree node');
 		}
@@ -514,6 +523,17 @@ class TwoThreeListAstNode extends ListAstNode {
 
 	override toMutable(): ListAstNode {
 		return this;
+	}
+
+	/** Static capabilities preserve private compact-slot getter/setter order and virtual metadata calls. */
+	private static createRustCompactMutationHost(node: TwoThreeListAstNode, incoming?: AstNode): IRustBracketMutationHost {
+		return createRustBracketMutationHost({
+			incoming,
+			item: index => index === 0 ? node._item1 : index === 1 ? node._item2 : node._item3,
+			setItem: (index, value) => { if (index === 0) { node._item1 = value!; } else if (index === 1) { node._item2 = value!; } else { node._item3 = value; } },
+			throwIfImmutable: () => node.throwIfImmutable(),
+			update: () => node.handleChildrenChanged()
+		});
 	}
 }
 
@@ -565,12 +585,16 @@ class ArrayListAstNode extends ListAstNode {
 	}
 
 	public appendChildOfSameHeight(node: AstNode): void {
+		const native = tryMutateRustBracketList(RustBracketMutationOperation.Append, false, () => ArrayListAstNode.createRustArrayMutationHost(this, node));
+		if (native !== undefined) { return; }
 		this.throwIfImmutable();
 		this._children.push(node);
 		this.handleChildrenChanged();
 	}
 
 	public unappendChild(): AstNode | undefined {
+		const native = tryMutateRustBracketList(RustBracketMutationOperation.Unappend, false, () => ArrayListAstNode.createRustArrayMutationHost(this));
+		if (native !== undefined) { return native.value; }
 		this.throwIfImmutable();
 		const item = this._children.pop();
 		this.handleChildrenChanged();
@@ -578,12 +602,16 @@ class ArrayListAstNode extends ListAstNode {
 	}
 
 	public prependChildOfSameHeight(node: AstNode): void {
+		const native = tryMutateRustBracketList(RustBracketMutationOperation.Prepend, false, () => ArrayListAstNode.createRustArrayMutationHost(this, node));
+		if (native !== undefined) { return; }
 		this.throwIfImmutable();
 		this._children.unshift(node);
 		this.handleChildrenChanged();
 	}
 
 	public unprependChild(): AstNode | undefined {
+		const native = tryMutateRustBracketList(RustBracketMutationOperation.Unprepend, false, () => ArrayListAstNode.createRustArrayMutationHost(this));
+		if (native !== undefined) { return native.value; }
 		this.throwIfImmutable();
 		const item = this._children.shift();
 		this.handleChildrenChanged();
@@ -592,6 +620,23 @@ class ArrayListAstNode extends ListAstNode {
 
 	public override toMutable(): ListAstNode {
 		return this;
+	}
+
+	/** Static capabilities retain original array method lookup, aliases, and post-mutation metadata calls. */
+	private static createRustArrayMutationHost(node: ArrayListAstNode, incoming?: AstNode): IRustBracketMutationHost {
+		return createRustBracketMutationHost({
+			incoming,
+			arrayMutation: operation => {
+				switch (operation) {
+					case RustBracketMutationOperation.Append: node._children.push(incoming!); return undefined;
+					case RustBracketMutationOperation.Unappend: return node._children.pop();
+					case RustBracketMutationOperation.Prepend: node._children.unshift(incoming!); return undefined;
+					case RustBracketMutationOperation.Unprepend: return node._children.shift();
+				}
+			},
+			throwIfImmutable: () => node.throwIfImmutable(),
+			update: () => node.handleChildrenChanged()
+		});
 	}
 }
 
@@ -833,5 +878,33 @@ function createRustBracketAstHost(capabilities: IBracketAstCapabilities): IRustB
 		toMutable: node => (node as ListAstNode).toMutable(),
 		same: (first, second) => first === second,
 		setEdge: (count, child, last) => capabilities.setEdge!(count, child, last)
+	};
+}
+
+/** Original concrete list fields and array operations remain behind their private class capabilities. */
+interface IBracketMutationCapabilities {
+	incoming?: AstNode;
+	item?: (index: number) => AstNode | null;
+	setItem?: (index: number, value: AstNode | null) => void;
+	arrayMutation?: (operation: RustBracketMutationOperation) => AstNode | undefined;
+	throwIfImmutable(): void;
+	update(): void;
+}
+
+/** Shared capabilities retain capacity error wording and original concrete method dispatch. */
+function createRustBracketMutationHost(capabilities: IBracketMutationCapabilities): IRustBracketMutationHost {
+	return {
+		incoming: () => capabilities.incoming,
+		item: index => capabilities.item!(index),
+		truthy: value => !!value,
+		invalidCapacity: operation => {
+			if (operation === RustBracketMutationOperation.Append) { throw new Error('Cannot append to a full (2,3) tree node'); }
+			if (operation === RustBracketMutationOperation.Prepend) { throw new Error('Cannot prepend to a full (2,3) tree node'); }
+			throw new Error('Cannot remove from a non-full (2,3) tree node');
+		},
+		throwIfImmutable: () => capabilities.throwIfImmutable(),
+		setItem: (index, value) => capabilities.setItem!(index, value),
+		arrayMutation: operation => capabilities.arrayMutation!(operation),
+		update: () => capabilities.update()
 	};
 }
