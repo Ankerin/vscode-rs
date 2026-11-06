@@ -9,6 +9,7 @@ import { Position } from '../core/position.js';
 import { Range } from '../core/range.js';
 import { FindMatch, SearchData } from '../model.js';
 import { ownRustBracketArray } from './bracketPairsTextModelPart/bracketPairsTree/rustBracketNumberArray.js';
+import { ownRustBracketNumericState, RustBracketNumericStateKind } from './bracketPairsTextModelPart/bracketPairsTree/rustBracketNodeMetadata.js';
 import type { Searcher } from './textModelSearch.js';
 
 /** Live regex/property capabilities retain exact callbacks, results, and partial state writes. */
@@ -332,4 +333,14 @@ export function tryRustSearchDispatch(operation: RustSearchDispatchOperation, cr
 export function tryRustMultilineNavigation(previous: boolean, createHost: () => IRustMultilineNavigationHost): { match: FindMatch | null } | undefined {
 	if (!registeredModule) { return undefined; }
 	return { match: registeredModule.navigate_text_search_multiline(createHost(), previous) };
+}
+
+/** Transfers fresh request fields before an alias escapes, retaining original property semantics. */
+export function ownRustSearchParams<T extends object>(params: T): T {
+	return ownRustBracketNumericState(params, RustBracketNumericStateKind.SearchParams);
+}
+
+/** Owns primitive cursor state and regex/classifier handles through collector-visible anchors. */
+export function ownRustSearcher<T extends object>(searcher: T): T {
+	return ownRustBracketNumericState(searcher, RustBracketNumericStateKind.Searcher);
 }

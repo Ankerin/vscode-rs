@@ -10,7 +10,7 @@ import { Position } from '../core/position.js';
 import { Range } from '../core/range.js';
 import { EndOfLinePreference, FindMatch, SearchData } from '../model.js';
 import { TextModel } from './textModel.js';
-import { IRustTextSearchHost, IRustSearchNavigationHost, IRustSearchCollectionHost, IRustSearchDispatchHost, IRustMultilineNavigationHost, RustSearchNavigationOperation, RustSearchCollectionOperation, RustSearchDispatchOperation, createRustSearchOffsets, tryRunRustTextSearch, tryRustWordBoundary, tryRustLineMatches, tryRustLineFeedScan, tryRustLineFeedCount, tryRustMultilineMatchRange, tryRustSearchNavigation, tryRustSearchCollection, tryRustRegexSource, tryRustFindMatch, tryRustSearchRequest, tryRustSearchDispatch, tryRustMultilineNavigation } from './rustTextSearch.js';
+import { IRustTextSearchHost, IRustSearchNavigationHost, IRustSearchCollectionHost, IRustSearchDispatchHost, IRustMultilineNavigationHost, RustSearchNavigationOperation, RustSearchCollectionOperation, RustSearchDispatchOperation, createRustSearchOffsets, tryRunRustTextSearch, tryRustWordBoundary, tryRustLineMatches, tryRustLineFeedScan, tryRustLineFeedCount, tryRustMultilineMatchRange, tryRustSearchNavigation, tryRustSearchCollection, tryRustRegexSource, tryRustFindMatch, tryRustSearchRequest, tryRustSearchDispatch, tryRustMultilineNavigation, ownRustSearchParams, ownRustSearcher } from './rustTextSearch.js';
 
 const LIMIT_FIND_COUNT = 999;
 
@@ -25,6 +25,7 @@ export class SearchParams {
 		this.isRegex = isRegex;
 		this.matchCase = matchCase;
 		this.wordSeparators = wordSeparators;
+		return ownRustSearchParams(this);
 	}
 
 	public parseSearchRequest(): SearchData | null {
@@ -723,6 +724,7 @@ export class Searcher {
 		this._searchRegex = searchRegex;
 		this._prevMatchStartIndex = -1;
 		this._prevMatchLength = 0;
+		return ownRustSearcher(this);
 	}
 
 	public reset(lastIndex: number): void {

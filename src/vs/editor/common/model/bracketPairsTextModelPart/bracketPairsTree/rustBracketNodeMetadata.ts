@@ -34,7 +34,9 @@ export const enum RustBracketNumericStateKind {
 	Token,
 	SmallSet,
 	BracketTokens,
-	EditCache
+	EditCache,
+	SearchParams,
+	Searcher
 }
 
 const stateFieldNames: readonly (readonly string[])[] = [
@@ -48,7 +50,9 @@ const stateFieldNames: readonly (readonly string[])[] = [
 	['length', 'kind', 'bracketId', 'bracketIds', 'astNode'],
 	['items', 'additionalItems'],
 	['hasRegExp', '_regExpGlobal', 'map'],
-	['endOffsetBeforeObj', 'endOffsetAfterObj', 'offsetObj']
+	['endOffsetBeforeObj', 'endOffsetAfterObj', 'offsetObj'],
+	['searchString', 'isRegex', 'matchCase', 'wordSeparators'],
+	['_wordSeparators', '_searchRegex', '_prevMatchStartIndex', '_prevMatchLength']
 ];
 
 /** Installs ownership for subsequently constructed AST nodes; existing nodes retain their owners. */

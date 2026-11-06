@@ -8,14 +8,14 @@ See [Architecture](ARCHITECTURE.md) for the complete target, subsystem boundarie
 
 | Directory | Responsibility | Status |
 | --- | --- | --- |
-| `editor-core/` | Platform-independent UTF-16 storage, positions, model edit transactions, indentation, literal search, immutable snapshots, token metadata overlays, advanced document diff, and undo-change composition | Implemented and tested natively |
+| `editor-core/` | Platform-independent UTF-16 storage, positions, model edit transactions, indentation, literal/model search control, immutable snapshots, token metadata overlays, advanced document diff, and undo-change composition | Implemented and tested natively |
 | `editor-wasm/` | Typed WebAssembly bindings and Rust syntax line-state ownership over existing browser token buffers | Implemented and tested against existing editor models |
 | `../src/vs/editor/common/model/rustTextBuffer/` | Storage and model edit transaction adapter beneath `PieceTreeTextBuffer` | Implemented; opt-in |
 | `../src/vs/editor/browser/model/` | Browser resource loading of generated bindings | Implemented for desktop startup |
 | `../src/vs/editor/common/services/textModelSync/` | Rust-backed editor worker mirror storage and lifecycle | Implemented; follows the renderer's opt-in initialization |
 | `../src/vs/editor/common/diff/defaultLinesDiffComputer/` | Complete native advanced diff with display ranges, moves, and raw edits | Implemented; follows the core registration |
 | `../src/vs/editor/common/core/rustTextChanges.ts` | Native composition and owning storage for open undo batches | Implemented; follows the core registration |
-| `../src/vs/editor/common/model/rustTextSearch.ts` | Complete text-model search control, request parsing, capture copying, and LF index ownership | Implemented; follows the core registration |
+| `../src/vs/editor/common/model/rustTextSearch.ts` | Complete text-model search control with owning request/cursor fields and LF indexes | Implemented; follows the core registration |
 | `../src/vs/editor/common/core/rustCursorColumns.ts` | Native visible/status-bar columns, UTF-16/grapheme traversal, tab stops, atomic indentation movement, and word-part scans | Implemented; follows the core registration |
 | `../src/vs/base/common/rustUnicode.ts` | Borrowed-string code-point, forward/backward grapheme, and Unicode Backspace kernels | Implemented; follows the core registration |
 | `../src/vs/editor/common/model/rustDecorations.ts` | Historical marker-affinity and collapse behavior for decoration edits | Implemented; follows the core registration |
@@ -37,7 +37,7 @@ See [Architecture](ARCHITECTURE.md) for the complete target, subsystem boundarie
 | `../src/vs/editor/common/model/bracketPairsTextModelPart/bracketPairsTree/rustBracketAst.ts` | Pair/list construction, metadata, reuse, mutable edges, and compact/pair child selection | Implemented; follows the core registration |
 | `../src/vs/editor/common/model/bracketPairsTextModelPart/bracketPairsTree/rustBracketMutation.ts` | Concrete compact/array list append, prepend, and removal | Implemented; follows the core registration |
 | `../src/vs/editor/common/model/bracketPairsTextModelPart/bracketPairsTree/rustBracketTransform.ts` | AST cloning, list flattening, and shallow mutable construction | Implemented; follows the core registration |
-| `../src/vs/editor/common/model/bracketPairsTextModelPart/bracketPairsTree/rustBracketNodeMetadata.ts` | Owning scalar AST metadata, edit mapping, parser flags, tokenizer text/caches, and token cursors | Implemented; follows the core registration |
+| `../src/vs/editor/common/model/bracketPairsTextModelPart/bracketPairsTree/rustBracketNodeMetadata.ts` | Owning AST metadata, parser/tokenizer state, and search request/cursor fields | Implemented; follows the core registration |
 | `../src/vs/editor/common/model/bracketPairsTextModelPart/bracketPairsTree/rustBracketNumberArray.ts` | Owning NodeReader stacks, fast token streams, and fresh edit queues | Implemented; follows the core registration |
 | `../src/vs/editor/common/tokens/rustTokens.ts` | Native metadata composition, sparse/contiguous editing, and syntax store creation | Implemented; follows the core registration |
 | `../build/rust/` | Binding generation and compatibility test runner | Implemented |

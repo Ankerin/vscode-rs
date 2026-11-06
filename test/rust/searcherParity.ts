@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { test } from 'node:test';
+import { setTimeout } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
 import { WordCharacterClass, WordCharacterClassifier } from '../../src/vs/editor/common/core/wordCharacterClassifier.js';
 import { SearchParams, Searcher, TextModelSearch, createFindMatch, isMultilineRegexSource, isValidMatch } from '../../src/vs/editor/common/model/textModelSearch.js';
@@ -26,6 +27,11 @@ await rust.default({ module_or_path: await readFile(resolve(directory, 'vscode_e
 
 function withRust<T>(compute: () => T, module: IRustTextSearchModule = rust): T {
 	const registration = registerRustTextSearch(module);
+	try { return compute(); } finally { registration.dispose(); }
+}
+
+function withCore<T>(compute: () => T): T {
+	const registration = registerRustTextBuffer(rust);
 	try { return compute(); } finally { registration.dispose(); }
 }
 
@@ -979,4 +985,70 @@ test('Rust public/multiline search preserves provider failure identities and ato
 	}
 	assert.throws(() => registerRustTextBuffer({ ...rust, text_search_abi_version: () => 8 }), /searcher control contract/);
 	assert.strictEqual(tryRustBracketLength(RustBracketLengthOperation.Pack, 1, 2), undefined);
+});
+
+test('Rust search state owns fresh request/cursor fields and materializes original frozen descriptors', () => {
+	withCore(() => {
+		const baseline = rust.bracket_node_metadata_live_count();
+		const params = new SearchParams('x', false, true, null);
+		const regex = /x/g;
+		const classifier = new WordCharacterClassifier('-', []);
+		const searcher = new Searcher(classifier, regex);
+		assert.strictEqual(rust.bracket_node_metadata_live_count(), baseline + 2, 'Request and searcher constructors allocate native owning records');
+		searcher.reset(0);
+		assert.strictEqual(searcher.next(' x x')?.index, 1);
+		assert.strictEqual(Object.getOwnPropertyDescriptor(searcher, '_searchRegex')!.value, regex);
+		assert.strictEqual(searcher._wordSeparators, classifier);
+		Reflect.defineProperty(params, 'matchCase', { value: false });
+		assert.strictEqual(params.parseSearchRequest()?.simpleSearch, null);
+		Object.freeze(params);
+		Object.freeze(searcher);
+		assert.deepStrictEqual([rust.bracket_node_metadata_live_count(), Object.getOwnPropertyDescriptor(params, 'searchString'), Object.getOwnPropertyDescriptor(searcher, '_prevMatchStartIndex')], [baseline, { value: 'x', writable: false, enumerable: true, configurable: false }, { value: 1, writable: false, enumerable: true, configurable: false }]);
+	});
+});
+
+test('Rust owning search state preserves proxy observations, readonly partial writes, and held state after unregistration', () => {
+	const run = () => {
+		const observations: string[] = [];
+		const regex = /x/g;
+		const target = new Searcher(null, regex);
+		const searcher = new Proxy(target, {
+			get: (target, key, receiver) => { observations.push(`get:${String(key)}`); return Reflect.get(target, key, receiver); },
+			set: (target, key, value, receiver) => { observations.push(`set:${String(key)}`); return Reflect.set(target, key, value, receiver); },
+			getOwnPropertyDescriptor: (target, key) => { observations.push(`descriptor:${String(key)}`); return Reflect.getOwnPropertyDescriptor(target, key); },
+			defineProperty: (target, key, descriptor) => { observations.push(`define:${String(key)}`); return Reflect.defineProperty(target, key, descriptor); }
+		});
+		Object.defineProperty(searcher, '_prevMatchLength', { writable: false });
+		assert.throws(() => searcher.next('ax'), TypeError);
+		const descriptors = Object.getOwnPropertyDescriptors(target);
+		return { observations, descriptors, lastIndex: regex.lastIndex };
+	};
+	assert.deepStrictEqual(withCore(run), run());
+	const held = withCore(() => new Searcher(null, /x/g));
+	held.reset(0);
+	assert.strictEqual(held.next('x x')?.index, 0);
+	Object.freeze(held);
+});
+
+test('Rust search records release unreachable request/regex/classifier cycles without retaining JavaScript graph roots', async () => {
+	assert.ok(global.gc, 'The compatibility runner exposes garbage collection');
+	for (let attempt = 0; attempt < 5; attempt++) { global.gc(); await setTimeout(10); }
+	const baseline = rust.bracket_node_metadata_live_count();
+	function createCycles(): WeakRef<object>[] {
+		const references: WeakRef<object>[] = [];
+		for (let index = 0; index < 128; index++) {
+			const params = new SearchParams('x', false, true, null);
+			Object.defineProperty(params, 'wordSeparators', { value: params });
+			const regex = /x/g;
+			const classifier = new WordCharacterClassifier('-', []);
+			const searcher = new Searcher(classifier, regex);
+			regex.exec = () => { Object.keys(searcher); return null; };
+			classifier.get = () => { Object.keys(searcher); return WordCharacterClass.Regular; };
+			references.push(new WeakRef(params), new WeakRef(searcher), new WeakRef(regex), new WeakRef(classifier));
+		}
+		return references;
+	}
+	const references = withCore(createCycles);
+	for (let attempt = 0; attempt < 100 && rust.bracket_node_metadata_live_count() > baseline; attempt++) { global.gc(); await setTimeout(10); }
+	assert.deepStrictEqual({ records: rust.bracket_node_metadata_live_count(), retainedObjects: references.filter(reference => reference.deref() !== undefined).length }, { records: baseline, retainedObjects: 0 });
 });
