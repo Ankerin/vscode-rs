@@ -55,6 +55,7 @@ import { IRustModelQueryHost, RustModelQueryMethod, RustModelQueryOperation, Rus
 import { ownRustModelSnapshot, tryRustModelSnapshot } from './rustModelSnapshot.js';
 import { IRustModelLifecycleHost, RustModelLifecycleOperation, RustModelLifecycleValue, rustModelLifecycleFields, tryRustModelLifecycle } from './rustModelLifecycle.js';
 import { IRustModelOptionsControllerHost, RustModelOptionsControllerOperation, tryRustModelOptionsController } from './rustModelOptionsController.js';
+import { IRustModelSearchHost, IRustModelSearchModule, RustModelSearchOperation, tryRustModelSearch } from './rustModelSearch.js';
 import { AttachedViews } from './tokens/abstractSyntaxTokenBackend.js';
 import { TokenizationFontDecorationProvider } from './tokens/tokenizationFontDecorationsProvider.js';
 import { LineFontChangingDecoration, LineHeightChangingDecoration } from './decorationProvider.js';
@@ -1453,7 +1454,51 @@ export class TextModel extends Disposable implements model.ITextModel, IDecorati
 		return this._buffer.findMatchesLineByLine(searchRange, searchData, captureMatches, limitResultCount);
 	}
 
+	/** Keeps array methods, virtual providers, and factory evaluation at their original owners. */
+	private _createRustModelSearchHost(module: IRustModelSearchModule, searchString: string, isRegex: boolean, matchCase: boolean, wordSeparators: string | null, captureMatches: boolean, limitResultCount: number): IRustModelSearchHost {
+		const host: IRustModelSearchHost = {
+			assertAlive: () => this._assertNotDisposed(),
+			singleton: value => [value],
+			everyRange: value => value.every(searchScope => Range.isIRange(searchScope)),
+			validateRanges: value => value.map(searchScope => this.validateRange(searchScope)),
+			fullRange: () => this.getFullModelRange(),
+			sort: value => value.sort((first, second) => module.compare_model_search_ranges(host, first, second)),
+			unique: value => {
+				const unique: Range[] = [];
+				unique.push(value.reduce((previous, current) => module.merge_model_search_ranges(host, unique, previous, current)));
+				return unique;
+			},
+			isRegex: () => isRegex,
+			noNewline: () => searchString.indexOf('\n') < 0,
+			parse: () => new SearchParams(searchString, isRegex, matchCase, wordSeparators).parseSearchRequest(),
+			empty: () => [],
+			mapMatches: (ranges, data, literal) => ranges.map(literal
+				? searchRange => this.findMatchesLineByLine(searchRange, data, captureMatches, limitResultCount)
+				: searchRange => TextModelSearch.findMatches(this, new SearchParams(searchString, isRegex, matchCase, wordSeparators), searchRange, captureMatches, limitResultCount)),
+			flatten: matches => matches.reduce((array, value) => array.concat(value), []),
+			validateStart: value => this.validatePosition(value),
+			coordinate: (value, index) => index < 2 ? (value as IRange)[index === 0 ? 'startLineNumber' : 'startColumn'] : (value as IPosition)[index === 2 ? 'lineNumber' : 'column'],
+			subtract: (first, second) => first - second,
+			intersects: (first, second) => Range.areIntersecting(first, second),
+			plus: (first, second) => first.plusRange(second),
+			push: (array, value) => { array.push(value); },
+			lineCount: () => this.getLineCount(),
+			maxColumn: line => this.getLineMaxColumn(line),
+			maxStartColumn: start => this.getLineMaxColumn(start.lineNumber),
+			range: (startLine, startColumn, endLine, endColumn) => new Range(startLine, startColumn, endLine, endColumn),
+			lineMatches: (range, data) => this.findMatchesLineByLine(range, data, captureMatches, 1),
+			navigate: (start, previous) => previous
+				? TextModelSearch.findPreviousMatch(this, new SearchParams(searchString, isRegex, matchCase, wordSeparators), start, captureMatches)
+				: TextModelSearch.findNextMatch(this, new SearchParams(searchString, isRegex, matchCase, wordSeparators), start, captureMatches),
+			hasMatches: matches => matches.length > 0,
+			firstMatch: matches => matches[0]
+		};
+		return host;
+	}
+
 	public findMatches(searchString: string, rawSearchScope: boolean | IRange | IRange[] | null, isRegex: boolean, matchCase: boolean, wordSeparators: string | null, captureMatches: boolean, limitResultCount: number = LIMIT_FIND_COUNT): model.FindMatch[] {
+		const rust = tryRustModelSearch<model.FindMatch[]>(RustModelSearchOperation.Matches, rawSearchScope, module => this._createRustModelSearchHost(module, searchString, isRegex, matchCase, wordSeparators, captureMatches, limitResultCount));
+		if (rust) { return rust.value; }
 		this._assertNotDisposed();
 
 		let searchRanges: Range[] | null = null;
@@ -1503,6 +1548,8 @@ export class TextModel extends Disposable implements model.ITextModel, IDecorati
 	}
 
 	public findNextMatch(searchString: string, rawSearchStart: IPosition, isRegex: boolean, matchCase: boolean, wordSeparators: string, captureMatches: boolean): model.FindMatch | null {
+		const rust = tryRustModelSearch<model.FindMatch | null>(RustModelSearchOperation.Next, rawSearchStart, module => this._createRustModelSearchHost(module, searchString, isRegex, matchCase, wordSeparators, captureMatches, 1));
+		if (rust) { return rust.value; }
 		this._assertNotDisposed();
 		const searchStart = this.validatePosition(rawSearchStart);
 
@@ -1535,6 +1582,8 @@ export class TextModel extends Disposable implements model.ITextModel, IDecorati
 	}
 
 	public findPreviousMatch(searchString: string, rawSearchStart: IPosition, isRegex: boolean, matchCase: boolean, wordSeparators: string, captureMatches: boolean): model.FindMatch | null {
+		const rust = tryRustModelSearch<model.FindMatch | null>(RustModelSearchOperation.Previous, rawSearchStart, module => this._createRustModelSearchHost(module, searchString, isRegex, matchCase, wordSeparators, captureMatches, 1));
+		if (rust) { return rust.value; }
 		this._assertNotDisposed();
 		const searchStart = this.validatePosition(rawSearchStart);
 		return TextModelSearch.findPreviousMatch(this, new SearchParams(searchString, isRegex, matchCase, wordSeparators), searchStart, captureMatches);

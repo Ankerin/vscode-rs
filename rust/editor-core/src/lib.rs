@@ -37,6 +37,7 @@ mod model_lifecycle;
 mod model_options;
 mod model_options_controller;
 mod model_query;
+mod model_search;
 mod model_snapshot;
 mod model_validation;
 mod normalize_indentation;
@@ -138,6 +139,10 @@ pub use model_options_controller::{
 };
 pub use model_query::{
 	ModelQueryHost, ModelQueryMethod, ModelQueryOperation, bound_model_offset, query_model,
+};
+pub use model_search::{
+	ModelSearchHost, compare_model_search_ranges, find_model_matches, merge_model_search_ranges,
+	navigate_model_match,
 };
 pub use model_snapshot::{ModelSnapshotHost, read_model_snapshot};
 pub use model_validation::{

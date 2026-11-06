@@ -40,6 +40,7 @@ mod model_lifecycle;
 mod model_options;
 mod model_options_controller;
 mod model_query;
+mod model_search;
 mod model_snapshot;
 mod model_validation;
 mod sequence_diff;
