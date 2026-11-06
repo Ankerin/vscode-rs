@@ -57,6 +57,7 @@ import { IRustModelLifecycleHost, RustModelLifecycleOperation, RustModelLifecycl
 import { IRustModelOptionsControllerHost, RustModelOptionsControllerOperation, tryRustModelOptionsController } from './rustModelOptionsController.js';
 import { IRustModelSearchHost, IRustModelSearchModule, RustModelSearchOperation, tryRustModelSearch } from './rustModelSearch.js';
 import { ownRustTextModel, releaseRustTextModel } from './rustModelState.js';
+import { IRustModelContentEventsHost, ownRustModelContentEmitter, releaseRustModelContentEmitter, RustModelContentEventsOperation, tryRustModelContentEvents } from './rustModelContentEvents.js';
 import { AttachedViews } from './tokens/abstractSyntaxTokenBackend.js';
 import { TokenizationFontDecorationProvider } from './tokens/tokenizationFontDecorationsProvider.js';
 import { LineFontChangingDecoration, LineHeightChangingDecoration } from './decorationProvider.js';
@@ -3035,20 +3036,45 @@ class DidChangeContentEmitter extends Disposable {
 	private _deferredEvent: InternalModelContentChangeEvent | null;
 
 	constructor() {
-		super();
+		super(ownRustModelContentEmitter);
 		this._deferredCnt = 0;
 		this._deferredEvent = null;
 	}
 
+	/** Original fields and emitter callbacks remain live for native batching and reentrant listeners. */
+	private _createRustHost(): IRustModelContentEventsHost {
+		return {
+			get: index => index === 0 ? this._deferredCnt : this._deferredEvent,
+			set: (index, value) => { if (index === 0) { this._deferredCnt = value as number; } else { this._deferredEvent = value as InternalModelContentChangeEvent | null; } },
+			increment: (value, increase) => { if (increase) { value++; } else { value--; } return value; },
+			aboveZero: value => value > 0,
+			hasListeners: () => this._emitter.hasListeners(),
+			assignSelection: (event, selection) => { event.rawContentChangedEvent.resultingSelection = selection; },
+			merge: (previous, current) => previous.merge(current),
+			fire: event => this._emitter.fire(event)
+		};
+	}
+
+	public override dispose(): void {
+		super.dispose();
+		releaseRustModelContentEmitter(this);
+	}
+
 	public hasListeners(): boolean {
+		const rust = tryRustModelContentEvents<boolean>(RustModelContentEventsOperation.HasListeners, null, () => this._createRustHost());
+		if (rust) { return rust.value; }
 		return this._emitter.hasListeners();
 	}
 
 	public beginDeferredEmit(): void {
+		const rust = tryRustModelContentEvents<void>(RustModelContentEventsOperation.Begin, null, () => this._createRustHost());
+		if (rust) { return rust.value; }
 		this._deferredCnt++;
 	}
 
 	public endDeferredEmit(resultingSelection: Selection[] | null = null): void {
+		const rust = tryRustModelContentEvents<void>(RustModelContentEventsOperation.End, resultingSelection, () => this._createRustHost());
+		if (rust) { return rust.value; }
 		this._deferredCnt--;
 		if (this._deferredCnt === 0) {
 			if (this._deferredEvent !== null) {
@@ -3061,6 +3087,8 @@ class DidChangeContentEmitter extends Disposable {
 	}
 
 	public fire(e: InternalModelContentChangeEvent): void {
+		const rust = tryRustModelContentEvents<void>(RustModelContentEventsOperation.Fire, e, () => this._createRustHost());
+		if (rust) { return rust.value; }
 		if (this._deferredCnt > 0) {
 			if (this._deferredEvent) {
 				this._deferredEvent = this._deferredEvent.merge(e);

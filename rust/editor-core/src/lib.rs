@@ -32,6 +32,7 @@ mod folding;
 mod guides;
 mod indentation;
 mod line_tokens;
+mod model_content_events;
 mod model_edits;
 mod model_lifecycle;
 mod model_options;
@@ -120,6 +121,9 @@ pub use indentation::{GuessedIndentation, guess_indentation};
 pub use line_tokens::{
 	InsertedLineTokens, LineTokenInsertion, convert_line_token_offsets, find_line_token_index,
 	insert_line_tokens, line_token_slice, line_tokens_equal, line_tokens_in_range,
+};
+pub use model_content_events::{
+	ModelContentEventsHost, ModelContentEventsOperation, run_model_content_events,
 };
 pub use model_edits::{
 	MAX_MODEL_EDIT_UNITS, MAX_MODEL_EDITS, ModelEdit, ModelEditOptions, ModelTextFlags,

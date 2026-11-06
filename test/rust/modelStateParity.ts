@@ -89,7 +89,7 @@ test('Rust model disposal releases owning state while retaining extensibility an
 		const retainedOptions = model.getOptions();
 		const before = rust.bracket_node_metadata_live_count();
 		model.dispose();
-		assert.strictEqual(rust.bracket_node_metadata_live_count(), before - 1);
+		assert.strictEqual(rust.bracket_node_metadata_live_count(), before - 2);
 		assert.strictEqual(Object.isExtensible(model), true);
 		assert.throws(() => model.getValue(), /Model is disposed/);
 		Object.freeze(retainedOptions);

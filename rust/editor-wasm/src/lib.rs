@@ -35,6 +35,7 @@ mod cursor_columns;
 mod decorations;
 mod fast_bracket_tokenizer;
 mod line_tokens;
+mod model_content_events;
 mod model_edits;
 mod model_lifecycle;
 mod model_options;
