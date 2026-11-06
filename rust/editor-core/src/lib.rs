@@ -19,6 +19,7 @@ mod bracket_parser;
 mod bracket_position_mapper;
 mod bracket_search;
 mod bracket_tokenizer;
+mod bracket_transform;
 mod bracket_trees;
 mod contiguous_tokens;
 mod cursor_columns;
@@ -78,6 +79,10 @@ pub use bracket_search::{BracketSearchHost, find_bracket, has_unmatched_bracket}
 pub use bracket_tokenizer::{
 	BracketTokenizerHost, PeekableBracketTokenizerHost, peek_bracket_token, read_bracket_token,
 	read_peekable_bracket_token, set_bracket_token_position, skip_bracket_tokens,
+};
+pub use bracket_transform::{
+	BracketTransformHost, flatten_bracket_list, transform_array_bracket_list,
+	transform_bracket_pair, transform_compact_bracket_list,
 };
 pub use bracket_trees::{
 	BracketTreeGroup, BracketTreeHost, concat_bracket_trees, concat_bracket_trees_same_height,

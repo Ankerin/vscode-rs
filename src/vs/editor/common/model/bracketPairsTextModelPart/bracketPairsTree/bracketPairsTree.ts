@@ -11,7 +11,7 @@ import { BracketInfo, BracketPairWithMinIndentationInfo, IFoundBracket } from '.
 import { TextModel } from '../../textModel.js';
 import { IModelContentChangedEvent, IModelTokensChangedEvent } from '../../../textModelEvents.js';
 import { ResolvedLanguageConfiguration } from '../../../languages/languageConfigurationRegistry.js';
-import { AstNode, AstNodeKind, PairAstNode } from './ast.js';
+import { AstNode, AstNodeKind, iterateBracketChildren, PairAstNode } from './ast.js';
 import { TextEditInfo } from './beforeEditPositionMapper.js';
 import { LanguageAgnosticBracketTokens } from './brackets.js';
 import { Length, lengthAdd, lengthGreaterThanEqual, lengthLessThan, lengthLessThanEqual, lengthsToRange, lengthZero, positionToLength, toLength } from './length.js';
@@ -605,13 +605,6 @@ function collectBracketPairs(
 		}
 	}
 	return shouldContinue;
-}
-
-/** Delegates the original for-of protocol while Rust owns traversal and completion decisions. */
-function* iterateBracketChildren(node: AstNode): Generator<AstNode, void, void> {
-	for (const child of node.children) {
-		yield child;
-	}
 }
 
 /** Ordered capabilities retain nearest-query rereads and unmatched-query stack/provider order. */

@@ -13,6 +13,7 @@ import { OpeningBracketId } from './tokenizer.js';
 import { IRustBracketIndentationHost, RustBracketIndentationOperation, tryComputeRustBracketIndentation } from './rustBracketIndentation.js';
 import { IRustBracketAstHost, RustBracketAstOperation, tryRunRustBracketAst } from './rustBracketAst.js';
 import { IRustBracketMutationHost, RustBracketMutationOperation, tryMutateRustBracketList } from './rustBracketMutation.js';
+import { IRustBracketTransformHost, RustBracketTransformOperation, tryTransformRustBracketAst } from './rustBracketTransform.js';
 
 export const enum AstNodeKind {
 	Text = 0,
@@ -174,6 +175,8 @@ export class PairAstNode extends BaseAstNode {
 	}
 
 	public flattenLists(): PairAstNode {
+		const native = tryTransformRustBracketAst(RustBracketTransformOperation.FlattenPair, () => createRustBracketTransformHost({ node: this }));
+		if (native !== undefined) { return native.value as PairAstNode; }
 		return PairAstNode.create(
 			this.openingBracket.flattenLists(),
 			this.child && this.child.flattenLists(),
@@ -182,6 +185,8 @@ export class PairAstNode extends BaseAstNode {
 	}
 
 	public deepClone(): PairAstNode {
+		const native = tryTransformRustBracketAst(RustBracketTransformOperation.ClonePair, () => createRustBracketTransformHost({ node: this, clonePair: (length, opening, child, closing, missing) => new PairAstNode(length, opening, child, closing, missing) }));
+		if (native !== undefined) { return native.value as PairAstNode; }
 		return new PairAstNode(
 			this.length,
 			this.openingBracket.deepClone(),
@@ -355,6 +360,8 @@ export abstract class ListAstNode extends BaseAstNode {
 	}
 
 	public flattenLists(): ListAstNode {
+		const native = tryTransformRustBracketAst(RustBracketTransformOperation.FlattenList, () => createRustBracketTransformHost({ node: this }));
+		if (native !== undefined) { return native.value as ListAstNode; }
 		const items: AstNode[] = [];
 		for (const c of this.children) {
 			const normalized = c.flattenLists();
@@ -458,6 +465,8 @@ class TwoThreeListAstNode extends ListAstNode {
 	}
 
 	public deepClone(): ListAstNode {
+		const native = tryTransformRustBracketAst(RustBracketTransformOperation.CloneCompactList, () => TwoThreeListAstNode.createRustCompactTransformHost(this));
+		if (native !== undefined) { return native.value as ListAstNode; }
 		return new TwoThreeListAstNode(
 			this.length,
 			this.listHeight,
@@ -522,6 +531,8 @@ class TwoThreeListAstNode extends ListAstNode {
 	}
 
 	override toMutable(): ListAstNode {
+		const native = tryTransformRustBracketAst(RustBracketTransformOperation.Identity, () => createRustBracketTransformHost({ node: this }));
+		if (native !== undefined) { return native.value as ListAstNode; }
 		return this;
 	}
 
@@ -535,6 +546,17 @@ class TwoThreeListAstNode extends ListAstNode {
 			update: () => node.handleChildrenChanged()
 		});
 	}
+
+	/** Compact clone callbacks retain private fields while shallow copies retain public getter reads. */
+	protected static createRustCompactTransformHost(node: TwoThreeListAstNode): IRustBracketTransformHost {
+		return createRustBracketTransformHost({
+			node, compactItem: (index, clone) => {
+				if (index === 0) { return clone ? node._item1.deepClone() : node.item1; }
+				if (index === 1) { return clone ? node._item2.deepClone() : node.item2; }
+				return clone ? (node._item3 ? node._item3.deepClone() : null) : node.item3;
+			}
+		});
+	}
 }
 
 /**
@@ -542,6 +564,8 @@ class TwoThreeListAstNode extends ListAstNode {
 */
 class Immutable23ListAstNode extends TwoThreeListAstNode {
 	override toMutable(): ListAstNode {
+		const native = tryTransformRustBracketAst(RustBracketTransformOperation.MutableCompactList, () => Immutable23ListAstNode.createRustCompactTransformHost(this));
+		if (native !== undefined) { return native.value as ListAstNode; }
 		return new TwoThreeListAstNode(this.length, this.listHeight, this.item1, this.item2, this.item3, this.missingOpeningBracketIds);
 	}
 
@@ -577,6 +601,8 @@ class ArrayListAstNode extends ListAstNode {
 	}
 
 	deepClone(): ListAstNode {
+		const native = tryTransformRustBracketAst(RustBracketTransformOperation.CloneArrayList, () => ArrayListAstNode.createRustArrayTransformHost(this));
+		if (native !== undefined) { return native.value as ListAstNode; }
 		const children = new Array<AstNode>(this._children.length);
 		for (let i = 0; i < this._children.length; i++) {
 			children[i] = this._children[i].deepClone();
@@ -619,6 +645,8 @@ class ArrayListAstNode extends ListAstNode {
 	}
 
 	public override toMutable(): ListAstNode {
+		const native = tryTransformRustBracketAst(RustBracketTransformOperation.Identity, () => createRustBracketTransformHost({ node: this }));
+		if (native !== undefined) { return native.value as ListAstNode; }
 		return this;
 	}
 
@@ -638,6 +666,16 @@ class ArrayListAstNode extends ListAstNode {
 			update: () => node.handleChildrenChanged()
 		});
 	}
+
+	/** Clone callbacks retain constructor allocation, live source-length reads, and output slot writes. */
+	private static createRustArrayTransformHost(node: ArrayListAstNode): IRustBracketTransformHost {
+		return createRustBracketTransformHost({
+			node,
+			cloneArray: () => new Array<AstNode>(node._children.length),
+			indexBeforeCount: index => index < node._children.length,
+			cloneInto: (output, index) => { output[index] = node._children[index].deepClone(); }
+		});
+	}
 }
 
 /**
@@ -645,6 +683,8 @@ class ArrayListAstNode extends ListAstNode {
 */
 class ImmutableArrayListAstNode extends ArrayListAstNode {
 	override toMutable(): ListAstNode {
+		const native = tryTransformRustBracketAst(RustBracketTransformOperation.MutableArrayList, () => createRustBracketTransformHost({ node: this }));
+		if (native !== undefined) { return native.value as ListAstNode; }
 		return new ArrayListAstNode(this.length, this.listHeight, [...this.children], this.missingOpeningBracketIds);
 	}
 
@@ -670,9 +710,13 @@ abstract class ImmutableLeafAstNode extends BaseAstNode {
 	}
 
 	public flattenLists(): this & AstNode {
+		const native = tryTransformRustBracketAst(RustBracketTransformOperation.Identity, () => createRustBracketTransformHost({ node: this as this & AstNode }));
+		if (native !== undefined) { return native.value as this & AstNode; }
 		return this as this & AstNode;
 	}
 	public deepClone(): this & AstNode {
+		const native = tryTransformRustBracketAst(RustBracketTransformOperation.Identity, () => createRustBracketTransformHost({ node: this as this & AstNode }));
+		if (native !== undefined) { return native.value as this & AstNode; }
 		return this as this & AstNode;
 	}
 }
@@ -906,5 +950,54 @@ function createRustBracketMutationHost(capabilities: IBracketMutationCapabilitie
 		setItem: (index, value) => capabilities.setItem!(index, value),
 		arrayMutation: operation => capabilities.arrayMutation!(operation),
 		update: () => capabilities.update()
+	};
+}
+
+/** Original node-specific constructors and private clone loops remain behind class capabilities. */
+interface IBracketTransformCapabilities {
+	node: AstNode;
+	clonePair?: IRustBracketTransformHost['clonePair'];
+	compactItem?: IRustBracketTransformHost['compactItem'];
+	cloneArray?: () => AstNode[];
+	indexBeforeCount?: (index: number) => boolean;
+	cloneInto?: (output: AstNode[], index: number) => void;
+}
+
+/** Delegates the original for-of protocol while Rust controls AST traversal and completion. */
+export function* iterateBracketChildren(node: AstNode): Generator<AstNode, void, void> {
+	for (const child of node.children) { yield child; }
+}
+
+/** Ordered clone/factory capabilities preserve argument evaluation and spread/iterator behavior. */
+function createRustBracketTransformHost(capabilities: IBracketTransformCapabilities): IRustBracketTransformHost {
+	const node = capabilities.node;
+	return {
+		receiver: () => node,
+		length: () => node.length,
+		height: () => node.listHeight,
+		missing: () => node.missingOpeningBracketIds,
+		pairFactory: () => { const factory = PairAstNode.create; return (opening, child, closing) => Reflect.apply(factory, PairAstNode, [opening, child, closing]) as PairAstNode; },
+		pairOpening: clone => clone ? (node as PairAstNode).openingBracket.deepClone() : (node as PairAstNode).openingBracket.flattenLists(),
+		pairChild: clone => clone ? (node as PairAstNode).child && (node as PairAstNode).child!.deepClone() : (node as PairAstNode).child && (node as PairAstNode).child!.flattenLists(),
+		pairClosing: clone => clone ? (node as PairAstNode).closingBracket && (node as PairAstNode).closingBracket!.deepClone() : (node as PairAstNode).closingBracket && (node as PairAstNode).closingBracket!.flattenLists(),
+		createPair: (factory, opening, child, closing) => factory(opening, child, closing),
+		clonePair: (length, opening, child, closing, missing) => capabilities.clonePair!(length, opening, child, closing, missing),
+		compactItem: (index, clone) => capabilities.compactItem!(index, clone),
+		createCompact: (length, height, first, second, third, missing) => new TwoThreeListAstNode(length, height, first, second, third, missing),
+		cloneArray: () => capabilities.cloneArray!(),
+		indexBeforeCount: index => capabilities.indexBeforeCount!(index),
+		cloneInto: (output, index) => capabilities.cloneInto!(output, index),
+		spreadChildren: () => [...node.children],
+		createArray: (length, height, children, missing) => new ArrayListAstNode(length, height, children, missing),
+		emptyItems: () => [],
+		iterator: () => iterateBracketChildren(node),
+		next: iterator => iterator.next(),
+		done: step => !!step.done,
+		stepValue: step => step.value,
+		close: iterator => { iterator.return(undefined); },
+		flattenChild: child => child.flattenLists(),
+		isList: child => child.kind === AstNodeKind.List,
+		pushFlattened: (items, child, expand) => { if (expand) { items.push(...child.children); } else { items.push(child); } },
+		createFlattened: items => ListAstNode.create(items)
 	};
 }
