@@ -6,6 +6,7 @@
 import { ArrayQueue } from '../../../../../base/common/arrays.js';
 import { TextEditInfo } from './beforeEditPositionMapper.js';
 import { Length, lengthAdd, lengthDiffNonNegative, lengthEquals, lengthIsZero, lengthToObj, lengthZero, sumLengths } from './length.js';
+import { tryCombineRustBracketMappings } from './rustBracketEdits.js';
 
 export function combineTextEditInfos(textEditInfoFirst: TextEditInfo[], textEditInfoSecond: TextEditInfo[]): TextEditInfo[] {
 	if (textEditInfoFirst.length === 0) {
@@ -16,11 +17,24 @@ export function combineTextEditInfos(textEditInfoFirst: TextEditInfo[], textEdit
 	}
 
 	// s0: State before any edits
-	const s0ToS1Map = new ArrayQueue(toLengthMapping(textEditInfoFirst));
+	const firstMappings = toLengthMapping(textEditInfoFirst);
+	const s0ToS1Map = new ArrayQueue(firstMappings);
 	// s1: State after first edit, but before second edit
 	const s1ToS2Map = toLengthMapping(textEditInfoSecond) as (LengthMapping | { lengthBefore: undefined; lengthAfter: undefined; modified: false })[];
 	s1ToS2Map.push({ modified: false, lengthBefore: undefined, lengthAfter: undefined }); // Copy everything from old to new
 	// s2: State after both edits
+	const split = Object.getOwnPropertyDescriptor(LengthMapping.prototype, 'splitAt');
+	const native = split?.value === standardSplit?.value && split?.get === standardSplit?.get ? tryCombineRustBracketMappings(firstMappings, s1ToS2Map, mapping => standardMappings.has(mapping as LengthMapping) && Object.getPrototypeOf(mapping) === LengthMapping.prototype) : undefined;
+	if (native !== undefined) {
+		const result: TextEditInfo[] = [];
+		for (let index = 0; index < native.length; index += 4) {
+			const startOffset = native[index] as unknown as Length;
+			const endOffset = native[index + 1] as unknown as Length;
+			const newLength = native[index + 2] as unknown as Length;
+			result.push(native[index + 3] === 1 ? new TextEditInfo(startOffset, endOffset, newLength) : { startOffset, endOffset, newLength });
+		}
+		return result;
+	}
 
 	let curItem: LengthMapping | undefined = s0ToS1Map.dequeue();
 
@@ -82,6 +96,8 @@ export function combineTextEditInfos(textEditInfoFirst: TextEditInfo[], textEdit
 	return result;
 }
 
+const standardMappings = new WeakSet<LengthMapping>();
+
 class LengthMapping {
 	constructor(
 		/**
@@ -91,6 +107,7 @@ class LengthMapping {
 		public readonly lengthBefore: Length,
 		public readonly lengthAfter: Length,
 	) {
+		if (new.target === LengthMapping) { standardMappings.add(this); }
 	}
 
 	splitAt(lengthAfter: Length): [LengthMapping, LengthMapping | undefined] {
@@ -114,6 +131,8 @@ class LengthMapping {
 		return `${this.modified ? 'M' : 'U'}:${lengthToObj(this.lengthBefore)} -> ${lengthToObj(this.lengthAfter)}`;
 	}
 }
+
+const standardSplit = Object.getOwnPropertyDescriptor(LengthMapping.prototype, 'splitAt');
 
 function toLengthMapping(textEditInfos: TextEditInfo[]): LengthMapping[] {
 	const result: LengthMapping[] = [];

@@ -6,6 +6,7 @@
 //! Platform-independent editor algorithms. Text coordinates use UTF-16 code units.
 
 mod atomic_tab_move;
+mod bracket_edits;
 mod contiguous_tokens;
 mod cursor_columns;
 mod decorations;
@@ -29,6 +30,7 @@ mod unicode_grapheme_data;
 mod word_part;
 
 pub use atomic_tab_move::{atomic_tab_position, whitespace_visible_column};
+pub use bracket_edits::combine_bracket_edits;
 pub use contiguous_tokens::{
 	ContiguousTokensUpdate, append_contiguous_tokens, delete_contiguous_tokens,
 	insert_contiguous_tokens,

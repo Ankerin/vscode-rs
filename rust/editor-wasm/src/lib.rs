@@ -12,6 +12,7 @@ use vscode_editor_core::{
 use wasm_bindgen::prelude::*;
 
 mod arrays;
+mod bracket_edits;
 mod contiguous_tokens_block;
 mod contiguous_tokens_store;
 mod cursor_columns;
