@@ -50,7 +50,8 @@ export const enum RustBracketNumericStateKind {
 	ModelContentData,
 	ModelDecorationEmitter,
 	ModelDecorationEvent,
-	ValidatedModelEdit
+	ValidatedModelEdit,
+	PreparedModelEdit
 }
 
 const stateFieldNames: readonly (readonly string[])[] = [
@@ -76,7 +77,8 @@ const stateFieldNames: readonly (readonly string[])[] = [
 	['changes', 'eol', 'isEolChange', 'versionId', 'isUndoing', 'isRedoing', 'isFlush', 'detailedReasons', 'detailedReasonsChangeLengths'],
 	['_store', '_actual', 'event', '_deferredCnt', '_shouldFireDeferred', '_affectsMinimap', '_affectsOverviewRuler', '_affectedInjectedTextLines', '_affectedLineHeights', '_affectedFontLines', '_affectsGlyphMargin', '_affectsLineNumber', 'handleBeforeFire'],
 	['affectsMinimap', 'affectsOverviewRuler', 'affectsGlyphMargin', 'affectsLineNumber'],
-	['identifier', 'range', 'text', 'forceMoveMarkers', 'isAutoWhitespaceEdit', '_isTracked']
+	['identifier', 'range', 'text', 'forceMoveMarkers', 'isAutoWhitespaceEdit', '_isTracked'],
+	['range', 'text']
 ];
 
 /** Installs ownership for subsequently constructed AST nodes; existing nodes retain their owners. */

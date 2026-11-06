@@ -58,7 +58,7 @@ import { IRustModelOptionsControllerHost, RustModelOptionsControllerOperation, t
 import { IRustModelSearchHost, IRustModelSearchModule, RustModelSearchOperation, tryRustModelSearch } from './rustModelSearch.js';
 import { ownRustTextModel, releaseRustTextModel } from './rustModelState.js';
 import { IRustModelEditValidationHost, RustModelEditValidationOperation, tryRustModelEditValidation } from './rustModelEditValidation.js';
-import { IRustModelEditingHost, IRustModelEditingModule, RustModelEditingOperation, tryRustModelEditing } from './rustModelEditing.js';
+import { IRustModelEditingHost, IRustModelEditingModule, ownRustPreparedModelEdit, RustModelEditingOperation, tryRustModelEditing } from './rustModelEditing.js';
 import { IRustModelContentEventsHost, ownRustModelContentEmitter, releaseRustModelContentEmitter, RustModelContentEventsOperation, tryRustModelContentEvents } from './rustModelContentEvents.js';
 import { ownRustModelContentData } from './rustModelEventData.js';
 import { IRustAffectedDecorationLine, IRustModelDecorationEventsHost, ownRustModelDecorationEmitter, ownRustModelDecorationEvent, releaseRustModelDecorationEmitter, RustModelDecorationEventsOperation, rustModelDecorationEventFields, tryRustModelDecorationEvents } from './rustModelDecorationEvents.js';
@@ -1649,7 +1649,42 @@ export class TextModel extends Disposable implements model.ITextModel, IDecorati
 			rangeMethod: () => Range,
 			positionField: (position, index) => index === 0 ? position.lineNumber : position.column,
 			range: (method, first, second, third, fourth) => new method(first, second, third, fourth),
-			edit: (range, text) => ({ range, text }),
+			edit: (range, text) => ownRustPreparedModelEdit({ range, text }),
+			trimEnabled: () => this._options.trimAutoWhitespace,
+			trimLines: () => this._trimAutoWhitespaceLines,
+			incoming: operations => operations.map(operation => module.prepare_model_incoming_edit(host, operation)),
+			length: value => value.length,
+			less: (index, length) => index < length,
+			selection: (selections, index) => selections[index],
+			selectionField: (selection, index) => index === 0 ? selection.endLineNumber : selection.startLineNumber,
+			incomingRange: (edits, index) => edits[index].range,
+			incomingText: (edits, index) => edits[index].text,
+			rangeField: (range, index) => {
+				switch (index) {
+					case 0: return range.startLineNumber;
+					case 1: return range.startColumn;
+					case 2: return range.endLineNumber;
+					default: throw new BugIndicatingError('Unsupported model edit range field');
+				}
+			},
+			greater: (first, second) => first > second,
+			below: (first, second) => first < second,
+			trimLength: () => this._trimAutoWhitespaceLines!.length,
+			trimLine: index => this._trimAutoWhitespaceLines![index],
+			maxColumn: line => this.getLineMaxColumn(line),
+			empty: range => range.isEmpty(),
+			charMethod: text => { const method = text.charAt; return index => Reflect.apply(method, text, [index]); },
+			char: (method, index) => method(index),
+			minusOne: value => value - 1,
+			trimRange: (line, column) => new Range(line, 1, line, column),
+			appendMethod: operations => { const method = operations.push; return edit => { Reflect.apply(method, operations, [edit]); }; },
+			trimEdit: range => new model.ValidAnnotatedEditOperation(null, range, null, false, false, false),
+			append: (method, edit) => method(edit),
+			clearTrim: () => { this._trimAutoWhitespaceLines = null; },
+			commandPush: (before, operations, cursor, group, reason) => this._commandManager.pushEditOperation(before, operations, cursor, group, reason),
+			validateRangeMethod: () => { const method = this.validateRange; return range => Reflect.apply(method, this, [range]); },
+			operationField: (operation, index) => index === 0 ? operation.range : operation.text,
+			validateRange: (method, range) => method(range),
 		};
 		return host;
 	}
@@ -1789,6 +1824,8 @@ export class TextModel extends Disposable implements model.ITextModel, IDecorati
 	}
 
 	private _pushEditOperations(beforeCursorState: Selection[] | null, editOperations: model.ValidAnnotatedEditOperation[], cursorStateComputer: model.ICursorStateComputer | null, group?: UndoRedoGroup, reason?: TextModelEditSource): Selection[] | null {
+		const rust = tryRustModelEditing<Selection[] | null>(RustModelEditingOperation.PushPrepared, module => this._createRustModelEditingHost(module), beforeCursorState, editOperations, cursorStateComputer, group, reason);
+		if (rust) { return rust.value; }
 		if (this._options.trimAutoWhitespace && this._trimAutoWhitespaceLines) {
 			// Go through each saved line number and insert a trim whitespace edit
 			// if it is safe to do so (no conflicts with other edits).

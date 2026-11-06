@@ -107,6 +107,82 @@ extern "C" {
 	) -> Result<JsValue, JsValue>;
 	#[wasm_bindgen(method, catch, js_name = edit)]
 	fn edit(this: &EditingHost, range: &JsValue, text: &JsValue) -> Result<JsValue, JsValue>;
+	#[wasm_bindgen(method, catch, js_name = trimEnabled)]
+	fn trim_enabled(this: &EditingHost) -> Result<JsValue, JsValue>;
+	#[wasm_bindgen(method, catch, js_name = trimLines)]
+	fn trim_lines(this: &EditingHost) -> Result<JsValue, JsValue>;
+	#[wasm_bindgen(method, catch, js_name = incoming)]
+	fn incoming(this: &EditingHost, operations: &JsValue) -> Result<JsValue, JsValue>;
+	#[wasm_bindgen(method, catch, js_name = length)]
+	fn length(this: &EditingHost, value: &JsValue) -> Result<JsValue, JsValue>;
+	#[wasm_bindgen(method, catch, js_name = less)]
+	fn less(this: &EditingHost, index: f64, length: &JsValue) -> Result<bool, JsValue>;
+	#[wasm_bindgen(method, catch, js_name = selection)]
+	fn selection(this: &EditingHost, selections: &JsValue, index: f64) -> Result<JsValue, JsValue>;
+	#[wasm_bindgen(method, catch, js_name = selectionField)]
+	fn selection_field(
+		this: &EditingHost,
+		selection: &JsValue,
+		index: u32,
+	) -> Result<JsValue, JsValue>;
+	#[wasm_bindgen(method, catch, js_name = incomingRange)]
+	fn incoming_range(this: &EditingHost, edits: &JsValue, index: f64) -> Result<JsValue, JsValue>;
+	#[wasm_bindgen(method, catch, js_name = incomingText)]
+	fn incoming_text(this: &EditingHost, edits: &JsValue, index: f64) -> Result<JsValue, JsValue>;
+	#[wasm_bindgen(method, catch, js_name = rangeField)]
+	fn range_field(this: &EditingHost, range: &JsValue, index: u32) -> Result<JsValue, JsValue>;
+	#[wasm_bindgen(method, catch, js_name = greater)]
+	fn greater(this: &EditingHost, first: &JsValue, second: &JsValue) -> Result<bool, JsValue>;
+	#[wasm_bindgen(method, catch, js_name = below)]
+	fn below(this: &EditingHost, first: &JsValue, second: &JsValue) -> Result<bool, JsValue>;
+	#[wasm_bindgen(method, catch, js_name = trimLength)]
+	fn trim_length(this: &EditingHost) -> Result<JsValue, JsValue>;
+	#[wasm_bindgen(method, catch, js_name = trimLine)]
+	fn trim_line(this: &EditingHost, index: f64) -> Result<JsValue, JsValue>;
+	#[wasm_bindgen(method, catch, js_name = maxColumn)]
+	fn max_column(this: &EditingHost, line: &JsValue) -> Result<JsValue, JsValue>;
+	#[wasm_bindgen(method, catch, js_name = empty)]
+	fn empty(this: &EditingHost, range: &JsValue) -> Result<JsValue, JsValue>;
+	#[wasm_bindgen(method, catch, js_name = charMethod)]
+	fn char_method(this: &EditingHost, text: &JsValue) -> Result<JsValue, JsValue>;
+	#[wasm_bindgen(method, catch, js_name = char)]
+	fn char(this: &EditingHost, method: &JsValue, index: &JsValue) -> Result<JsValue, JsValue>;
+	#[wasm_bindgen(method, catch, js_name = minusOne)]
+	fn minus_one(this: &EditingHost, value: &JsValue) -> Result<JsValue, JsValue>;
+	#[wasm_bindgen(method, catch, js_name = trimRange)]
+	fn trim_range(this: &EditingHost, line: &JsValue, column: &JsValue)
+	-> Result<JsValue, JsValue>;
+	#[wasm_bindgen(method, catch, js_name = appendMethod)]
+	fn append_method(this: &EditingHost, operations: &JsValue) -> Result<JsValue, JsValue>;
+	#[wasm_bindgen(method, catch, js_name = trimEdit)]
+	fn trim_edit(this: &EditingHost, range: &JsValue) -> Result<JsValue, JsValue>;
+	#[wasm_bindgen(method, catch, js_name = append)]
+	fn append(this: &EditingHost, method: &JsValue, edit: &JsValue) -> Result<(), JsValue>;
+	#[wasm_bindgen(method, catch, js_name = clearTrim)]
+	fn clear_trim(this: &EditingHost) -> Result<(), JsValue>;
+	#[wasm_bindgen(method, catch, js_name = commandPush)]
+	fn command_push(
+		this: &EditingHost,
+		before: &JsValue,
+		operations: &JsValue,
+		cursor: &JsValue,
+		group: &JsValue,
+		reason: &JsValue,
+	) -> Result<JsValue, JsValue>;
+	#[wasm_bindgen(method, catch, js_name = validateRangeMethod)]
+	fn validate_range_method(this: &EditingHost) -> Result<JsValue, JsValue>;
+	#[wasm_bindgen(method, catch, js_name = operationField)]
+	fn operation_field(
+		this: &EditingHost,
+		operation: &JsValue,
+		index: u32,
+	) -> Result<JsValue, JsValue>;
+	#[wasm_bindgen(method, catch, js_name = validateRange)]
+	fn validate_range(
+		this: &EditingHost,
+		method: &JsValue,
+		range: &JsValue,
+	) -> Result<JsValue, JsValue>;
 }
 
 struct Host(EditingHost);
@@ -259,12 +335,112 @@ impl ModelEditingHost for Host {
 	fn edit(&self, range: &JsValue, text: &JsValue) -> Result<JsValue, JsValue> {
 		self.0.edit(range, text)
 	}
+	fn truthy(&self, value: &JsValue) -> bool {
+		value.is_truthy()
+	}
+	fn trim_enabled(&self) -> Result<JsValue, JsValue> {
+		self.0.trim_enabled()
+	}
+	fn trim_lines(&self) -> Result<JsValue, JsValue> {
+		self.0.trim_lines()
+	}
+	fn incoming(&self, operations: &JsValue) -> Result<JsValue, JsValue> {
+		self.0.incoming(operations)
+	}
+	fn length(&self, value: &JsValue) -> Result<JsValue, JsValue> {
+		self.0.length(value)
+	}
+	fn less(&self, index: f64, length: &JsValue) -> Result<bool, JsValue> {
+		match length.as_f64() {
+			Some(length) => Ok(index < length),
+			None => self.0.less(index, length),
+		}
+	}
+	fn selection(&self, selections: &JsValue, index: f64) -> Result<JsValue, JsValue> {
+		self.0.selection(selections, index)
+	}
+	fn selection_field(&self, selection: &JsValue, index: u32) -> Result<JsValue, JsValue> {
+		self.0.selection_field(selection, index)
+	}
+	fn incoming_range(&self, edits: &JsValue, index: f64) -> Result<JsValue, JsValue> {
+		self.0.incoming_range(edits, index)
+	}
+	fn incoming_text(&self, edits: &JsValue, index: f64) -> Result<JsValue, JsValue> {
+		self.0.incoming_text(edits, index)
+	}
+	fn range_field(&self, range: &JsValue, index: u32) -> Result<JsValue, JsValue> {
+		self.0.range_field(range, index)
+	}
+	fn greater(&self, first: &JsValue, second: &JsValue) -> Result<bool, JsValue> {
+		match (first.as_f64(), second.as_f64()) {
+			(Some(first), Some(second)) => Ok(first > second),
+			_ => self.0.greater(first, second),
+		}
+	}
+	fn below(&self, first: &JsValue, second: &JsValue) -> Result<bool, JsValue> {
+		match (first.as_f64(), second.as_f64()) {
+			(Some(first), Some(second)) => Ok(first < second),
+			_ => self.0.below(first, second),
+		}
+	}
+	fn trim_length(&self) -> Result<JsValue, JsValue> {
+		self.0.trim_length()
+	}
+	fn trim_line(&self, index: f64) -> Result<JsValue, JsValue> {
+		self.0.trim_line(index)
+	}
+	fn max_column(&self, line: &JsValue) -> Result<JsValue, JsValue> {
+		self.0.max_column(line)
+	}
+	fn empty(&self, range: &JsValue) -> Result<JsValue, JsValue> {
+		self.0.empty(range)
+	}
+	fn char_method(&self, text: &JsValue) -> Result<JsValue, JsValue> {
+		self.0.char_method(text)
+	}
+	fn char(&self, method: &JsValue, index: &JsValue) -> Result<JsValue, JsValue> {
+		self.0.char(method, index)
+	}
+	fn minus_one(&self, value: &JsValue) -> Result<JsValue, JsValue> {
+		match value.as_f64() {
+			Some(value) => Ok(JsValue::from_f64(value - 1.0)),
+			None => self.0.minus_one(value),
+		}
+	}
+	fn trim_range(&self, line: &JsValue, column: &JsValue) -> Result<JsValue, JsValue> {
+		self.0.trim_range(line, column)
+	}
+	fn append_method(&self, operations: &JsValue) -> Result<JsValue, JsValue> {
+		self.0.append_method(operations)
+	}
+	fn trim_edit(&self, range: &JsValue) -> Result<JsValue, JsValue> {
+		self.0.trim_edit(range)
+	}
+	fn append(&self, method: &JsValue, edit: &JsValue) -> Result<(), JsValue> {
+		self.0.append(method, edit)
+	}
+	fn clear_trim(&self) -> Result<(), JsValue> {
+		self.0.clear_trim()
+	}
+	fn command_push(&self, args: &[JsValue; 6]) -> Result<JsValue, JsValue> {
+		self.0
+			.command_push(&args[0], &args[1], &args[2], &args[3], &args[4])
+	}
+	fn validate_range_method(&self) -> Result<JsValue, JsValue> {
+		self.0.validate_range_method()
+	}
+	fn operation_field(&self, operation: &JsValue, index: u32) -> Result<JsValue, JsValue> {
+		self.0.operation_field(operation, index)
+	}
+	fn validate_range(&self, method: &JsValue, range: &JsValue) -> Result<JsValue, JsValue> {
+		self.0.validate_range(method, range)
+	}
 }
 
 /// Identifies public editing control independently of buffer transaction storage.
 #[wasm_bindgen]
 pub fn model_editing_abi_version() -> u32 {
-	1
+	2
 }
 
 /// Runs original edit nesting, defaults, undo flags, and finally error precedence.
@@ -294,6 +470,7 @@ pub fn run_model_editing(
 		9 => O::CanUndo,
 		10 => O::Redo,
 		11 => O::CanRedo,
+		12 => O::PushPrepared,
 		_ => return Err(JsValue::from_str("Unsupported model editing operation")),
 	};
 	vscode_editor_core::run_model_editing(
@@ -311,4 +488,13 @@ pub fn map_model_undo_change(
 	undo: bool,
 ) -> Result<JsValue, JsValue> {
 	vscode_editor_core::map_model_undo_change(&Host(host), &change, undo)
+}
+
+/// Validates one mapped preparation entry without replacing source range/text identities.
+#[wasm_bindgen]
+pub fn prepare_model_incoming_edit(
+	host: EditingHost,
+	operation: JsValue,
+) -> Result<JsValue, JsValue> {
+	vscode_editor_core::prepare_model_incoming_edit(&Host(host), &operation)
 }

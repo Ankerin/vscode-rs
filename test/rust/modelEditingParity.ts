@@ -252,7 +252,7 @@ test('Rust model editing executes all transitions and atomically rolls back stal
 			model.undo(); model.redo(); model.canUndo(); model.canRedo();
 		} finally { model.dispose(); }
 	}, false, module);
-	assert.deepStrictEqual([...calls].sort((a, b) => a - b), Array.from({ length: 12 }, (_, index) => index));
+	assert.deepStrictEqual([...calls].sort((a, b) => a - b), Array.from({ length: 13 }, (_, index) => index));
 	assert.throws(() => registerRustTextBuffer({ ...rust, model_editing_abi_version: () => 0 }), /transaction contract/);
 	assert.strictEqual(tryRustModelEditing(RustModelEditingOperation.PushStack, () => { throw new Error('Unavailable editing must not create a host'); }), undefined);
 	const registration = registerRustModelEditing(rust);

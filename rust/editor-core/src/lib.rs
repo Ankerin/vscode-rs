@@ -136,7 +136,8 @@ pub use model_edit_validation::{
 	ModelEditValidationHost, validate_model_edit, validate_model_edits,
 };
 pub use model_editing::{
-	ModelEditingHost, ModelEditingOperation, map_model_undo_change, run_model_editing,
+	ModelEditingHost, ModelEditingOperation, map_model_undo_change, prepare_model_incoming_edit,
+	run_model_editing,
 };
 pub use model_edits::{
 	MAX_MODEL_EDIT_UNITS, MAX_MODEL_EDITS, ModelEdit, ModelEditOptions, ModelTextFlags,

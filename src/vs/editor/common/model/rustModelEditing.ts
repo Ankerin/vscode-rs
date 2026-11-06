@@ -12,14 +12,18 @@ import type { Selection } from '../core/selection.js';
 import type { TextChange } from '../core/textChange.js';
 import type { ICursorStateComputer, IIdentifiedSingleEditOperation, IValidEditOperation, ValidAnnotatedEditOperation } from '../model.js';
 import type { TextModelEditSource } from '../textModelEditSource.js';
+import { ownRustBracketNumericState, RustBracketNumericStateKind } from './bracketPairsTextModelPart/bracketPairsTree/rustBracketNodeMetadata.js';
 
 /** Transaction operations share original event/service lifetimes. */
-export const enum RustModelEditingOperation { PushStack, PopStack, PushEOL, PushEdits, ApplyEdits, UndoEdits, RedoEdits, UndoRedoEdits, Undo, CanUndo, Redo, CanRedo }
+export const enum RustModelEditingOperation { PushStack, PopStack, PushEOL, PushEdits, ApplyEdits, UndoEdits, RedoEdits, UndoRedoEdits, Undo, CanUndo, Redo, CanRedo, PushPrepared }
 type PushMethod = (before: Selection[] | null, operations: ValidAnnotatedEditOperation[], cursor: ICursorStateComputer | null, group?: UndoRedoGroup, reason?: TextModelEditSource) => Selection[] | null;
 type ApplyMethod = (operations: ValidAnnotatedEditOperation[], undo: boolean, reason: TextModelEditSource, selection?: Selection[] | null) => void | IValidEditOperation[];
 type PositionMethod = (offset: number) => Position;
 type EditingValue = undefined | null | number | boolean | readonly IIdentifiedSingleEditOperation[] | TextChange[] | Selection[] | ICursorStateComputer | UndoRedoGroup | TextModelEditSource;
 type EditingResult = void | boolean | Selection[] | null | IValidEditOperation[] | Promise<void>;
+
+/** Fresh mapped edit fields retain original validated-range and replacement-text identities. */
+export interface IRustPreparedModelEdit { range: Range; text: string | null }
 
 /** Captured private methods preserve lookup before validation, reason factories, and source getters. */
 export interface IRustModelEditingHost {
@@ -52,7 +56,36 @@ export interface IRustModelEditingHost {
 	rangeMethod(): typeof Range;
 	positionField(position: Position, index: number): number;
 	range(method: typeof Range, first: number, second: number, third: number, fourth: number): Range;
-	edit(range: Range, text: string): ISingleEditOperation;
+	edit(range: Range, text: string | null): IRustPreparedModelEdit;
+
+	trimEnabled(): boolean;
+	trimLines(): number[] | null;
+	incoming(operations: ValidAnnotatedEditOperation[]): IRustPreparedModelEdit[];
+	length(value: string | readonly Selection[] | readonly IRustPreparedModelEdit[]): number;
+	less(index: number, length: number): boolean;
+	selection(selections: Selection[], index: number): Selection;
+	selectionField(selection: Selection, index: number): number;
+	incomingRange(edits: IRustPreparedModelEdit[], index: number): Range;
+	incomingText(edits: IRustPreparedModelEdit[], index: number): string | null;
+	rangeField(range: Range, index: number): number;
+	greater(first: number, second: number): boolean;
+	below(first: number, second: number): boolean;
+	trimLength(): number;
+	trimLine(index: number): number;
+	maxColumn(line: number): number;
+	empty(range: Range): boolean;
+	charMethod(text: string): (index: number) => string;
+	char(method: (index: number) => string, index: number): string;
+	minusOne(value: number): number;
+	trimRange(line: number, column: number): Range;
+	appendMethod(operations: ValidAnnotatedEditOperation[]): (edit: ValidAnnotatedEditOperation) => void;
+	trimEdit(range: Range): ValidAnnotatedEditOperation;
+	append(method: (edit: ValidAnnotatedEditOperation) => void, edit: ValidAnnotatedEditOperation): void;
+	clearTrim(): void;
+	commandPush(before: Selection[] | null, operations: ValidAnnotatedEditOperation[], cursor: ICursorStateComputer | null, group: UndoRedoGroup | undefined, reason: TextModelEditSource | undefined): Selection[] | null;
+	validateRangeMethod(): (range: Range) => Range;
+	operationField(operation: ValidAnnotatedEditOperation, index: number): Range | string | null;
+	validateRange(method: (range: Range) => Range, range: Range): Range;
 }
 
 /** Public transitions return the original service Promise, cursor, and inverse-edit identities. */
@@ -60,12 +93,13 @@ export interface IRustModelEditingModule {
 	model_editing_abi_version(): number;
 	run_model_editing(host: IRustModelEditingHost, operation: RustModelEditingOperation, first: EditingValue, second: EditingValue, third: EditingValue, fourth: EditingValue, fifth: EditingValue, sixth: EditingValue): EditingResult;
 	map_model_undo_change(host: IRustModelEditingHost, change: TextChange, undo: boolean): ISingleEditOperation;
+	prepare_model_incoming_edit(host: IRustModelEditingHost, operation: ValidAnnotatedEditOperation): IRustPreparedModelEdit;
 }
 let registeredModule: IRustModelEditingModule | undefined;
 
 /** Rejects stale transaction bindings before enabling any public edit path. */
 export function registerRustModelEditing(module: IRustModelEditingModule): IDisposable {
-	if (typeof module.model_editing_abi_version !== 'function' || module.model_editing_abi_version() !== 1 || typeof module.run_model_editing !== 'function' || typeof module.map_model_undo_change !== 'function') {
+	if (typeof module.model_editing_abi_version !== 'function' || module.model_editing_abi_version() !== 2 || typeof module.run_model_editing !== 'function' || typeof module.map_model_undo_change !== 'function' || typeof module.prepare_model_incoming_edit !== 'function') {
 		throw new Error('The Rust model editing bindings do not match the transaction contract');
 	}
 	if (registeredModule) { throw new Error('A Rust model editing module is already registered'); }
@@ -78,3 +112,6 @@ export function tryRustModelEditing<T extends EditingResult>(operation: RustMode
 	if (!registeredModule) { return undefined; }
 	return { value: registeredModule.run_model_editing(createHost(registeredModule), operation, first, second, third, fourth, fifth, sixth) as T };
 }
+
+/** Transfers fresh mapped edit records through the shared descriptor/reference contract. */
+export function ownRustPreparedModelEdit<T extends object>(edit: T): T { return ownRustBracketNumericState(edit, RustBracketNumericStateKind.PreparedModelEdit); }

@@ -20,6 +20,7 @@ pub enum ModelEditingOperation {
 	CanUndo,
 	Redo,
 	CanRedo,
+	PushPrepared,
 }
 
 /// Existing event, service, array, and factory methods remain borrowed caught capabilities.
@@ -98,6 +99,52 @@ pub trait ModelEditingHost {
 		values: &[Self::Value; 4],
 	) -> Result<Self::Value, Self::Error>;
 	fn edit(&self, range: &Self::Value, text: &Self::Value) -> Result<Self::Value, Self::Error>;
+
+	fn truthy(&self, value: &Self::Value) -> bool;
+	fn trim_enabled(&self) -> Result<Self::Value, Self::Error>;
+	fn trim_lines(&self) -> Result<Self::Value, Self::Error>;
+	fn incoming(&self, operations: &Self::Value) -> Result<Self::Value, Self::Error>;
+	fn length(&self, value: &Self::Value) -> Result<Self::Value, Self::Error>;
+	fn less(&self, index: f64, length: &Self::Value) -> Result<bool, Self::Error>;
+	fn selection(&self, selections: &Self::Value, index: f64) -> Result<Self::Value, Self::Error>;
+	fn selection_field(
+		&self,
+		selection: &Self::Value,
+		index: u32,
+	) -> Result<Self::Value, Self::Error>;
+	fn incoming_range(&self, edits: &Self::Value, index: f64) -> Result<Self::Value, Self::Error>;
+	fn incoming_text(&self, edits: &Self::Value, index: f64) -> Result<Self::Value, Self::Error>;
+	fn range_field(&self, range: &Self::Value, index: u32) -> Result<Self::Value, Self::Error>;
+	fn greater(&self, first: &Self::Value, second: &Self::Value) -> Result<bool, Self::Error>;
+	fn below(&self, first: &Self::Value, second: &Self::Value) -> Result<bool, Self::Error>;
+	fn trim_length(&self) -> Result<Self::Value, Self::Error>;
+	fn trim_line(&self, index: f64) -> Result<Self::Value, Self::Error>;
+	fn max_column(&self, line: &Self::Value) -> Result<Self::Value, Self::Error>;
+	fn empty(&self, range: &Self::Value) -> Result<Self::Value, Self::Error>;
+	fn char_method(&self, text: &Self::Value) -> Result<Self::Value, Self::Error>;
+	fn char(&self, method: &Self::Value, index: &Self::Value) -> Result<Self::Value, Self::Error>;
+	fn minus_one(&self, value: &Self::Value) -> Result<Self::Value, Self::Error>;
+	fn trim_range(
+		&self,
+		line: &Self::Value,
+		column: &Self::Value,
+	) -> Result<Self::Value, Self::Error>;
+	fn append_method(&self, operations: &Self::Value) -> Result<Self::Value, Self::Error>;
+	fn trim_edit(&self, range: &Self::Value) -> Result<Self::Value, Self::Error>;
+	fn append(&self, method: &Self::Value, edit: &Self::Value) -> Result<(), Self::Error>;
+	fn clear_trim(&self) -> Result<(), Self::Error>;
+	fn command_push(&self, args: &[Self::Value; 6]) -> Result<Self::Value, Self::Error>;
+	fn validate_range_method(&self) -> Result<Self::Value, Self::Error>;
+	fn operation_field(
+		&self,
+		operation: &Self::Value,
+		index: u32,
+	) -> Result<Self::Value, Self::Error>;
+	fn validate_range(
+		&self,
+		method: &Self::Value,
+		range: &Self::Value,
+	) -> Result<Self::Value, Self::Error>;
 }
 
 /// Maps one undo/redo change without losing virtual-method and constructor lookup order.
@@ -129,6 +176,7 @@ pub fn run_model_editing<H: ModelEditingHost>(
 ) -> Result<H::Value, H::Error> {
 	use ModelEditingOperation as O;
 	match operation {
+		O::PushPrepared => return push_prepared_model_edits(host, args),
 		O::PushStack | O::PopStack => {
 			host.stack(matches!(operation, O::PushStack))?;
 		}
@@ -242,6 +290,125 @@ fn apply_with_reason<H: ModelEditingHost>(
 	}
 }
 
+/// Prepares one mapped incoming edit while preserving method lookup before range getters.
+pub fn prepare_model_incoming_edit<H: ModelEditingHost>(
+	host: &H,
+	operation: &H::Value,
+) -> Result<H::Value, H::Error> {
+	let method = host.validate_range_method()?;
+	let range = host.validate_range(&method, &host.operation_field(operation, 0)?)?;
+	let text = host.operation_field(operation, 1)?;
+	host.edit(&range, &text)
+}
+
+fn newline_insertion<H: ModelEditingHost>(
+	host: &H,
+	range: &H::Value,
+	text: &H::Value,
+	line: &H::Value,
+	column: &H::Value,
+	before: bool,
+) -> Result<bool, H::Error> {
+	if !host.same(line, &host.range_field(range, 0)?)
+		|| !host.same(&host.range_field(range, 1)?, column)
+		|| !host.truthy(&host.empty(range)?)
+		|| !host.truthy(text)
+		|| !host.greater(&host.length(text)?, &host.number(0.0))?
+	{
+		return Ok(false);
+	}
+	let method = host.char_method(text)?;
+	let index = if before {
+		host.minus_one(&host.length(text)?)?
+	} else {
+		host.number(0.0)
+	};
+	Ok(host.same(&host.char(&method, &index)?, &host.lf()))
+}
+
+/// Preserves cursor proximity, newline exceptions, trim conflicts, live arrays, and snapshot capture.
+pub fn push_prepared_model_edits<H: ModelEditingHost>(
+	host: &H,
+	args: &[H::Value; 6],
+) -> Result<H::Value, H::Error> {
+	if host.truthy(&host.trim_enabled()?) && host.truthy(&host.trim_lines()?) {
+		let incoming = host.incoming(&args[1])?;
+		let mut near = true;
+		if host.truthy(&args[0]) {
+			let length = host.length(&args[0])?;
+			let mut index = 0.0;
+			while host.less(index, &length)? {
+				let selection = host.selection(&args[0], index)?;
+				let mut found = false;
+				let edit_length = host.length(&incoming)?;
+				let mut edit_index = 0.0;
+				while host.less(edit_index, &edit_length)? {
+					let range = host.incoming_range(&incoming, edit_index)?;
+					let above = host.greater(
+						&host.range_field(&range, 0)?,
+						&host.selection_field(&selection, 0)?,
+					)?;
+					let below = host.greater(
+						&host.selection_field(&selection, 1)?,
+						&host.range_field(&range, 2)?,
+					)?;
+					if !above && !below {
+						found = true;
+						break;
+					}
+					edit_index += 1.0;
+				}
+				if !found {
+					near = false;
+					break;
+				}
+				index += 1.0;
+			}
+		}
+		if near {
+			let length = host.trim_length()?;
+			let mut index = 0.0;
+			while host.less(index, &length)? {
+				let line = host.trim_line(index)?;
+				let column = host.max_column(&line)?;
+				let mut allowed = true;
+				let edit_length = host.length(&incoming)?;
+				let mut edit_index = 0.0;
+				while host.less(edit_index, &edit_length)? {
+					let range = host.incoming_range(&incoming, edit_index)?;
+					let text = host.incoming_text(&incoming, edit_index)?;
+					if host.below(&line, &host.range_field(&range, 0)?)?
+						|| host.greater(&line, &host.range_field(&range, 2)?)?
+					{
+						edit_index += 1.0;
+						continue;
+					}
+					if newline_insertion(host, &range, &text, &line, &column, false)?
+						|| newline_insertion(host, &range, &text, &line, &host.number(1.0), true)?
+					{
+						edit_index += 1.0;
+						continue;
+					}
+					allowed = false;
+					break;
+				}
+				if allowed {
+					let range = host.trim_range(&line, &column)?;
+					let method = host.append_method(&args[1])?;
+					let edit = host.trim_edit(&range)?;
+					host.append(&method, &edit)?;
+				}
+				index += 1.0;
+			}
+		}
+		host.clear_trim()?;
+	}
+	if host.null(&host.snapshot()?) {
+		host.store_snapshot(&host.create_snapshot()?)?;
+	}
+	host.command_push(args)
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -251,6 +418,9 @@ mod tests {
 	struct Host {
 		failures: Vec<&'static str>,
 		calls: RefCell<Vec<(&'static str, Vec<f64>)>>,
+		trim: bool,
+		near: bool,
+		newline: bool,
 	}
 	impl Host {
 		fn call(&self, name: &'static str, args: &[f64]) -> Result<f64, &'static str> {
@@ -259,13 +429,55 @@ mod tests {
 				return Err(name);
 			}
 			Ok(match name {
+				"trim_enabled" => {
+					if self.trim {
+						1.0
+					} else {
+						0.0
+					}
+				}
+				"trim_lines" => 7.0,
+				"incoming" => 8.0,
+				"length" => {
+					if args[0] == 30.0 {
+						2.0
+					} else {
+						1.0
+					}
+				}
+				"selection" => 9.0,
+				"selection_field" => {
+					if self.near {
+						2.0
+					} else {
+						99.0
+					}
+				}
+				"incoming_range" => 10.0,
+				"incoming_text" => 30.0,
+				"range_field" => {
+					if args[1] == 1.0 {
+						3.0
+					} else {
+						2.0
+					}
+				}
+				"trim_line" => 2.0,
+				"max_column" => 3.0,
+				"char" => {
+					if self.newline {
+						2.0
+					} else {
+						0.0
+					}
+				}
 				"eol" => 2.0,
 				"snapshot" => 0.0,
 				"validate" => 48.0,
 				"push_method" => 55.0,
 				"apply_method" => 66.0,
 				"source" => 90.0,
-				"apply" | "push" | "service" => 70.0,
+				"apply" | "push" | "service" | "command_push" => 70.0,
 				_ => 1.0,
 			})
 		}
@@ -431,6 +643,97 @@ mod tests {
 		fn edit(&self, range: &f64, text: &f64) -> Result<f64, Self::Error> {
 			self.call("edit", &[*range, *text])
 		}
+		fn truthy(&self, value: &f64) -> bool {
+			*value != 0.0 && !value.is_nan()
+		}
+		fn trim_enabled(&self) -> Result<f64, Self::Error> {
+			self.call("trim_enabled", &[])
+		}
+		fn trim_lines(&self) -> Result<f64, Self::Error> {
+			self.call("trim_lines", &[])
+		}
+		fn incoming(&self, operations: &f64) -> Result<f64, Self::Error> {
+			self.call("incoming", &[*operations])
+		}
+		fn length(&self, value: &f64) -> Result<f64, Self::Error> {
+			self.call("length", &[*value])
+		}
+		fn less(&self, index: f64, length: &f64) -> Result<bool, Self::Error> {
+			self.call("less", &[index, *length])?;
+			Ok(index < *length)
+		}
+		fn selection(&self, selections: &f64, index: f64) -> Result<f64, Self::Error> {
+			self.call("selection", &[*selections, index])
+		}
+		fn selection_field(&self, selection: &f64, index: u32) -> Result<f64, Self::Error> {
+			self.call("selection_field", &[*selection, f64::from(index)])
+		}
+		fn incoming_range(&self, edits: &f64, index: f64) -> Result<f64, Self::Error> {
+			self.call("incoming_range", &[*edits, index])
+		}
+		fn incoming_text(&self, edits: &f64, index: f64) -> Result<f64, Self::Error> {
+			self.call("incoming_text", &[*edits, index])
+		}
+		fn range_field(&self, range: &f64, index: u32) -> Result<f64, Self::Error> {
+			self.call("range_field", &[*range, f64::from(index)])
+		}
+		fn greater(&self, first: &f64, second: &f64) -> Result<bool, Self::Error> {
+			self.call("greater", &[*first, *second])?;
+			Ok(*first > *second)
+		}
+		fn below(&self, first: &f64, second: &f64) -> Result<bool, Self::Error> {
+			self.call("below", &[*first, *second])?;
+			Ok(*first < *second)
+		}
+		fn trim_length(&self) -> Result<f64, Self::Error> {
+			self.call("trim_length", &[])
+		}
+		fn trim_line(&self, index: f64) -> Result<f64, Self::Error> {
+			self.call("trim_line", &[index])
+		}
+		fn max_column(&self, line: &f64) -> Result<f64, Self::Error> {
+			self.call("max_column", &[*line])
+		}
+		fn empty(&self, range: &f64) -> Result<f64, Self::Error> {
+			self.call("empty", &[*range])
+		}
+		fn char_method(&self, text: &f64) -> Result<f64, Self::Error> {
+			self.call("char_method", &[*text])
+		}
+		fn char(&self, method: &f64, index: &f64) -> Result<f64, Self::Error> {
+			self.call("char", &[*method, *index])
+		}
+		fn minus_one(&self, value: &f64) -> Result<f64, Self::Error> {
+			self.call("minus_one", &[*value])?;
+			Ok(*value - 1.0)
+		}
+		fn trim_range(&self, line: &f64, column: &f64) -> Result<f64, Self::Error> {
+			self.call("trim_range", &[*line, *column])
+		}
+		fn append_method(&self, operations: &f64) -> Result<f64, Self::Error> {
+			self.call("append_method", &[*operations])
+		}
+		fn trim_edit(&self, range: &f64) -> Result<f64, Self::Error> {
+			self.call("trim_edit", &[*range])
+		}
+		fn append(&self, method: &f64, edit: &f64) -> Result<(), Self::Error> {
+			self.call("append", &[*method, *edit]).map(|_| ())
+		}
+		fn clear_trim(&self) -> Result<(), Self::Error> {
+			self.call("clear_trim", &[]).map(|_| ())
+		}
+		fn command_push(&self, args: &[f64; 6]) -> Result<f64, Self::Error> {
+			self.call("command_push", &args[..5])
+		}
+		fn validate_range_method(&self) -> Result<f64, Self::Error> {
+			self.call("validate_range_method", &[])
+		}
+		fn operation_field(&self, operation: &f64, index: u32) -> Result<f64, Self::Error> {
+			self.call("operation_field", &[*operation, f64::from(index)])
+		}
+		fn validate_range(&self, method: &f64, range: &f64) -> Result<f64, Self::Error> {
+			self.call("validate_range", &[*method, *range])
+		}
 	}
 	#[test]
 	fn public_edit_finally_preserves_original_failure_and_cleanup_precedence() {
@@ -571,5 +874,67 @@ mod tests {
 			Ok(70.0)
 		);
 		assert_eq!(*host.calls.borrow(), [("service", vec![2.0])]);
+	}
+
+	#[test]
+	fn preparation_skips_disabled_trim_and_retains_command_result() {
+		let host = Host::default();
+		assert_eq!(
+			run_model_editing(&host, ModelEditingOperation::PushPrepared, &[3.0; 6]),
+			Ok(70.0)
+		);
+		assert_eq!(
+			host.names(),
+			[
+				"trim_enabled",
+				"snapshot",
+				"create_snapshot",
+				"store_snapshot",
+				"command_push"
+			]
+		);
+	}
+	#[test]
+	fn preparation_requires_near_cursors_and_resets_trim_after_conflicts() {
+		for near in [false, true] {
+			let host = Host {
+				trim: true,
+				near,
+				..Host::default()
+			};
+			run_model_editing(&host, ModelEditingOperation::PushPrepared, &[3.0; 6]).unwrap();
+			let names = host.names();
+			assert!(!names.contains(&"append"));
+			assert_eq!(names.contains(&"trim_line"), near);
+			assert!(names.contains(&"clear_trim"));
+		}
+	}
+	#[test]
+	fn preparation_allows_newline_insertions_and_captures_append_before_edit_creation() {
+		let host = Host {
+			trim: true,
+			near: true,
+			newline: true,
+			..Host::default()
+		};
+		run_model_editing(&host, ModelEditingOperation::PushPrepared, &[3.0; 6]).unwrap();
+		let names = host.names();
+		assert!(
+			names
+				.windows(3)
+				.any(|names| names == ["append_method", "trim_edit", "append"])
+		);
+		let host = Host {
+			failures: vec!["trim_edit"],
+			trim: true,
+			near: true,
+			newline: true,
+			..Host::default()
+		};
+		assert_eq!(
+			run_model_editing(&host, ModelEditingOperation::PushPrepared, &[3.0; 6]),
+			Err("trim_edit")
+		);
+		assert!(!host.names().contains(&"clear_trim"));
 	}
 }
