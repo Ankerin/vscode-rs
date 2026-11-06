@@ -15,6 +15,7 @@ mod bracket_lifecycle;
 mod bracket_mutation;
 mod bracket_node_metadata;
 mod bracket_node_reader;
+mod bracket_number_array;
 mod bracket_pair_collection;
 mod bracket_parser;
 mod bracket_position_mapper;
@@ -68,6 +69,7 @@ pub use bracket_node_metadata::{BracketNodeMetadata, BracketNodeNumber};
 pub use bracket_node_reader::{
 	BracketNodeReaderHost, advance_bracket_node, read_longest_bracket_node,
 };
+pub use bracket_number_array::BracketNumberArray;
 pub use bracket_pair_collection::{BracketPairCollectionHost, collect_bracket_pairs};
 pub use bracket_parser::{
 	BracketParserHost, can_reuse_bracket_parser_node, parse_bracket_child, parse_bracket_document,

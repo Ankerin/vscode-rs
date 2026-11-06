@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { IDisposable, toDisposable } from '../../../../../base/common/lifecycle.js';
+import { bracketNumberDescriptor, mergeBracketNumberDescriptor } from './bracketNumericProperties.js';
 
 /** Native numeric fields do not retain facade/child references or introduce graph ownership cycles. */
 interface IRustBracketNodeMetadata {
@@ -91,8 +92,7 @@ function ownRustBracketNumbers<T extends object>(node: T, fieldNames: readonly s
 		if (!record || index < 0 || !record.has(index)) {
 			return Reflect.getOwnPropertyDescriptor(node, key);
 		}
-		const attributes = record.attributes(index);
-		return { value: record.get(index), writable: !!(attributes & 1), enumerable: !!(attributes & 2), configurable: true };
+		return bracketNumberDescriptor(record, index);
 	};
 	try {
 		for (let index = 0; index < fieldNames.length; index++) {
@@ -124,15 +124,10 @@ function ownRustBracketNumbers<T extends object>(node: T, fieldNames: readonly s
 				return false;
 			}
 			if (record && index >= 0) {
-				// Let ECMAScript validate/merge attributes without reading or invoking property values.
-				const property = Object.create(null) as object;
-				if (current) {
-					Reflect.defineProperty(property, key, current);
-				}
-				if (!Reflect.defineProperty(property, key, descriptor)) {
+				const next = mergeBracketNumberDescriptor(key, current, descriptor);
+				if (!next) {
 					return false;
 				}
-				const next = Reflect.getOwnPropertyDescriptor(property, key)!;
 				if (next.configurable && typeof next.value === 'number') {
 					record.define(index, next.value, !!next.writable, !!next.enumerable);
 					Reflect.deleteProperty(target, key);

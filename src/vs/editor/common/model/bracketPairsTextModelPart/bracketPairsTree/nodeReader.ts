@@ -7,6 +7,7 @@ import { AstNode } from './ast.js';
 import { lengthAdd, lengthZero, Length, lengthLessThan } from './length.js';
 import { IRustBracketNodeReaderHost, tryAdvanceRustBracketNode, tryReadRustBracketNode } from './rustBracketNodeReader.js';
 import { ownRustBracketNumericState, RustBracketNumericStateKind } from './rustBracketNodeMetadata.js';
+import { ownRustBracketNumberArray } from './rustBracketNumberArray.js';
 
 /**
  * Allows to efficiently find a longest child at a given offset in a fixed node.
@@ -20,8 +21,8 @@ export class NodeReader {
 
 	constructor(node: AstNode) {
 		this.nextNodes = [node];
-		this.offsets = [lengthZero];
-		this.idxs = [];
+		this.offsets = ownRustBracketNumberArray([lengthZero]);
+		this.idxs = ownRustBracketNumberArray([]);
 		return ownRustBracketNumericState(this, RustBracketNumericStateKind.NodeReader);
 	}
 

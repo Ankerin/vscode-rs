@@ -21,6 +21,7 @@ mod bracket_lifecycle;
 mod bracket_mutation;
 mod bracket_node_metadata;
 mod bracket_node_reader;
+mod bracket_number_array;
 mod bracket_pair_collection;
 mod bracket_parser;
 mod bracket_position_mapper;
