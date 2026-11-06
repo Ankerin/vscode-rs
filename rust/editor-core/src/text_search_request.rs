@@ -78,10 +78,223 @@ pub fn create_search_find_match<H: FindMatchHost>(host: &H) -> Result<H::Value, 
 	host.make(Some(&values))
 }
 
+/// Request fields and compatibility providers retain getter order and the original regex catch.
+pub trait SearchRequestHost {
+	type Value;
+	type Error;
+	fn null(&self) -> Self::Value;
+	fn boolean(&self, value: bool) -> Self::Value;
+	fn truthy(&self, value: &Self::Value) -> bool;
+	fn empty(&self, value: &Self::Value) -> bool;
+	fn different(&self, first: &Self::Value, second: &Self::Value) -> bool;
+	fn search_string(&self) -> Result<Self::Value, Self::Error>;
+	fn is_regex(&self) -> Result<Self::Value, Self::Error>;
+	fn multiline_regex(&self, source: &Self::Value) -> Result<bool, Self::Error>;
+	fn newline_index(&self, source: &Self::Value) -> Result<Self::Value, Self::Error>;
+	fn nonnegative(&self, value: &Self::Value) -> Result<bool, Self::Error>;
+	fn create_regex(&self, multiline: bool) -> Result<Self::Value, Self::Error>;
+	fn lowercase(&self, source: &Self::Value) -> Result<Self::Value, Self::Error>;
+	fn uppercase(&self, source: &Self::Value) -> Result<Self::Value, Self::Error>;
+	fn match_case(&self) -> Result<Self::Value, Self::Error>;
+	fn word_separators(&self) -> Result<Self::Value, Self::Error>;
+	fn word_map(&self, words: &Self::Value) -> Result<Self::Value, Self::Error>;
+	fn make_data(
+		&self,
+		regex: &Self::Value,
+		words: &Self::Value,
+		simple: &Self::Value,
+	) -> Result<Self::Value, Self::Error>;
+}
+
+/// Parses an existing request, catching only original regex-construction failures.
+pub fn parse_text_search_request<H: SearchRequestHost>(host: &H) -> Result<H::Value, H::Error> {
+	if host.empty(&host.search_string()?) {
+		return Ok(host.null());
+	}
+	let multiline = if host.truthy(&host.is_regex()?) {
+		host.multiline_regex(&host.search_string()?)?
+	} else {
+		host.nonnegative(&host.newline_index(&host.search_string()?)?)?
+	};
+	let Ok(regex) = host.create_regex(multiline) else {
+		return Ok(host.null());
+	};
+	if !host.truthy(&regex) {
+		return Ok(host.null());
+	}
+	let mut simple = host.boolean(!host.truthy(&host.is_regex()?) && !multiline);
+	if host.truthy(&simple) {
+		let lower = host.lowercase(&host.search_string()?)?;
+		let upper = host.uppercase(&host.search_string()?)?;
+		if host.different(&lower, &upper) {
+			simple = host.match_case()?;
+		}
+	}
+	let words = if host.truthy(&host.word_separators()?) {
+		host.word_map(&host.word_separators()?)?
+	} else {
+		host.null()
+	};
+	let simple = if host.truthy(&simple) {
+		host.search_string()?
+	} else {
+		host.null()
+	};
+	host.make_data(&regex, &words, &simple)
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
 	use std::cell::RefCell;
+	#[derive(Debug, PartialEq)]
+	enum RequestValue {
+		Null,
+		Boolean(bool),
+		Text(String),
+		Number(f64),
+	}
+	struct Request {
+		text: &'static str,
+		regex: bool,
+		match_case: bool,
+		fail_source: bool,
+		fail_regex: bool,
+	}
+	fn request_text(value: &RequestValue) -> &str {
+		if let RequestValue::Text(value) = value {
+			value
+		} else {
+			unreachable!()
+		}
+	}
+	impl SearchRequestHost for Request {
+		type Value = RequestValue;
+		type Error = &'static str;
+		fn null(&self) -> RequestValue {
+			RequestValue::Null
+		}
+		fn boolean(&self, value: bool) -> RequestValue {
+			RequestValue::Boolean(value)
+		}
+		fn truthy(&self, value: &RequestValue) -> bool {
+			match value {
+				RequestValue::Null => false,
+				RequestValue::Boolean(value) => *value,
+				RequestValue::Text(value) => !value.is_empty(),
+				RequestValue::Number(value) => *value != 0.0 && !value.is_nan(),
+			}
+		}
+		fn empty(&self, value: &RequestValue) -> bool {
+			matches!(value, RequestValue::Text(value) if value.is_empty())
+		}
+		fn different(&self, first: &RequestValue, second: &RequestValue) -> bool {
+			first != second
+		}
+		fn search_string(&self) -> Result<RequestValue, Self::Error> {
+			if self.fail_source {
+				Err("source")
+			} else {
+				Ok(RequestValue::Text(self.text.to_owned()))
+			}
+		}
+		fn is_regex(&self) -> Result<RequestValue, Self::Error> {
+			Ok(RequestValue::Boolean(self.regex))
+		}
+		fn multiline_regex(&self, source: &RequestValue) -> Result<bool, Self::Error> {
+			Ok(request_text(source).contains('\n'))
+		}
+		fn newline_index(&self, source: &RequestValue) -> Result<RequestValue, Self::Error> {
+			Ok(RequestValue::Number(
+				request_text(source)
+					.find('\n')
+					.map_or(-1.0, |index| index as f64),
+			))
+		}
+		fn nonnegative(&self, value: &RequestValue) -> Result<bool, Self::Error> {
+			if let RequestValue::Number(value) = value {
+				Ok(*value >= 0.0)
+			} else {
+				unreachable!()
+			}
+		}
+		fn create_regex(&self, _: bool) -> Result<RequestValue, Self::Error> {
+			if self.fail_regex {
+				Err("regex")
+			} else {
+				Ok(RequestValue::Boolean(true))
+			}
+		}
+		fn lowercase(&self, source: &RequestValue) -> Result<RequestValue, Self::Error> {
+			Ok(RequestValue::Text(request_text(source).to_lowercase()))
+		}
+		fn uppercase(&self, source: &RequestValue) -> Result<RequestValue, Self::Error> {
+			Ok(RequestValue::Text(request_text(source).to_uppercase()))
+		}
+		fn match_case(&self) -> Result<RequestValue, Self::Error> {
+			Ok(RequestValue::Boolean(self.match_case))
+		}
+		fn word_separators(&self) -> Result<RequestValue, Self::Error> {
+			Ok(RequestValue::Null)
+		}
+		fn word_map(&self, _: &RequestValue) -> Result<RequestValue, Self::Error> {
+			unreachable!()
+		}
+		fn make_data(
+			&self,
+			regex: &RequestValue,
+			words: &RequestValue,
+			simple: &RequestValue,
+		) -> Result<RequestValue, Self::Error> {
+			assert_eq!(
+				(regex, words),
+				(&RequestValue::Boolean(true), &RequestValue::Null)
+			);
+			Ok(RequestValue::Boolean(matches!(
+				simple,
+				RequestValue::Text(_)
+			)))
+		}
+	}
+	#[test]
+	fn request_modes_preserve_case_sensitive_literal_selection_and_multiline_rules() {
+		for (text, regex, match_case, expected) in [
+			("_", false, false, true),
+			("Hello", false, false, false),
+			("Hello", false, true, true),
+			("Hello", true, true, false),
+			("x\ny", false, true, false),
+		] {
+			let host = Request {
+				text,
+				regex,
+				match_case,
+				fail_source: false,
+				fail_regex: false,
+			};
+			assert_eq!(
+				parse_text_search_request(&host),
+				Ok(RequestValue::Boolean(expected))
+			);
+		}
+	}
+	#[test]
+	fn request_catches_only_regex_creation_failures_and_retains_empty_shortcut() {
+		for (text, fail_source, fail_regex, expected) in [
+			("", false, false, Ok(RequestValue::Null)),
+			("x", false, true, Ok(RequestValue::Null)),
+			("x", true, false, Err("source")),
+		] {
+			let host = Request {
+				text,
+				regex: false,
+				match_case: false,
+				fail_source,
+				fail_regex,
+			};
+			assert_eq!(parse_text_search_request(&host), expected);
+		}
+	}
 	struct Host {
 		text: Vec<u16>,
 		captures: bool,

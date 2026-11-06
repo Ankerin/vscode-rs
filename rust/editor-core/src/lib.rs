@@ -150,7 +150,8 @@ pub use text_search_offsets::{
 	scan_search_line_feeds, search_line_feeds_before,
 };
 pub use text_search_request::{
-	FindMatchHost, RegexSourceHost, create_search_find_match, is_multiline_search_source,
+	FindMatchHost, RegexSourceHost, SearchRequestHost, create_search_find_match,
+	is_multiline_search_source, parse_text_search_request,
 };
 pub use token_array::{create_line_token_array, line_token_array, slice_token_array};
 pub use tokens::{TokensError, merge_semantic_tokens};

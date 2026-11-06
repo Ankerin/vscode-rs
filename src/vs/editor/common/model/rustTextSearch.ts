@@ -7,7 +7,7 @@ import { IDisposable, toDisposable } from '../../../base/common/lifecycle.js';
 import { WordCharacterClassifier } from '../core/wordCharacterClassifier.js';
 import { Position } from '../core/position.js';
 import { Range } from '../core/range.js';
-import { FindMatch } from '../model.js';
+import { FindMatch, SearchData } from '../model.js';
 import { ownRustBracketArray } from './bracketPairsTextModelPart/bracketPairsTree/rustBracketNumberArray.js';
 
 /** Live regex/property capabilities retain exact callbacks, results, and partial state writes. */
@@ -174,6 +174,22 @@ export interface IRustFindMatchHost {
 }
 
 /** Generated text-search control participates in the core's atomic registration lifetime. */
+export interface IRustSearchRequestHost {
+	searchString(): string;
+	isRegex(): boolean;
+	multilineRegex(source: string): boolean;
+	newlineIndex(source: string): number;
+	nonnegative(value: number): boolean;
+	createRegex(multiline: boolean): RegExp | null;
+	lowercase(source: string): string;
+	uppercase(source: string): string;
+	matchCase(): boolean;
+	wordSeparators(): string | null;
+	wordMap(words: string): WordCharacterClassifier;
+	makeData(regex: RegExp, words: WordCharacterClassifier | null, simple: string | null): SearchData;
+}
+
+/** Generated text-search control participates in the core's atomic registration lifetime. */
 export interface IRustTextSearchModule {
 	text_search_abi_version(): number;
 	run_text_search(host: IRustTextSearchHost, reset: boolean): IRustTextSearchResult;
@@ -186,13 +202,14 @@ export interface IRustTextSearchModule {
 	collect_text_search_range(host: IRustSearchCollectionHost, operation: RustSearchCollectionOperation, limit: number): FindMatch[];
 	is_text_search_multiline_source(host: IRustRegexSourceHost): boolean;
 	create_text_search_match(host: IRustFindMatchHost): FindMatch;
+	parse_text_search_request(host: IRustSearchRequestHost): SearchData | null;
 }
 
 let registeredModule: IRustTextSearchModule | undefined;
 
 /** Installs text-search control without changing existing Searcher classes or regex objects. */
 export function registerRustTextSearch(module: IRustTextSearchModule): IDisposable {
-	if (typeof module.text_search_abi_version !== 'function' || module.text_search_abi_version() !== 7 || typeof module.run_text_search !== 'function' || typeof module.is_valid_text_search_match !== 'function' || typeof module.collect_text_search_matches !== 'function' || typeof module.scan_text_search_line_feeds !== 'function' || typeof module.count_text_search_line_feeds !== 'function' || typeof module.text_search_multiline_range !== 'function' || typeof module.run_text_search_navigation !== 'function' || typeof module.collect_text_search_range !== 'function' || typeof module.is_text_search_multiline_source !== 'function' || typeof module.create_text_search_match !== 'function') { throw new Error('The Rust text search bindings do not match the searcher control contract'); }
+	if (typeof module.text_search_abi_version !== 'function' || module.text_search_abi_version() !== 8 || typeof module.run_text_search !== 'function' || typeof module.is_valid_text_search_match !== 'function' || typeof module.collect_text_search_matches !== 'function' || typeof module.scan_text_search_line_feeds !== 'function' || typeof module.count_text_search_line_feeds !== 'function' || typeof module.text_search_multiline_range !== 'function' || typeof module.run_text_search_navigation !== 'function' || typeof module.collect_text_search_range !== 'function' || typeof module.is_text_search_multiline_source !== 'function' || typeof module.create_text_search_match !== 'function' || typeof module.parse_text_search_request !== 'function') { throw new Error('The Rust text search bindings do not match the searcher control contract'); }
 	if (registeredModule) { throw new Error('A Rust text search module is already registered'); }
 	registeredModule = module;
 	return toDisposable(() => { if (registeredModule === module) { registeredModule = undefined; } });
@@ -259,4 +276,10 @@ export function tryRustRegexSource(createHost: () => IRustRegexSourceHost): bool
 /** Copies array-like capture slots through their original providers and preserves range identity. */
 export function tryRustFindMatch(createHost: () => IRustFindMatchHost): FindMatch | undefined {
 	return registeredModule?.create_text_search_match(createHost());
+}
+
+/** Parses live request properties while preserving the original regex-construction catch scope. */
+export function tryRustSearchRequest(createHost: () => IRustSearchRequestHost): { data: SearchData | null } | undefined {
+	if (!registeredModule) { return undefined; }
+	return { data: registeredModule.parse_text_search_request(createHost()) };
 }

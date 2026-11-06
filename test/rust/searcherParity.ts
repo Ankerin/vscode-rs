@@ -804,3 +804,79 @@ test('Rust FindMatch creation retains array-like length coercion, slot failures,
 	};
 	assert.deepStrictEqual(withRust(run), run());
 });
+
+function searchDataSnapshot(data: SearchData | null): object | null {
+	return data ? { source: data.regex.source, flags: data.regex.flags, simple: data.simpleSearch, words: data.wordSeparators } : null;
+}
+
+test('Rust SearchParams preserves request modes, invalid regex handling, ECMAScript casing, and cached word maps', () => {
+	let calls = 0;
+	const module: IRustTextSearchModule = { ...rust, parse_text_search_request: host => { calls++; return rust.parse_text_search_request(host); } };
+	for (const source of ['', '_', 'Hello', '123', 'x\ny', '\\n', '[', '(?<word>x)', '\uD800', '\uD83D\uDE00', 'Straße', 'İ']) {
+		for (const regex of [false, true]) {
+			for (const matchCase of [false, true]) {
+				for (const words of [null, '-_']) {
+					const run = () => searchDataSnapshot(new SearchParams(source, regex, matchCase, words).parseSearchRequest());
+					assert.deepStrictEqual(withRust(run, module), run());
+				}
+			}
+		}
+	}
+	assert.strictEqual(calls, 96, 'SearchParams parsing executes Rust');
+});
+
+test('Rust SearchParams preserves repeated live field reads, changing source values, and proxy receivers', () => {
+	for (const regex of [false, true]) {
+		const run = () => {
+			const observations: string[] = [];
+			let reads = 0;
+			const sources = ['Hello', 'x', '_', 'Straße'];
+			const target = new SearchParams('x', regex, true, '-');
+			const params = new Proxy(target, {
+				get: (target, key, receiver) => {
+					observations.push(String(key));
+					if (key === 'searchString') { return sources[reads++ % sources.length]; }
+					return Reflect.get(target, key, receiver);
+				}
+			});
+			const data = params.parseSearchRequest();
+			return { data: searchDataSnapshot(data), observations };
+		};
+		assert.deepStrictEqual(withRust(run), run());
+	}
+});
+
+test('Rust SearchParams catches failures only within the original regex construction scope', () => {
+	const failure = new Error('Original search request field failure');
+	for (let failingRead = 1; failingRead <= 14; failingRead++) {
+		const run = () => {
+			const observations: string[] = [];
+			let reads = 0;
+			const params = new Proxy(new SearchParams('Hello', false, true, '-'), {
+				get: (target, key, receiver) => {
+					if (key !== 'parseSearchRequest') { observations.push(String(key)); if (++reads === failingRead) { throw failure; } }
+					return Reflect.get(target, key, receiver);
+				}
+			});
+			let data: SearchData | null | undefined;
+			let caught = false;
+			try { data = params.parseSearchRequest(); } catch (error) { assert.strictEqual(error, failure); caught = true; }
+			return { data: data === undefined ? undefined : searchDataSnapshot(data), caught, observations };
+		};
+		assert.deepStrictEqual(withRust(run), run(), `Request field failure ${failingRead}`);
+	}
+});
+
+test('Rust SearchParams preserves unusual runtime property values and original exception domains', () => {
+	for (const field of ['searchString', 'isRegex', 'matchCase', 'wordSeparators']) {
+		for (const value of [undefined, null, 0, 1, 'false', {}, Symbol('request value'), 0n]) {
+			const run = () => {
+				const params = new SearchParams('x', false, false, null);
+				Object.defineProperty(params, field, { value });
+				try { return { data: searchDataSnapshot(params.parseSearchRequest()) }; }
+				catch (error) { return { error: error instanceof Error ? error.name : 'non-error' }; }
+			};
+			assert.deepStrictEqual(withRust(run), run());
+		}
+	}
+});

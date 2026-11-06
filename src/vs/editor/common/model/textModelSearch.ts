@@ -10,7 +10,7 @@ import { Position } from '../core/position.js';
 import { Range } from '../core/range.js';
 import { EndOfLinePreference, FindMatch, SearchData } from '../model.js';
 import { TextModel } from './textModel.js';
-import { IRustTextSearchHost, IRustSearchNavigationHost, IRustSearchCollectionHost, RustSearchNavigationOperation, RustSearchCollectionOperation, createRustSearchOffsets, tryRunRustTextSearch, tryRustWordBoundary, tryRustLineMatches, tryRustLineFeedScan, tryRustLineFeedCount, tryRustMultilineMatchRange, tryRustSearchNavigation, tryRustSearchCollection, tryRustRegexSource, tryRustFindMatch } from './rustTextSearch.js';
+import { IRustTextSearchHost, IRustSearchNavigationHost, IRustSearchCollectionHost, RustSearchNavigationOperation, RustSearchCollectionOperation, createRustSearchOffsets, tryRunRustTextSearch, tryRustWordBoundary, tryRustLineMatches, tryRustLineFeedScan, tryRustLineFeedCount, tryRustMultilineMatchRange, tryRustSearchNavigation, tryRustSearchCollection, tryRustRegexSource, tryRustFindMatch, tryRustSearchRequest } from './rustTextSearch.js';
 
 const LIMIT_FIND_COUNT = 999;
 
@@ -28,6 +28,21 @@ export class SearchParams {
 	}
 
 	public parseSearchRequest(): SearchData | null {
+		const native = tryRustSearchRequest(() => ({
+			searchString: () => this.searchString,
+			isRegex: () => this.isRegex,
+			multilineRegex: source => isMultilineRegexSource(source),
+			newlineIndex: source => source.indexOf('\n'),
+			nonnegative: value => value >= 0,
+			createRegex: multiline => strings.createRegExp(this.searchString, this.isRegex, { matchCase: this.matchCase, wholeWord: false, multiline, global: true, unicode: true }),
+			lowercase: source => source.toLowerCase(),
+			uppercase: source => source.toUpperCase(),
+			matchCase: () => this.matchCase,
+			wordSeparators: () => this.wordSeparators,
+			wordMap: words => getMapForWordSeparators(words, []),
+			makeData: (regex, words, simple) => new SearchData(regex, words, simple)
+		}));
+		if (native !== undefined) { return native.data; }
 		if (this.searchString === '') {
 			return null;
 		}
