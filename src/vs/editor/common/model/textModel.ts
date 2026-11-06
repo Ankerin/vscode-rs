@@ -54,6 +54,7 @@ import { IRustModelValidationHost, RustModelValidationOperation, compareRustMode
 import { IRustModelQueryHost, RustModelQueryMethod, RustModelQueryOperation, RustModelQueryValue, rustModelQueryMethodNames, tryRustModelQuery } from './rustModelQuery.js';
 import { ownRustModelSnapshot, tryRustModelSnapshot } from './rustModelSnapshot.js';
 import { IRustModelLifecycleHost, RustModelLifecycleOperation, RustModelLifecycleValue, rustModelLifecycleFields, tryRustModelLifecycle } from './rustModelLifecycle.js';
+import { IRustModelOptionsControllerHost, RustModelOptionsControllerOperation, tryRustModelOptionsController } from './rustModelOptionsController.js';
 import { AttachedViews } from './tokens/abstractSyntaxTokenBackend.js';
 import { TokenizationFontDecorationProvider } from './tokens/tokenizationFontDecorationsProvider.js';
 import { LineFontChangingDecoration, LineHeightChangingDecoration } from './decorationProvider.js';
@@ -220,6 +221,8 @@ export class TextModel extends Disposable implements model.ITextModel, IDecorati
 	};
 
 	public static resolveOptions(textBuffer: model.ITextBuffer, options: model.ITextModelCreationOptions): model.TextModelResolvedOptions {
+		const rust = tryRustModelOptionsController<model.TextModelResolvedOptions>(RustModelOptionsControllerOperation.Resolve, 0, 0, () => TextModel._createRustModelOptionsControllerHost(undefined, options, textBuffer));
+		if (rust) { return rust.value; }
 		if (options.detectIndentation) {
 			const guessedIndentation = guessIndentation(textBuffer, options.tabSize, options.insertSpaces);
 			return new model.TextModelResolvedOptions({
@@ -763,12 +766,51 @@ export class TextModel extends Disposable implements model.ITextModel, IDecorati
 
 	//#region Options
 
+	/** Retains live request/model capabilities without reading state before the original checks. */
+	private static _createRustModelOptionsControllerHost(owner: TextModel | undefined, request?: model.ITextModelCreationOptions | model.ITextModelUpdateOptions, textBuffer?: model.ITextBuffer): IRustModelOptionsControllerHost {
+		const creation = owner === undefined;
+		const requestFields = ['tabSize', 'indentSize', 'insertSpaces', 'trimAutoWhitespace', creation ? 'bracketPairColorizationOptions' : 'bracketColorizationOptions', 'defaultEOL', 'detectIndentation'] as const;
+		const currentFields = ['tabSize', 'originalIndentSize', 'insertSpaces', 'trimAutoWhitespace', 'bracketPairColorizationOptions', 'defaultEOL', 'indentSize'] as const;
+		return {
+			assertAlive: () => owner!._assertNotDisposed(),
+			request: index => (request as object as Record<string, number | 'tabSize' | boolean | model.BracketPairColorizationOptions | undefined>)[requestFields[index]],
+			current: index => (owner!._options as object as Record<string, number | 'tabSize' | boolean | model.BracketPairColorizationOptions | undefined>)[currentFields[index]],
+			options: () => owner!._options,
+			resolveSource: () => new model.TextModelResolvedOptions(request as model.ITextModelCreationOptions),
+			construct: (tab, indent, insert, eol, trim, brackets) => new model.TextModelResolvedOptions({ tabSize: tab, indentSize: indent, insertSpaces: insert, defaultEOL: eol, trimAutoWhitespace: trim, bracketPairColorizationOptions: brackets }),
+			equal: options => !!owner!._options.equals(options),
+			changeEvent: options => owner!._options.createChangeEvent(options),
+			assign: options => { owner!._options = options; },
+			notify: (index, event) => {
+				switch (index) {
+					case 0: owner!._bracketPairs.handleDidChangeOptions(event); return;
+					case 1: owner!._decorationProvider.handleDidChangeOptions(event); return;
+					case 2: owner!._onDidChangeOptions.fire(event); return;
+					default: throw new BugIndicatingError('Invalid model option notification');
+				}
+			},
+			guess: (tab, insert) => guessIndentation(creation ? textBuffer! : owner!._buffer, tab, insert),
+			guessed: (guess, index) => index === 0 ? guess.insertSpaces : guess.tabSize,
+			updateMethod: () => {
+				const method = owner!.updateOptions;
+				return options => Reflect.apply(method, owner, [options]);
+			},
+			update: (method, insert, tab, indent) => method({ insertSpaces: insert, tabSize: tab, indentSize: indent }),
+			format: (tab, insert) => ({ tabSize: tab, insertSpaces: insert }),
+			normalize: (text, indent, insert) => normalizeIndentation(text, indent, insert)
+		};
+	}
+
 	public getOptions(): model.TextModelResolvedOptions {
+		const rust = tryRustModelOptionsController<model.TextModelResolvedOptions>(RustModelOptionsControllerOperation.Options, 0, 0, () => TextModel._createRustModelOptionsControllerHost(this));
+		if (rust) { return rust.value; }
 		this._assertNotDisposed();
 		return this._options;
 	}
 
 	public getFormattingOptions(): FormattingOptions {
+		const rust = tryRustModelOptionsController<FormattingOptions>(RustModelOptionsControllerOperation.Formatting, 0, 0, () => TextModel._createRustModelOptionsControllerHost(this));
+		if (rust) { return rust.value; }
 		return {
 			tabSize: this._options.indentSize,
 			insertSpaces: this._options.insertSpaces
@@ -776,6 +818,8 @@ export class TextModel extends Disposable implements model.ITextModel, IDecorati
 	}
 
 	public updateOptions(_newOpts: model.ITextModelUpdateOptions): void {
+		const rust = tryRustModelOptionsController<void>(RustModelOptionsControllerOperation.Update, 0, 0, () => TextModel._createRustModelOptionsControllerHost(this, _newOpts));
+		if (rust) { return rust.value; }
 		this._assertNotDisposed();
 		const tabSize = (typeof _newOpts.tabSize !== 'undefined') ? _newOpts.tabSize : this._options.tabSize;
 		const indentSize = (typeof _newOpts.indentSize !== 'undefined') ? _newOpts.indentSize : this._options.originalIndentSize;
@@ -805,6 +849,8 @@ export class TextModel extends Disposable implements model.ITextModel, IDecorati
 	}
 
 	public detectIndentation(defaultInsertSpaces: boolean, defaultTabSize: number): void {
+		const rust = tryRustModelOptionsController<void>(RustModelOptionsControllerOperation.DetectIndentation, defaultInsertSpaces, defaultTabSize, () => TextModel._createRustModelOptionsControllerHost(this));
+		if (rust) { return rust.value; }
 		this._assertNotDisposed();
 		const guessedIndentation = guessIndentation(this._buffer, defaultTabSize, defaultInsertSpaces);
 		this.updateOptions({
@@ -815,6 +861,8 @@ export class TextModel extends Disposable implements model.ITextModel, IDecorati
 	}
 
 	public normalizeIndentation(str: string): string {
+		const rust = tryRustModelOptionsController<string>(RustModelOptionsControllerOperation.NormalizeIndentation, str, 0, () => TextModel._createRustModelOptionsControllerHost(this));
+		if (rust) { return rust.value; }
 		this._assertNotDisposed();
 		return normalizeIndentation(str, this._options.indentSize, this._options.insertSpaces);
 	}
@@ -1112,7 +1160,7 @@ export class TextModel extends Disposable implements model.ITextModel, IDecorati
 				const method = valid ? this._isValidPosition : this._validatePosition;
 				return (line, column, surrogates) => Reflect.apply(method, this, [line, column, surrogates ? StringOffsetValidationType.SurrogatePairs : StringOffsetValidationType.Relaxed]);
 			},
-			callIsValidPosition: (method, line, column, surrogates) => method(line, column, surrogates),
+			callIsValidPosition: (method, line, column, surrogates) => !!method(line, column, surrogates),
 			callValidatePosition: (method, line, column, surrogates) => method(line, column, surrogates),
 			charCodeMethod: () => {
 				const buffer = this._buffer;
@@ -1121,9 +1169,9 @@ export class TextModel extends Disposable implements model.ITextModel, IDecorati
 			},
 			callCharCode: (method, line, index) => method(line, index),
 			reusable: (value, range) => range ? value instanceof Range && !(value instanceof Selection) : value instanceof Position,
-			isValidPosition: (line, column, surrogates) => this._isValidPosition(line, column, surrogates ? StringOffsetValidationType.SurrogatePairs : StringOffsetValidationType.Relaxed),
+			isValidPosition: (line, column, surrogates) => !!this._isValidPosition(line, column, surrogates ? StringOffsetValidationType.SurrogatePairs : StringOffsetValidationType.Relaxed),
 			validatePosition: (line, column, surrogates) => this._validatePosition(line, column, surrogates ? StringOffsetValidationType.SurrogatePairs : StringOffsetValidationType.Relaxed),
-			isValidRange: (range, surrogates) => this._isValidRange(range, surrogates ? StringOffsetValidationType.SurrogatePairs : StringOffsetValidationType.Relaxed),
+			isValidRange: (range, surrogates) => !!this._isValidRange(range, surrogates ? StringOffsetValidationType.SurrogatePairs : StringOffsetValidationType.Relaxed),
 			publicIsValidRange: range => this._isValidRange(range, StringOffsetValidationType.SurrogatePairs),
 			makePosition: (line, column) => new Position(line, column),
 			makeRange: (startLine, startColumn, endLine, endColumn) => new Range(startLine, startColumn, endLine, endColumn)

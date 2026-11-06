@@ -196,7 +196,14 @@ test('Rust model validation executes every integrated operation and rejects stal
 	const overridden = createTextModel('x');
 	const internal = overridden as unknown as IValidationModel;
 	internal._isValidRange = () => identity as boolean;
-	try { assert.strictEqual(withRust(() => overridden.isValidRange(new Range(1, 1, 1, 1))), identity); } finally { overridden.dispose(); }
+	internal._isValidPosition = () => identity as boolean;
+	try {
+		const position = new Position(999, 999);
+		const range = new Range(999, 999, 999, 999);
+		assert.strictEqual(withRust(() => overridden.isValidRange(range)), identity);
+		assert.strictEqual(withRust(() => overridden.validateRange(range)), range);
+		assert.strictEqual(withRust(() => overridden.validatePosition(position)), position);
+	} finally { overridden.dispose(); }
 	const calls = new Set<number>();
 	const module: IRustModelValidationModule = {
 		...rust,

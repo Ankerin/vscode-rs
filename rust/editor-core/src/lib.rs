@@ -35,6 +35,7 @@ mod line_tokens;
 mod model_edits;
 mod model_lifecycle;
 mod model_options;
+mod model_options_controller;
 mod model_query;
 mod model_snapshot;
 mod model_validation;
@@ -130,6 +131,10 @@ pub use model_lifecycle::{
 pub use model_options::{
 	ModelOptionsHost, initialize_model_options, model_option_integer, model_options_change_event,
 	model_options_equal, original_model_indent_size,
+};
+pub use model_options_controller::{
+	ModelOptionsControllerHost, detect_model_indentation, normalize_model_indentation,
+	read_model_options, resolve_model_options, update_model_options,
 };
 pub use model_query::{
 	ModelQueryHost, ModelQueryMethod, ModelQueryOperation, bound_model_offset, query_model,

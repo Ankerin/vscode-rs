@@ -38,6 +38,7 @@ mod line_tokens;
 mod model_edits;
 mod model_lifecycle;
 mod model_options;
+mod model_options_controller;
 mod model_query;
 mod model_snapshot;
 mod model_validation;
