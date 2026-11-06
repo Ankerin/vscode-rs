@@ -10,7 +10,7 @@ import { Position } from '../core/position.js';
 import { Range } from '../core/range.js';
 import { EndOfLinePreference, FindMatch, SearchData } from '../model.js';
 import { TextModel } from './textModel.js';
-import { IRustTextSearchHost, createRustSearchOffsets, tryRunRustTextSearch, tryRustWordBoundary, tryRustLineMatches, tryRustLineFeedScan, tryRustLineFeedCount, tryRustMultilineMatchRange } from './rustTextSearch.js';
+import { IRustTextSearchHost, IRustSearchNavigationHost, RustSearchNavigationOperation, createRustSearchOffsets, tryRunRustTextSearch, tryRustWordBoundary, tryRustLineMatches, tryRustLineFeedScan, tryRustLineFeedCount, tryRustMultilineMatchRange, tryRustSearchNavigation } from './rustTextSearch.js';
 
 const LIMIT_FIND_COUNT = 999;
 
@@ -382,6 +382,8 @@ export class TextModelSearch {
 	}
 
 	private static _doFindNextMatchLineByLine(model: TextModel, searchStart: Position, searcher: Searcher, captureMatches: boolean): FindMatch | null {
+		const native = tryRustSearchNavigation(RustSearchNavigationOperation.NextLines, () => TextModelSearch.createRustNavigationHost(this, searcher, captureMatches, model, searchStart));
+		if (native !== undefined) { return native.match; }
 		const lineCount = model.getLineCount();
 		const startLineNumber = searchStart.lineNumber;
 
@@ -405,6 +407,8 @@ export class TextModelSearch {
 	}
 
 	private static _findFirstMatchInLine(searcher: Searcher, text: string, lineNumber: number, fromColumn: number, captureMatches: boolean): FindMatch | null {
+		const native = tryRustSearchNavigation(RustSearchNavigationOperation.FirstInLine, () => TextModelSearch.createRustNavigationHost(this, searcher, captureMatches, null, null, text, lineNumber, fromColumn));
+		if (native !== undefined) { return native.match; }
 		// Set regex to search from column
 		searcher.reset(fromColumn - 1);
 		const m: RegExpExecArray | null = searcher.next(text);
@@ -448,6 +452,8 @@ export class TextModelSearch {
 	}
 
 	private static _doFindPreviousMatchLineByLine(model: TextModel, searchStart: Position, searcher: Searcher, captureMatches: boolean): FindMatch | null {
+		const native = tryRustSearchNavigation(RustSearchNavigationOperation.PreviousLines, () => TextModelSearch.createRustNavigationHost(this, searcher, captureMatches, model, searchStart));
+		if (native !== undefined) { return native.match; }
 		const lineCount = model.getLineCount();
 		const startLineNumber = searchStart.lineNumber;
 
@@ -471,6 +477,8 @@ export class TextModelSearch {
 	}
 
 	private static _findLastMatchInLine(searcher: Searcher, text: string, lineNumber: number, captureMatches: boolean): FindMatch | null {
+		const native = tryRustSearchNavigation(RustSearchNavigationOperation.LastInLine, () => TextModelSearch.createRustNavigationHost(this, searcher, captureMatches, null, null, text, lineNumber));
+		if (native !== undefined) { return native.match; }
 		let bestResult: FindMatch | null = null;
 		let m: RegExpExecArray | null;
 		searcher.reset(0);
@@ -478,6 +486,29 @@ export class TextModelSearch {
 			bestResult = createFindMatch(new Range(lineNumber, m.index + 1, lineNumber, m.index + 1 + m[0].length), m, captureMatches);
 		}
 		return bestResult;
+	}
+
+	/** Lazy capabilities preserve model fields, virtual method lookup, and searcher receivers. */
+	private static createRustNavigationHost(owner: typeof TextModelSearch, searcher: Searcher, captureMatches: boolean, model: TextModel | null, searchStart: Position | null, text: string = '', lineNumber: number = 0, fromColumn: number = 1): IRustSearchNavigationHost {
+		return {
+			add: (first, second) => first + second,
+			subtract: (first, second) => first - second,
+			remainder: (first, second) => first % second,
+			atMost: (first, second) => first <= second,
+			lineCount: () => model!.getLineCount(),
+			startLine: () => searchStart!.lineNumber,
+			line: number => model!.getLineContent(number),
+			firstAtStart: (text, line) => owner._findFirstMatchInLine(searcher, text, line, searchStart!.column, captureMatches),
+			first: (text, line) => owner._findFirstMatchInLine(searcher, text, line, 1, captureMatches),
+			prefixAtStart: text => text.substring(0, searchStart!.column - 1),
+			last: (text, line) => owner._findLastMatchInLine(searcher, text, line, captureMatches),
+			resetFromColumn: () => searcher.reset(fromColumn - 1),
+			resetStart: () => searcher.reset(0),
+			next: () => searcher.next(text),
+			matchStart: matched => matched.index,
+			matchLength: matched => matched[0].length,
+			makeMatch: (start, end, matched) => createFindMatch(new Range(lineNumber, start, lineNumber, end), matched, captureMatches)
+		};
 	}
 }
 

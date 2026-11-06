@@ -45,6 +45,12 @@ interface ILineFeedCounter {
 const multilineSearch = TextModelSearch as unknown as {
 	_getMultilineMatchRange(model: TextModel, delta: number, text: string, counter: ILineFeedCounter | null, index: number, match: string): Range;
 };
+const navigationSearch = TextModelSearch as unknown as {
+	_findFirstMatchInLine(searcher: Searcher, text: string, line: number, column: number, captures: boolean): FindMatch | null;
+	_findLastMatchInLine(searcher: Searcher, text: string, line: number, captures: boolean): FindMatch | null;
+	_doFindNextMatchLineByLine(model: TextModel, start: Position, searcher: Searcher, captures: boolean): FindMatch | null;
+	_doFindPreviousMatchLineByLine(model: TextModel, start: Position, searcher: Searcher, captures: boolean): FindMatch | null;
+};
 
 function captureLineFeedCounter(): ILineFeedCounter {
 	const model = createTextModel('a\r\nb\r\nc', null, { defaultEOL: DefaultEndOfLine.CRLF });
@@ -510,4 +516,106 @@ test('Rust LF scans retain borrowed text callbacks, strict character equality, a
 			assert.deepStrictEqual(withRust(run), run());
 		}
 	}
+});
+
+test('Rust line navigation preserves public forward/backward wrapping, columns, captures, and empty matches', () => {
+	const calls = [0, 0, 0, 0];
+	const module: IRustTextSearchModule = { ...rust, run_text_search_navigation: (host, operation) => { calls[operation]++; return rust.run_text_search_navigation(host, operation); } };
+	for (const text of ['', 'x\ny\nx', 'ax x\nxax\n', '\uD83D\uDE00x\n\uD800x\n\uDC00']) {
+		for (const pattern of ['x', '(?:)', '(?<word>x*)', '.', '\\b']) {
+			for (const captures of [false, true]) {
+				const run = () => {
+					const model = createTextModel(text);
+					try {
+						const params = new SearchParams(pattern, true, true, null);
+						const results: object[] = [];
+						for (let line = 1; line <= model.getLineCount(); line++) {
+							for (let column = 1; column <= model.getLineMaxColumn(line); column++) {
+								const position = new Position(line, column);
+								results.push({ next: TextModelSearch.findNextMatch(model, params, position, captures), previous: TextModelSearch.findPreviousMatch(model, params, position, captures) });
+							}
+						}
+						return results;
+					} finally { model.dispose(); }
+				};
+				assert.deepStrictEqual(withRust(run, module), run());
+			}
+		}
+	}
+	assert.ok(calls.every(count => count > 100), 'All four integrated navigation operations execute Rust');
+});
+
+test('Rust line navigation retains virtual provider order, start-column reads, and original early-return identity', () => {
+	for (const previous of [true, false]) {
+		for (const succeed of [0, 1, 3]) {
+			const run = () => {
+				const observations: string[] = [];
+				const target = createTextModel('a\nb\nc');
+				const model = new Proxy(target, { get: (target, key, receiver) => { observations.push(`model:${String(key)}`); return Reflect.get(target, key, receiver); } });
+				const start = new Proxy(new Position(2, 1), { get: (target, key, receiver) => { observations.push(`start:${String(key)}`); return Reflect.get(target, key, receiver); } });
+				const match = new FindMatch(new Range(2, 1, 2, 2), null);
+				let count = 0;
+				const first = (_searcher: Searcher, text: string, line: number, column: number, captures: boolean) => { observations.push(`first:${text}:${line}:${column}:${captures}`); return ++count === succeed ? match : null; };
+				const last = (_searcher: Searcher, text: string, line: number, captures: boolean) => { observations.push(`last:${text}:${line}:${captures}`); return ++count === succeed ? match : null; };
+				const owner = new Proxy(TextModelSearch, {
+					get: (target, key, receiver) => {
+						observations.push(`owner:${String(key)}`);
+						if (key === '_findFirstMatchInLine') { return first; }
+						if (key === '_findLastMatchInLine') { return last; }
+						return Reflect.get(target, key, receiver);
+					}
+				});
+				try {
+					const method = previous ? navigationSearch._doFindPreviousMatchLineByLine : navigationSearch._doFindNextMatchLineByLine;
+					const result = Reflect.apply(method, owner, [model, start, new Searcher(null, /x/g), true]);
+					return { identity: result === match, result, observations };
+				} finally { target.dispose(); }
+			};
+			assert.deepStrictEqual(withRust(run), run());
+		}
+	}
+});
+
+test('Rust first/last line matches preserve searcher proxies, reset coercion, captures, and exceptions', () => {
+	const failure = new Error('Original navigation match failure');
+	for (const last of [true, false]) {
+		for (const fail of [true, false]) {
+			const run = () => {
+				const observations: string[] = [];
+				const regex = /(x)/g;
+				regex.exec = text => {
+					observations.push('regex:exec');
+					const match = RegExp.prototype.exec.call(regex, text);
+					return match ? new Proxy(match, { get: (target, key, receiver) => { observations.push(`match:${String(key)}`); if (fail && key === 'length') { throw failure; } return Reflect.get(target, key, receiver); } }) : null;
+				};
+				const target = new Searcher(null, regex);
+				const searcher = new Proxy(target, { get: (target, key, receiver) => { observations.push(`searcher:${String(key)}`); return Reflect.get(target, key, receiver); } });
+				const from = { [Symbol.toPrimitive]: (hint: string) => { observations.push(`column:${hint}`); return 1; } };
+				let result: FindMatch | null | undefined;
+				let caught = false;
+				try { result = last ? navigationSearch._findLastMatchInLine(searcher, 'ax x', 3, true) : navigationSearch._findFirstMatchInLine(searcher, 'ax x', 3, from as unknown as number, true); }
+				catch (error) { assert.strictEqual(error, failure); caught = true; }
+				return { result, caught, observations, state: state(target, regex) };
+			};
+			assert.deepStrictEqual(withRust(run), run());
+		}
+	}
+});
+
+test('Rust navigation preserves provider failure identity and rejects stale navigation registration', () => {
+	const failure = new Error('Original navigation line provider failure');
+	for (const previous of [true, false]) {
+		const run = () => {
+			const model = createTextModel('a\nb');
+			const observations: number[] = [];
+			model.getLineContent = line => { observations.push(line); if (observations.length === 2) { throw failure; } return ''; };
+			try {
+				const method = previous ? navigationSearch._doFindPreviousMatchLineByLine : navigationSearch._doFindNextMatchLineByLine;
+				assert.throws(() => Reflect.apply(method, TextModelSearch, [model, new Position(2, 1), new Searcher(null, /x/g), false]), error => error === failure);
+				return observations;
+			} finally { model.dispose(); }
+		};
+		assert.deepStrictEqual(withRust(run), run());
+	}
+	assert.throws(() => registerRustTextBuffer({ ...rust, text_search_abi_version: () => 4 }), /searcher control contract/);
 });

@@ -41,6 +41,7 @@ mod small_immutable_set;
 mod sparse_tokens_store;
 mod text_change;
 mod text_search;
+mod text_search_navigation;
 mod text_search_offsets;
 mod text_shape;
 mod text_transfer;
