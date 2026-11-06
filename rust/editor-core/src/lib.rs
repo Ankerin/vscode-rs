@@ -36,7 +36,9 @@ mod word_part;
 pub use atomic_tab_move::{atomic_tab_position, whitespace_visible_column};
 pub use bracket_edits::combine_bracket_edits;
 pub use bracket_lengths::{bracket_length, bracket_length_parts};
-pub use bracket_trees::{BracketTreeGroup, concat_bracket_trees_same_height};
+pub use bracket_trees::{
+	BracketTreeGroup, BracketTreeHost, concat_bracket_trees, concat_bracket_trees_same_height,
+};
 pub use contiguous_tokens::{
 	ContiguousTokensUpdate, append_contiguous_tokens, delete_contiguous_tokens,
 	insert_contiguous_tokens,

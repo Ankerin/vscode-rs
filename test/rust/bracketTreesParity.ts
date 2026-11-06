@@ -9,7 +9,7 @@ import { resolve } from 'node:path';
 import { test } from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { AstNode, AstNodeKind, ListAstNode, TextAstNode } from '../../src/vs/editor/common/model/bracketPairsTextModelPart/bracketPairsTree/ast.js';
-import { concat23TreesOfSameHeight } from '../../src/vs/editor/common/model/bracketPairsTextModelPart/bracketPairsTree/concat23Trees.js';
+import { concat23Trees, concat23TreesOfSameHeight } from '../../src/vs/editor/common/model/bracketPairsTextModelPart/bracketPairsTree/concat23Trees.js';
 import { toLength } from '../../src/vs/editor/common/model/bracketPairsTextModelPart/bracketPairsTree/length.js';
 import { IRustBracketTreesModule, registerRustBracketTrees } from '../../src/vs/editor/common/model/bracketPairsTextModelPart/bracketPairsTree/rustBracketTrees.js';
 import { IRustTextBufferModule, registerRustTextBuffer } from '../../src/vs/editor/common/model/rustTextBuffer/rustTextBuffer.js';
@@ -151,4 +151,76 @@ test('Rust bracket tree results release their scoped native handle and roll back
 	assert.strictEqual(tryRustBracketLength(RustBracketLengthOperation.Pack, 1, 2), undefined);
 	const registration = registerRustTextBuffer(rust);
 	try { assert.throws(() => registerRustBracketTrees(rust), /already registered/); } finally { registration.dispose(); }
+});
+
+test('Rust mixed-height bracket trees preserve grouping, append/prepend splits, mutable roots, and leaf order', () => {
+	let seed = 179;
+	let calls = 0;
+	const random = (limit: number) => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed % limit; };
+	const module: IRustBracketTreesModule = { ...rust, concat_bracket_trees: host => { calls++; return rust.concat_bracket_trees(host); } };
+	for (let trace = 0; trace < 1024; trace++) {
+		const heights = Array.from({ length: 2 + random(24) }, () => random(4));
+		const immutable = trace % 2 === 0;
+		const run = () => {
+			const leaves: AstNode[] = [];
+			const create = (height: number): AstNode => {
+				if (height === 0) { const node = new TextAstNode(toLength(0, 1)); leaves.push(node); return node; }
+				return ListAstNode.create23(create(height - 1), create(height - 1), create(height - 1), immutable);
+			};
+			const items = heights.map(create);
+			const node = concat23Trees(items);
+			const visited: AstNode[] = [];
+			const visit = (node: AstNode | null) => {
+				if (!node) { return; }
+				if (node.childrenLength === 0) { visited.push(node); }
+				for (let index = 0; index < node.childrenLength; index++) { visit(node.getChild(index)); }
+			};
+			visit(node);
+			return { node: snapshot(node), items: items.map(snapshot), leaves: visited.map((node, index) => node === leaves[index]) };
+		};
+		assert.deepStrictEqual(withRust(run, module), run(), `Mixed bracket tree trace ${trace}`);
+	}
+	assert.strictEqual(calls, 1024, 'Every mixed-height concatenation executes in the integrated Rust core');
+});
+
+test('Rust mixed-height bracket trees preserve proxy, virtual method, factory, and live parent-stack observations', () => {
+	const run = () => {
+		const observations: string[] = [];
+		const create = (height: number): AstNode => height === 0 ? new TextAstNode(toLength(0, 1)) : ListAstNode.create23(create(height - 1), create(height - 1), create(height - 1));
+		const roots = [create(2), create(0), create(1), create(0), create(2)];
+		const items = roots.map((root, index) => new Proxy(root, { get: (target, key, receiver) => { observations.push(`${index}:${String(key)}`); return Reflect.get(target, key, receiver); } }));
+		const array = new Proxy(items, { get: (target, key, receiver) => { observations.push(`array:${String(key)}`); return Reflect.get(target, key, receiver); } });
+		const factory = Object.getOwnPropertyDescriptor(ListAstNode, 'create23')!;
+		const push = Object.getOwnPropertyDescriptor(Array.prototype, 'push')!;
+		Object.defineProperty(ListAstNode, 'create23', { configurable: true, get: () => { observations.push('factory'); return factory.value; } });
+		Object.defineProperty(Array.prototype, 'push', {
+			...push, value: function (this: object[], ...nodes: object[]) {
+				// Record only AST parent stacks; ordinary observation arrays do not recurse through this branch.
+				if (nodes.length === 1 && nodes[0] instanceof ListAstNode) { Reflect.apply(push.value, observations, ['parent']); }
+				return Reflect.apply(push.value, this, nodes);
+			}
+		});
+		let node: AstNode | null;
+		try { node = concat23Trees(array); }
+		finally { Object.defineProperty(Array.prototype, 'push', push); Object.defineProperty(ListAstNode, 'create23', factory); }
+		const recorded = observations.slice();
+		return { node: snapshot(node), items: roots.map(snapshot), observations: recorded };
+	};
+	assert.deepStrictEqual(withRust(run), run());
+});
+
+test('Rust mixed-height bracket trees retain virtual failure identity and partial mutations', () => {
+	const failure = new Error('Original bracket balancing method failure');
+	for (const tallFirst of [false, true]) {
+		const run = () => {
+			const leaf = () => new TextAstNode(toLength(0, 1));
+			const branch = () => ListAstNode.create23(leaf(), leaf(), leaf());
+			const root = ListAstNode.create23(branch(), branch(), branch());
+			Object.defineProperty(root, tallFirst ? 'makeLastElementMutable' : 'makeFirstElementMutable', { value: () => { throw failure; } });
+			const items = tallFirst ? [root, leaf()] : [leaf(), root];
+			assert.throws(() => concat23Trees(items), error => error === failure);
+			return { items: items.map(snapshot), root: snapshot(root) };
+		};
+		assert.deepStrictEqual(withRust(run), run());
+	}
 });

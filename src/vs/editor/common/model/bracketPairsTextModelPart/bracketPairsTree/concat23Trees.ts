@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { AstNode, AstNodeKind, ListAstNode } from './ast.js';
-import { tryConcatRustBracketTrees } from './rustBracketTrees.js';
+import { tryConcatRustBracketTreeList, tryConcatRustBracketTrees } from './rustBracketTrees.js';
 
 /**
  * Concatenates a list of (2,3) AstNode's into a single (2,3) AstNode.
@@ -19,6 +19,30 @@ export function concat23Trees(items: AstNode[]): AstNode | null {
 	if (items.length === 1) {
 		return items[0];
 	}
+	const native = tryConcatRustBracketTreeList(() => ({
+		isEnd: index => index >= items.length,
+		heightAt: index => items[index].listHeight,
+		matchesHeight: (index, height) => index < items.length && items[index].listHeight === height,
+		item: index => items[index],
+		group: (start, end) => concat23TreesOfSameHeight(start === 0 && end === items.length ? items : items.slice(start, end), false),
+		truthy: node => !!node,
+		preferFirst: (first, second, next) => heightDiff(first, second) <= heightDiff(second, next),
+		compareHeight: (first, second, greater) => greater ? first.listHeight > second.listHeight : first.listHeight === second.listHeight,
+		createPair: (first, second) => ListAstNode.create23(first, second, null, false),
+		toMutable: node => (node as ListAstNode).toMutable(),
+		createParents: () => [],
+		pushParent: (parents, node) => { parents.push(node); },
+		parentsLastIndex: parents => parents.length - 1,
+		parentAt: (parents, index) => parents[index],
+		isList: node => node.kind === AstNodeKind.List,
+		edgeMutable: (node, append) => append ? (node as ListAstNode).makeLastElementMutable() : (node as ListAstNode).makeFirstElementMutable(),
+		fullChildren: node => node.childrenLength >= 3,
+		splitChild: (parent, carried, append) => append ? ListAstNode.create23((parent as ListAstNode).unappendChild()!, carried, null, false) : ListAstNode.create23(carried, (parent as ListAstNode).unprependChild()!, null, false),
+		addChild: (parent, carried, append) => { if (append) { (parent as ListAstNode).appendChildOfSameHeight(carried); } else { (parent as ListAstNode).prependChildOfSameHeight(carried); } },
+		childrenChanged: parent => { (parent as ListAstNode).handleChildrenChanged(); },
+		unexpectedError: () => new Error('unexpected')
+	}));
+	if (native !== undefined) { return native.node; }
 
 	let i = 0;
 	/**
