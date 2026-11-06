@@ -57,6 +57,7 @@ import { IRustModelLifecycleHost, RustModelLifecycleOperation, RustModelLifecycl
 import { IRustModelOptionsControllerHost, RustModelOptionsControllerOperation, tryRustModelOptionsController } from './rustModelOptionsController.js';
 import { IRustModelSearchHost, IRustModelSearchModule, RustModelSearchOperation, tryRustModelSearch } from './rustModelSearch.js';
 import { ownRustTextModel, releaseRustTextModel } from './rustModelState.js';
+import { IRustModelEditValidationHost, RustModelEditValidationOperation, tryRustModelEditValidation } from './rustModelEditValidation.js';
 import { IRustModelContentEventsHost, ownRustModelContentEmitter, releaseRustModelContentEmitter, RustModelContentEventsOperation, tryRustModelContentEvents } from './rustModelContentEvents.js';
 import { ownRustModelContentData } from './rustModelEventData.js';
 import { IRustAffectedDecorationLine, IRustModelDecorationEventsHost, ownRustModelDecorationEmitter, ownRustModelDecorationEvent, releaseRustModelDecorationEmitter, RustModelDecorationEventsOperation, rustModelDecorationEventFields, tryRustModelDecorationEvents } from './rustModelDecorationEvents.js';
@@ -1624,7 +1625,49 @@ export class TextModel extends Disposable implements model.ITextModel, IDecorati
 		}
 	}
 
+	private _createRustModelEditValidationHost(): IRustModelEditValidationHost {
+		return {
+			annotated: operation => operation instanceof model.ValidAnnotatedEditOperation,
+			field: (operation, index) => {
+				switch (index) {
+					case 0: return operation.range;
+					case 1: return operation.text;
+					case 2: return operation.identifier;
+					case 3: return operation.forceMoveMarkers;
+					case 4: return operation.isAutoWhitespaceEdit;
+					case 5: return operation._isTracked;
+					default: throw new BugIndicatingError('Unsupported model edit field');
+				}
+			},
+			rangeMethod: () => { const method = this.validateRange; return range => method.call(this, range); },
+			validateRange: (method, range) => method(range),
+			length: text => text.length,
+			aboveZero: value => value > 0,
+			minusOne: value => value - 1,
+			charMethod: text => { const method = text.charCodeAt; return index => method.call(text, index); },
+			charCode: (method, index) => method(index),
+			eol: () => this.getEOL(),
+			endColumn: range => range.endColumn,
+			maxMethod: () => { const method = this.getLineMaxColumn; return line => method.call(this, line); },
+			endLine: range => range.endLineNumber,
+			maxColumn: (method, line) => method(line),
+			substringMethod: text => { const method = text.substring; return end => method.call(text, 0, end); },
+			substring: (method, end) => method(end),
+			constructMethod: () => model.ValidAnnotatedEditOperation,
+			construct: (method, identifier, range, text, markers, whitespace, tracked) => new method(identifier, range, text, markers, whitespace, tracked),
+			result: () => [],
+			operationLength: operations => operations.length,
+			less: (index, length) => index < length,
+			editMethod: () => { const method = this._validateEditOperation; return operation => method.call(this, operation); },
+			operation: (operations, index) => operations[index],
+			validateEdit: (method, operation) => method(operation),
+			write: (result, index, operation) => { result[index] = operation; },
+		};
+	}
+
 	private _validateEditOperation(rawOperation: model.IIdentifiedSingleEditOperation): model.ValidAnnotatedEditOperation {
+		const rust = tryRustModelEditValidation<model.ValidAnnotatedEditOperation>(RustModelEditValidationOperation.Single, rawOperation, () => this._createRustModelEditValidationHost());
+		if (rust) { return rust.value; }
 		if (rawOperation instanceof model.ValidAnnotatedEditOperation) {
 			return rawOperation;
 		}
@@ -1658,6 +1701,8 @@ export class TextModel extends Disposable implements model.ITextModel, IDecorati
 	}
 
 	private _validateEditOperations(rawOperations: readonly model.IIdentifiedSingleEditOperation[]): model.ValidAnnotatedEditOperation[] {
+		const rust = tryRustModelEditValidation<model.ValidAnnotatedEditOperation[]>(RustModelEditValidationOperation.Batch, rawOperations, () => this._createRustModelEditValidationHost());
+		if (rust) { return rust.value; }
 		const result: model.ValidAnnotatedEditOperation[] = [];
 		for (let i = 0, len = rawOperations.length; i < len; i++) {
 			result[i] = this._validateEditOperation(rawOperations[i]);
