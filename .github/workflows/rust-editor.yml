@@ -93,3 +93,5 @@ jobs:
         run: pnpm run build-rust-editor
       - name: Run canonical model suites with both storage implementations
         run: pnpm run test-rust-editor-models
+      - name: Run canonical browser cursor suite with both implementations
+        run: pnpm run test-rust-editor-cursor

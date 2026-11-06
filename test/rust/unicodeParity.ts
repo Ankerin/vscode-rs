@@ -134,3 +134,37 @@ test('Rust Unicode registration validates results and rolls back the owning core
 	try { assert.throws(() => registerRustUnicode(rust), /already registered/); } finally { registration.dispose(); }
 	assert.strictEqual(tryComputeRustGraphemeOffset('a', 0, false), undefined);
 });
+
+test('Rust Unicode Backspace retains seeded emoji components, isolated modifiers, optional joiners, and surrogate interiors', () => {
+	let seed = 617;
+	let calls = 0;
+	let expectedCalls = 0;
+	const random = (limit: number) => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed % limit; };
+	const parts = ['a', '\r\n', '\uD800', '\uDC00', '\u0301', '\u200D', '\uFE0F', '\u20E3', '1\uFE0F\u20E3', '\uD83C\uDFFB', '\uD83C\uDFFF', '\uD83D\uDE00', '\uD83D\uDC76\uD83C\uDFFE', '\uD83D\uDC68\u200D\uD83D\uDC69\uD83C\uDFFD\u200D\uD83D\uDC67\u200D\uD83D\uDC66'];
+	const module: IRustUnicodeModule = { ...rust, unicode_left_delete_offset: (text, offset) => { calls++; return rust.unicode_left_delete_offset(text, offset); } };
+	for (let trace = 0; trace < 2048; trace++) {
+		const text = Array.from({ length: 1 + random(20) }, () => parts[random(parts.length)]).join('');
+		const run = () => Array.from({ length: text.length + 1 }, (_, offset) => strings.getLeftDeleteOffset(offset, text));
+		assert.deepStrictEqual(withRust(run, module), run(), `Unicode delete trace ${trace}`);
+		expectedCalls += text.length;
+	}
+	assert.strictEqual(calls, expectedCalls, 'Every supported nonzero Backspace query uses the native implementation');
+});
+
+test('Rust Unicode Backspace preserves original callbacks, unusual offsets, and invalid binding results', () => {
+	const text = 'a\uD83D\uDE00\uD83C\uDFFD\u200D\uD83D\uDE00\uFE0F';
+	for (const offset of [-2, -0, 0, 0.5, 1.5, text.length, text.length + 1, Number.NaN, Number.POSITIVE_INFINITY]) {
+		assert.strictEqual(withRust(() => strings.getLeftDeleteOffset(offset, text)), strings.getLeftDeleteOffset(offset, text));
+	}
+	const failure = new Error('Original Backspace callback failure');
+	const method = Object.getOwnPropertyDescriptor(strings.CodePointIterator.prototype, 'prevCodePoint')!;
+	Object.defineProperty(strings.CodePointIterator.prototype, 'prevCodePoint', { configurable: true, get: () => { throw failure; } });
+	try { assert.throws(() => withRust(() => strings.getLeftDeleteOffset(text.length, text)), error => error === failure); }
+	finally { Object.defineProperty(strings.CodePointIterator.prototype, 'prevCodePoint', method); }
+	assert.strictEqual(withRust(() => strings.getLeftDeleteOffset(0, undefined as never)), 0);
+	const boxed = Object(text) as never;
+	assert.strictEqual(withRust(() => strings.getLeftDeleteOffset(text.length, boxed)), strings.getLeftDeleteOffset(text.length, boxed));
+	assert.strictEqual(rust.unicode_left_delete_offset(text, 0), undefined);
+	assert.throws(() => withRust(() => strings.getLeftDeleteOffset(1, 'a'), { ...rust, unicode_left_delete_offset: () => 1 }), /left delete offset/);
+	assert.throws(() => registerRustTextBuffer({ ...rust, unicode_left_delete_offset: undefined as never }), /iterator contract/);
+});

@@ -10,6 +10,7 @@ export interface IRustUnicodeModule {
 	unicode_abi_version(): number;
 	unicode_code_point(text: string, length: number, offset: number, previous: boolean): number | undefined;
 	unicode_grapheme_offset(text: string, offset: number, previous: boolean): number | undefined;
+	unicode_left_delete_offset(text: string, offset: number): number | undefined;
 }
 
 let registeredModule: IRustUnicodeModule | undefined;
@@ -22,7 +23,7 @@ export function isRustUnicodeRegistered(): boolean {
 
 /** Installs borrowed-string traversal for the owning editor core's disposable lifetime. */
 export function registerRustUnicode(module: IRustUnicodeModule): IDisposable {
-	if (typeof module.unicode_abi_version !== 'function' || module.unicode_abi_version() !== 1 || typeof module.unicode_code_point !== 'function' || typeof module.unicode_grapheme_offset !== 'function') { throw new Error('The Rust Unicode bindings do not match the current iterator contract'); }
+	if (typeof module.unicode_abi_version !== 'function' || module.unicode_abi_version() !== 2 || typeof module.unicode_code_point !== 'function' || typeof module.unicode_grapheme_offset !== 'function' || typeof module.unicode_left_delete_offset !== 'function') { throw new Error('The Rust Unicode bindings do not match the current iterator contract'); }
 	if (registeredModule) { throw new Error('A Rust Unicode module is already registered'); }
 	registeredModule = module;
 	return toDisposable(() => { if (registeredModule === module) { registeredModule = undefined; } });
@@ -41,6 +42,14 @@ export function tryComputeRustGraphemeOffset(text: string, offset: number, previ
 	if (!registeredModule || typeof text !== 'string' || !standardInput(text, text.length, offset, previous)) { return undefined; }
 	const result = registeredModule.unicode_grapheme_offset(text, offset, previous);
 	if (result !== undefined && (!Number.isInteger(result) || result < 0 || result > text.length || (previous ? result >= offset : result <= offset))) { throw new Error('The Rust grapheme offset result does not match the iterator contract'); }
+	return result;
+}
+
+/** Returns one Unicode-aware Backspace boundary without transferring the complete source. */
+export function tryComputeRustLeftDeleteOffset(text: string, offset: number): number | undefined {
+	if (!registeredModule || typeof text !== 'string' || !standardInput(text, text.length, offset, true)) { return undefined; }
+	const result = registeredModule.unicode_left_delete_offset(text, offset);
+	if (result !== undefined && (!Number.isInteger(result) || result < 0 || result >= offset)) { throw new Error('The Rust left delete offset does not match the iterator contract'); }
 	return result;
 }
 

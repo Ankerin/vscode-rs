@@ -18,7 +18,7 @@ extern "C" {
 /// Versions code-point and forward/backward grapheme stepping independently of cursor columns.
 #[wasm_bindgen]
 pub fn unicode_abi_version() -> u32 {
-	1
+	2
 }
 
 fn supported(length: f64, offset: f64, previous: bool) -> bool {
@@ -81,4 +81,22 @@ pub fn unicode_grapheme_offset(
 		},
 	)?;
 	Ok(Some(after as u32))
+}
+
+/// Returns a Backspace coordinate after scanning only the preceding code point or emoji component.
+#[wasm_bindgen]
+pub fn unicode_left_delete_offset(text: JsString, offset: f64) -> Result<Option<u32>, JsValue> {
+	if !supported(f64::from(text.length()), offset, true) {
+		return Ok(None);
+	}
+	let before = vscode_editor_core::unicode_left_delete_offset(
+		text.length() as usize,
+		offset as usize,
+		|index| {
+			text.unchecked_ref::<Text>()
+				.character(index as u32)
+				.map(|value| value as u16)
+		},
+	)?;
+	Ok(Some(before as u32))
 }

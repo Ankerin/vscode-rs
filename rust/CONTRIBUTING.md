@@ -38,6 +38,8 @@ pnpm exec tsc --project test/rust/tsconfig.json --noEmit --skipLibCheck
 
 After a current client build and binding generation, run `pnpm run test-rust-editor-models` to execute the unchanged canonical model suites against both implementations.
 
+For cursor, grapheme, or Unicode deletion changes, run `pnpm run test-rust-editor-cursor` to execute the unchanged cursor suite with both implementations through the canonical Chromium runner. Install the repository's matching Playwright Chromium build when needed. The runner removes its generated bootstrap after the browser sessions finish.
+
 Run targeted repository ESLint and TypeScript formatting checks for changed bridges/build scripts. Use the existing editor test runners for changes to the original buffer/model path. Run layer checks when imports or service boundaries change. Prepare missing development prerequisites through the existing repository tooling; do not change product code to silence environment errors.
 
 Record validation accurately. Passing storage tests does not establish visual parity, extension compatibility, release packaging, or lower application resource usage. Follow the acceptance gates in [Architecture](ARCHITECTURE.md) before default promotion.

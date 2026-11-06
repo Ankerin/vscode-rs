@@ -7,7 +7,7 @@ import { LRUCachedFunction } from './cache.js';
 import { CharCode } from './charCode.js';
 import { Lazy } from './lazy.js';
 import { Constants } from './uint.js';
-import { isRustUnicodeRegistered, tryComputeRustCodePoint, tryComputeRustGraphemeOffset } from './rustUnicode.js';
+import { isRustUnicodeRegistered, tryComputeRustCodePoint, tryComputeRustGraphemeOffset, tryComputeRustLeftDeleteOffset } from './rustUnicode.js';
 
 export function isFalsyOrWhitespace(str: string | undefined): boolean {
 	if (!str || typeof str !== 'string') {
@@ -1211,6 +1211,12 @@ export function getLeftDeleteOffset(offset: number, str: string): number {
 	if (offset === 0) {
 		return 0;
 	}
+	const native = isRustUnicodeRegistered() && graphemeIteratorMethods.every(({ target, name, descriptor }) => {
+		if (target !== CodePointIterator.prototype) { return true; }
+		const current = Object.getOwnPropertyDescriptor(target, name);
+		return current?.value === descriptor?.value && current?.get === descriptor?.get;
+	}) ? tryComputeRustLeftDeleteOffset(str, offset) : undefined;
+	if (native !== undefined) { return native; }
 
 	// Try to delete emoji part.
 	const emojiOffset = getOffsetBeforeLastEmojiComponent(offset, str);

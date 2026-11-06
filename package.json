@@ -85,6 +85,7 @@
     "build-rust-editor": "node build/rust/build.ts",
     "test-rust-editor": "node build/rust/test.ts",
     "test-rust-editor-models": "node build/rust/testModels.ts",
+    "test-rust-editor-cursor": "node build/rust/testCursor.ts",
     "benchmark-rust-editor": "node build/rust/benchmark.ts",
     "compile-web": "pnpm run gulp compile-web",
     "serve-out-rspack": "cd build/rspack && pnpm exec rspack serve --config rspack.serve-out.config.mts",

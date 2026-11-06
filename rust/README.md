@@ -1,6 +1,6 @@
 # Rust Editor
 
-This workspace starts the Rust migration of Code OSS. The full editor has not been rewritten. The current implementation replaces text storage, buffer edit transactions, indentation queries/folding/guides, cursor columns and atomic-tab movement, Unicode iterator kernels, token adjustment and syntax line-state ownership, the advanced document diff pipeline, and open undo batch storage when explicitly enabled; the existing workbench, editor rendering, higher-level model validation/versioning, undo service, extension host, and desktop shell remain in place.
+This workspace starts the Rust migration of Code OSS. The full editor has not been rewritten. The current implementation replaces text storage, buffer edit transactions, indentation queries/folding/guides, cursor columns and atomic-tab movement, Unicode iterator and Backspace kernels, token adjustment and syntax line-state ownership, the advanced document diff pipeline, and open undo batch storage when explicitly enabled; the existing workbench, editor rendering, higher-level model validation/versioning, undo service, extension host, and desktop shell remain in place.
 
 See [Architecture](ARCHITECTURE.md) for the complete target, subsystem boundaries, migration order, and acceptance gates. See [Contributing](CONTRIBUTING.md) for formatting, validation, and compatibility requirements.
 
@@ -16,7 +16,7 @@ See [Architecture](ARCHITECTURE.md) for the complete target, subsystem boundarie
 | `../src/vs/editor/common/diff/defaultLinesDiffComputer/` | Complete native advanced diff with display ranges, moves, and raw edits | Implemented; follows the core registration |
 | `../src/vs/editor/common/core/rustTextChanges.ts` | Native composition and owning storage for open undo batches | Implemented; follows the core registration |
 | `../src/vs/editor/common/core/rustCursorColumns.ts` | Native visible/status-bar columns, UTF-16/grapheme traversal, tab stops, and atomic indentation movement | Implemented; follows the core registration |
-| `../src/vs/base/common/rustUnicode.ts` | Borrowed-string code-point and forward/backward grapheme kernels beneath existing iterators | Implemented; follows the core registration |
+| `../src/vs/base/common/rustUnicode.ts` | Borrowed-string code-point, forward/backward grapheme, and Unicode Backspace kernels | Implemented; follows the core registration |
 | `../src/vs/editor/common/tokens/rustTokens.ts` | Native metadata composition, sparse/contiguous editing, and syntax store creation | Implemented; follows the core registration |
 | `../build/rust/` | Binding generation and compatibility test runner | Implemented |
 | `../test/rust/` | Tests against the existing buffer and text model | Implemented |
@@ -159,6 +159,16 @@ Cursor column checks compare every Unicode code point with the original grapheme
 Atomic-tab checks compare 2,048 seeded indentation streams across ten positions, thirteen tab-size domains, and eight directions, verifying 20,480 native whitespace queries and 163,840 native movements. They retain strict position equality, complete-stop validation, partial-indentation fallback, midpoint ties, line-end checks, exceptional numbers, signed zero, invalid-direction behavior, base-class overrides, string accessors, subclass and detached calls, and registration rollback. Cursor-columns ABI 2 passes 100 differential tests, 64 native tests, 508 canonical tests per implementation, and the Chromium worker bootstrap test. General grapheme iterators, other cursor movement/state, view coordinates, and rendering remain separate work.
 
 Unicode iterator checks compare 2,048 seeded UTF-16 texts through code-point iteration, forward/backward graphemes, next/previous character lengths, containing ranges, and character counts. They retain surrogate interiors, stateless boundary quirks, iterator coordinates, fractional/out-of-range offsets, cached lengths, boxed strings, external field accessors, read-only offsets, subclass callbacks, proxy trap order, and atomic registration rollback. Unicode ABI 1 passes 104 differential tests, 65 native tests, 556 canonical tests per implementation, and the Chromium worker bootstrap test. The unchanged base string suite joins the canonical selector. Existing JavaScript iterator objects retain their public state; Rust owns code-point and complete supported grapheme-step computation. Unicode-aware deletion, remaining cursor state, view coordinates, and rendering remain separate work.
+
+Unicode Backspace checks compare every UTF-16 offset across 2,048 seeded emoji/modifier/joiner streams. They retain approximate emoji-base selection, isolated modifier fallback, optional preceding ZWJ removal, surrogate interiors, single-code-point fallback, unusual offsets, original iterator callbacks, boxed strings, and registration validation. Unicode ABI 2 passes 106 differential tests, 67 native tests, 556 canonical model/string tests and 263 canonical Chromium cursor tests per implementation, plus the Chromium worker lifecycle test. The browser runner initializes the same compiled core before loading the unchanged cursor suite and removes its generated bootstrap afterward. Cursor configuration, command orchestration, selection state, view coordinates, and rendering remain separate work.
+
+Run the canonical browser cursor suite after the current client build and binding generation:
+
+```sh
+pnpm run test-rust-editor-cursor
+```
+
+The runner uses Chromium and runs both implementations in fresh browser sessions. An optional `--grep` selects the same original cases for both engines.
 
 ## Benchmark
 

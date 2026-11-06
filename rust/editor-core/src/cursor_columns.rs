@@ -234,7 +234,12 @@ fn break_between(before: Option<u32>, after: Option<u32>) -> bool {
 }
 
 fn wide(point: u32) -> bool {
-	matches!(point, 0x2E80..=0xD7AF | 0xF900..=0xFAFF | 0xFF01..=0xFF5E | 0xFFE0..=0xFFE6 | 0x1F1E6..=0x1F1FF | 8986 | 8987 | 9200 | 9203 | 9728..=10175 | 11088 | 11093 | 127744..=128591 | 128640..=128764 | 128992..=129008 | 129280..=129535 | 129648..=129782)
+	matches!(point, 0x2E80..=0xD7AF | 0xF900..=0xFAFF | 0xFF01..=0xFF5E | 0xFFE0..=0xFFE6)
+		|| is_emoji_imprecise(point)
+}
+
+pub(crate) fn is_emoji_imprecise(point: u32) -> bool {
+	matches!(point, 0x1F1E6..=0x1F1FF | 8986 | 8987 | 9200 | 9203 | 9728..=10175 | 11088 | 11093 | 127744..=128591 | 128640..=128764 | 128992..=129008 | 129280..=129535 | 129648..=129782)
 }
 
 #[cfg(test)]
