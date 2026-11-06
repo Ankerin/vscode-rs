@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { IDisposable, toDisposable } from '../../../base/common/lifecycle.js';
+import { BugIndicatingError } from '../../../base/common/errors.js';
 import { IPosition, Position } from '../core/position.js';
 import { IRange, Range } from '../core/range.js';
 
@@ -50,6 +51,31 @@ export interface IRustModelValidationModule {
 }
 
 let registeredModule: IRustModelValidationModule | undefined;
+
+/** Reads a borrowed public coordinate without coercing its value. */
+export function readRustModelCoordinate(value: IPosition | IRange, field: number): number {
+	switch (field) {
+		case 0: return (value as IPosition).lineNumber;
+		case 1: return (value as IPosition).column;
+		case 2: return (value as IRange).startLineNumber;
+		case 3: return (value as IRange).startColumn;
+		case 4: return (value as IRange).endLineNumber;
+		case 5: return (value as IRange).endColumn;
+		default: throw new BugIndicatingError('Invalid model coordinate field');
+	}
+}
+
+/** Preserves ECMAScript operators for exceptional runtime provider values. */
+export function compareRustModelValues(operation: number, first: number, second: number): boolean {
+	switch (operation) {
+		case 0: return first === second;
+		case 1: return first < second;
+		case 2: return first > second;
+		case 3: return first <= second;
+		case 4: return first >= second;
+		default: throw new BugIndicatingError('Invalid model coordinate comparison');
+	}
+}
 
 /** Installs model validation atomically with the Rust core, rejecting incompatible bindings. */
 export function registerRustModelValidation(module: IRustModelValidationModule): IDisposable {

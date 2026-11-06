@@ -50,7 +50,8 @@ import { IntervalNode, IntervalTree, recomputeMaxEnd } from './intervalTree.js';
 import { PieceTreeTextBuffer } from './pieceTreeTextBuffer/pieceTreeTextBuffer.js';
 import { PieceTreeTextBufferBuilder } from './pieceTreeTextBuffer/pieceTreeTextBufferBuilder.js';
 import { SearchParams, TextModelSearch } from './textModelSearch.js';
-import { IRustModelValidationHost, RustModelValidationOperation, tryRustModelValidation } from './rustModelValidation.js';
+import { IRustModelValidationHost, RustModelValidationOperation, compareRustModelValues, readRustModelCoordinate, tryRustModelValidation } from './rustModelValidation.js';
+import { IRustModelQueryHost, RustModelQueryMethod, RustModelQueryOperation, RustModelQueryValue, rustModelQueryMethodNames, tryRustModelQuery } from './rustModelQuery.js';
 import { AttachedViews } from './tokens/abstractSyntaxTokenBackend.js';
 import { TokenizationFontDecorationProvider } from './tokens/tokenizationFontDecorationsProvider.js';
 import { LineFontChangingDecoration, LineHeightChangingDecoration } from './decorationProvider.js';
@@ -649,6 +650,8 @@ export class TextModel extends Disposable implements model.ITextModel, IDecorati
 	}
 
 	public isDominatedByLongLines(): boolean {
+		const rust = tryRustModelQuery<boolean>(RustModelQueryOperation.DominatedByLongLines, 0, 0, false, () => this._createRustModelQueryHost());
+		if (rust) { return rust.value; }
 		this._assertNotDisposed();
 		if (this.isTooLargeForTokenization()) {
 			// Cannot word wrap huge files anyways, so it doesn't really matter
@@ -736,16 +739,55 @@ export class TextModel extends Disposable implements model.ITextModel, IDecorati
 
 	//#region Reading
 
+	/** Captures original providers before Rust evaluates their inline arguments. */
+	private _createRustModelQueryHost(): IRustModelQueryHost {
+		return {
+			assertAlive: () => this._assertNotDisposed(),
+			fail: heap => { throw new BugIndicatingError(heap ? 'Operation would exceed heap memory limits' : 'Illegal value for lineNumber'); },
+			method: operation => {
+				const owner = operation >= RustModelQueryMethod.BufferLength ? this._buffer : this;
+				const provider = (owner as object as Record<string, (...args: RustModelQueryValue[]) => RustModelQueryValue>)[rustModelQueryMethodNames[operation]];
+				return (...args) => Reflect.apply(provider, owner, args);
+			},
+			call0: method => method(),
+			call1: (method, first) => method(first),
+			call2: (method, first, second) => method(first, second),
+			call3: (method, first, second, third) => method(first, second, third),
+			coordinate: readRustModelCoordinate,
+			compare: compareRustModelValues,
+			add: (first, second) => first + second,
+			boundOffset: (length, offset) => Math.min(length, Math.max(0, offset)),
+			length: value => value.length,
+			state: index => {
+				switch (index) {
+					case 0: return this._versionId;
+					case 1: return this._alternativeVersionId;
+					case 2: return this._initialUndoRedoSnapshot;
+					default: throw new BugIndicatingError('Invalid model query state');
+				}
+			},
+			snapshot: source => new TextModelSnapshot(source),
+			range: (count, maxColumn) => new Range(1, 1, count, maxColumn)
+		};
+	}
+
+
 	public getVersionId(): number {
+		const rust = tryRustModelQuery<number>(RustModelQueryOperation.Version, 0, 0, false, () => this._createRustModelQueryHost());
+		if (rust) { return rust.value; }
 		this._assertNotDisposed();
 		return this._versionId;
 	}
 
 	public mightContainRTL(): boolean {
+		const rust = tryRustModelQuery<boolean>(RustModelQueryOperation.Rtl, 0, 0, false, () => this._createRustModelQueryHost());
+		if (rust) { return rust.value; }
 		return this._buffer.mightContainRTL();
 	}
 
 	public mightContainUnusualLineTerminators(): boolean {
+		const rust = tryRustModelQuery<boolean>(RustModelQueryOperation.UnusualTerminators, 0, 0, false, () => this._createRustModelQueryHost());
+		if (rust) { return rust.value; }
 		return this._buffer.mightContainUnusualLineTerminators();
 	}
 
@@ -756,26 +798,36 @@ export class TextModel extends Disposable implements model.ITextModel, IDecorati
 	}
 
 	public mightContainNonBasicASCII(): boolean {
+		const rust = tryRustModelQuery<boolean>(RustModelQueryOperation.NonBasicAscii, 0, 0, false, () => this._createRustModelQueryHost());
+		if (rust) { return rust.value; }
 		return this._buffer.mightContainNonBasicASCII();
 	}
 
 	public getAlternativeVersionId(): number {
+		const rust = tryRustModelQuery<number>(RustModelQueryOperation.AlternativeVersion, 0, 0, false, () => this._createRustModelQueryHost());
+		if (rust) { return rust.value; }
 		this._assertNotDisposed();
 		return this._alternativeVersionId;
 	}
 
 	public getInitialUndoRedoSnapshot(): ResourceEditStackSnapshot | null {
+		const rust = tryRustModelQuery<ResourceEditStackSnapshot | null>(RustModelQueryOperation.InitialSnapshot, 0, 0, false, () => this._createRustModelQueryHost());
+		if (rust) { return rust.value; }
 		this._assertNotDisposed();
 		return this._initialUndoRedoSnapshot;
 	}
 
 	public getOffsetAt(rawPosition: IPosition): number {
+		const rust = tryRustModelQuery<number>(RustModelQueryOperation.Offset, rawPosition, 0, false, () => this._createRustModelQueryHost());
+		if (rust) { return rust.value; }
 		this._assertNotDisposed();
 		const position = this._validatePosition(rawPosition.lineNumber, rawPosition.column, StringOffsetValidationType.Relaxed);
 		return this._buffer.getOffsetAt(position.lineNumber, position.column);
 	}
 
 	public getPositionAt(rawOffset: number): Position {
+		const rust = tryRustModelQuery<Position>(RustModelQueryOperation.Position, rawOffset, 0, false, () => this._createRustModelQueryHost());
+		if (rust) { return rust.value; }
 		this._assertNotDisposed();
 		const offset = (Math.min(this._buffer.getLength(), Math.max(0, rawOffset)));
 		return this._buffer.getPositionAt(offset);
@@ -799,6 +851,8 @@ export class TextModel extends Disposable implements model.ITextModel, IDecorati
 	}
 
 	public getValue(eol?: model.EndOfLinePreference, preserveBOM: boolean = false): string {
+		const rust = tryRustModelQuery<string>(RustModelQueryOperation.Value, eol, 0, preserveBOM, () => this._createRustModelQueryHost());
+		if (rust) { return rust.value; }
 		this._assertNotDisposed();
 		if (this.isTooLargeForHeapOperation()) {
 			throw new BugIndicatingError('Operation would exceed heap memory limits');
@@ -815,10 +869,14 @@ export class TextModel extends Disposable implements model.ITextModel, IDecorati
 	}
 
 	public createSnapshot(preserveBOM: boolean = false): model.ITextSnapshot {
+		const rust = tryRustModelQuery<model.ITextSnapshot>(RustModelQueryOperation.Snapshot, preserveBOM, 0, false, () => this._createRustModelQueryHost());
+		if (rust) { return rust.value; }
 		return new TextModelSnapshot(this._buffer.createSnapshot(preserveBOM));
 	}
 
 	public getValueLength(eol?: model.EndOfLinePreference, preserveBOM: boolean = false): number {
+		const rust = tryRustModelQuery<number>(RustModelQueryOperation.ValueLength, eol, 0, preserveBOM, () => this._createRustModelQueryHost());
+		if (rust) { return rust.value; }
 		this._assertNotDisposed();
 		const fullModelRange = this.getFullModelRange();
 		const fullModelValue = this.getValueLengthInRange(fullModelRange, eol);
@@ -831,26 +889,36 @@ export class TextModel extends Disposable implements model.ITextModel, IDecorati
 	}
 
 	public getValueInRange(rawRange: IRange, eol: model.EndOfLinePreference = model.EndOfLinePreference.TextDefined): string {
+		const rust = tryRustModelQuery<string>(RustModelQueryOperation.RangeValue, rawRange, eol, false, () => this._createRustModelQueryHost());
+		if (rust) { return rust.value; }
 		this._assertNotDisposed();
 		return this._buffer.getValueInRange(this.validateRange(rawRange), eol);
 	}
 
 	public getValueLengthInRange(rawRange: IRange, eol: model.EndOfLinePreference = model.EndOfLinePreference.TextDefined): number {
+		const rust = tryRustModelQuery<number>(RustModelQueryOperation.RangeLength, rawRange, eol, false, () => this._createRustModelQueryHost());
+		if (rust) { return rust.value; }
 		this._assertNotDisposed();
 		return this._buffer.getValueLengthInRange(this.validateRange(rawRange), eol);
 	}
 
 	public getCharacterCountInRange(rawRange: IRange, eol: model.EndOfLinePreference = model.EndOfLinePreference.TextDefined): number {
+		const rust = tryRustModelQuery<number>(RustModelQueryOperation.CharacterCount, rawRange, eol, false, () => this._createRustModelQueryHost());
+		if (rust) { return rust.value; }
 		this._assertNotDisposed();
 		return this._buffer.getCharacterCountInRange(this.validateRange(rawRange), eol);
 	}
 
 	public getLineCount(): number {
+		const rust = tryRustModelQuery<number>(RustModelQueryOperation.LineCount, 0, 0, false, () => this._createRustModelQueryHost());
+		if (rust) { return rust.value; }
 		this._assertNotDisposed();
 		return this._buffer.getLineCount();
 	}
 
 	public getLineContent(lineNumber: number): string {
+		const rust = tryRustModelQuery<string>(RustModelQueryOperation.LineContent, lineNumber, 0, false, () => this._createRustModelQueryHost());
+		if (rust) { return rust.value; }
 		this._assertNotDisposed();
 		if (lineNumber < 1 || lineNumber > this.getLineCount()) {
 			throw new BugIndicatingError('Illegal value for lineNumber');
@@ -860,6 +928,8 @@ export class TextModel extends Disposable implements model.ITextModel, IDecorati
 	}
 
 	public getLineLength(lineNumber: number): number {
+		const rust = tryRustModelQuery<number>(RustModelQueryOperation.LineLength, lineNumber, 0, false, () => this._createRustModelQueryHost());
+		if (rust) { return rust.value; }
 		this._assertNotDisposed();
 		if (lineNumber < 1 || lineNumber > this.getLineCount()) {
 			throw new BugIndicatingError('Illegal value for lineNumber');
@@ -869,6 +939,8 @@ export class TextModel extends Disposable implements model.ITextModel, IDecorati
 	}
 
 	public getLinesContent(): string[] {
+		const rust = tryRustModelQuery<string[]>(RustModelQueryOperation.Lines, 0, 0, false, () => this._createRustModelQueryHost());
+		if (rust) { return rust.value; }
 		this._assertNotDisposed();
 		if (this.isTooLargeForHeapOperation()) {
 			throw new BugIndicatingError('Operation would exceed heap memory limits');
@@ -878,11 +950,15 @@ export class TextModel extends Disposable implements model.ITextModel, IDecorati
 	}
 
 	public getEOL(): string {
+		const rust = tryRustModelQuery<string>(RustModelQueryOperation.Eol, 0, 0, false, () => this._createRustModelQueryHost());
+		if (rust) { return rust.value; }
 		this._assertNotDisposed();
 		return this._buffer.getEOL();
 	}
 
 	public getEndOfLineSequence(): model.EndOfLineSequence {
+		const rust = tryRustModelQuery<model.EndOfLineSequence>(RustModelQueryOperation.EndSequence, 0, 0, false, () => this._createRustModelQueryHost());
+		if (rust) { return rust.value; }
 		this._assertNotDisposed();
 		return (
 			this._buffer.getEOL() === '\n'
@@ -892,11 +968,15 @@ export class TextModel extends Disposable implements model.ITextModel, IDecorati
 	}
 
 	public getLineMinColumn(lineNumber: number): number {
+		const rust = tryRustModelQuery<number>(RustModelQueryOperation.MinColumn, lineNumber, 0, false, () => this._createRustModelQueryHost());
+		if (rust) { return rust.value; }
 		this._assertNotDisposed();
 		return 1;
 	}
 
 	public getLineMaxColumn(lineNumber: number): number {
+		const rust = tryRustModelQuery<number>(RustModelQueryOperation.MaxColumn, lineNumber, 0, false, () => this._createRustModelQueryHost());
+		if (rust) { return rust.value; }
 		this._assertNotDisposed();
 		if (lineNumber < 1 || lineNumber > this.getLineCount()) {
 			throw new BugIndicatingError('Illegal value for lineNumber');
@@ -905,6 +985,8 @@ export class TextModel extends Disposable implements model.ITextModel, IDecorati
 	}
 
 	public getLineFirstNonWhitespaceColumn(lineNumber: number): number {
+		const rust = tryRustModelQuery<number>(RustModelQueryOperation.FirstNonWhitespace, lineNumber, 0, false, () => this._createRustModelQueryHost());
+		if (rust) { return rust.value; }
 		this._assertNotDisposed();
 		if (lineNumber < 1 || lineNumber > this.getLineCount()) {
 			throw new BugIndicatingError('Illegal value for lineNumber');
@@ -913,6 +995,8 @@ export class TextModel extends Disposable implements model.ITextModel, IDecorati
 	}
 
 	public getLineLastNonWhitespaceColumn(lineNumber: number): number {
+		const rust = tryRustModelQuery<number>(RustModelQueryOperation.LastNonWhitespace, lineNumber, 0, false, () => this._createRustModelQueryHost());
+		if (rust) { return rust.value; }
 		this._assertNotDisposed();
 		if (lineNumber < 1 || lineNumber > this.getLineCount()) {
 			throw new BugIndicatingError('Illegal value for lineNumber');
@@ -923,27 +1007,8 @@ export class TextModel extends Disposable implements model.ITextModel, IDecorati
 	/** Keeps virtual model calls live while Rust owns validation control. */
 	private _createRustModelValidationHost(): IRustModelValidationHost {
 		return {
-			coordinate: (value, field) => {
-				switch (field) {
-					case 0: return (value as IPosition).lineNumber;
-					case 1: return (value as IPosition).column;
-					case 2: return (value as IRange).startLineNumber;
-					case 3: return (value as IRange).startColumn;
-					case 4: return (value as IRange).endLineNumber;
-					case 5: return (value as IRange).endColumn;
-					default: throw new BugIndicatingError('Invalid model coordinate field');
-				}
-			},
-			compare: (operation, first, second) => {
-				switch (operation) {
-					case 0: return first === second;
-					case 1: return first < second;
-					case 2: return first > second;
-					case 3: return first <= second;
-					case 4: return first >= second;
-					default: throw new BugIndicatingError('Invalid model coordinate comparison');
-				}
-			},
+			coordinate: readRustModelCoordinate,
+			compare: compareRustModelValues,
 			add: (value, amount) => value + amount,
 			subtract: (value, amount) => value - amount,
 			lineCount: () => this._buffer.getLineCount(),
@@ -1229,12 +1294,16 @@ export class TextModel extends Disposable implements model.ITextModel, IDecorati
 	}
 
 	public modifyPosition(rawPosition: IPosition, offset: number): Position {
+		const rust = tryRustModelQuery<Position>(RustModelQueryOperation.ModifyPosition, rawPosition, offset, false, () => this._createRustModelQueryHost());
+		if (rust) { return rust.value; }
 		this._assertNotDisposed();
 		const candidate = this.getOffsetAt(rawPosition) + offset;
 		return this.getPositionAt(Math.min(this._buffer.getLength(), Math.max(0, candidate)));
 	}
 
 	public getFullModelRange(): Range {
+		const rust = tryRustModelQuery<Range>(RustModelQueryOperation.FullRange, 0, 0, false, () => this._createRustModelQueryHost());
+		if (rust) { return rust.value; }
 		this._assertNotDisposed();
 		const lineCount = this.getLineCount();
 		return new Range(1, 1, lineCount, this.getLineMaxColumn(lineCount));
