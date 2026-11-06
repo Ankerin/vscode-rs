@@ -13,6 +13,7 @@ mod bracket_node_reader;
 mod bracket_pair_collection;
 mod bracket_parser;
 mod bracket_position_mapper;
+mod bracket_search;
 mod bracket_tokenizer;
 mod bracket_trees;
 mod contiguous_tokens;
@@ -56,6 +57,7 @@ pub use bracket_position_mapper::{
 	BracketPositionMapperHost, adjust_bracket_position_mapper, distance_to_bracket_change,
 	translate_bracket_current_offset, translate_bracket_old_offset,
 };
+pub use bracket_search::{BracketSearchHost, find_bracket, has_unmatched_bracket};
 pub use bracket_tokenizer::{
 	BracketTokenizerHost, PeekableBracketTokenizerHost, peek_bracket_token, read_bracket_token,
 	read_peekable_bracket_token, set_bracket_token_position, skip_bracket_tokens,

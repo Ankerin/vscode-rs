@@ -11,7 +11,7 @@ import { build } from 'esbuild';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const outputDirectory = resolve(root, '.build/rust');
 const browserTests = process.argv.includes('--browser');
-const tests = browserTests ? ['browserWorkerParity'] : ['textBufferParity', 'mirrorModelParity', 'sequenceDiffParity', 'textChangeParity', 'foldingParity', 'guidesParity', 'tokensParity', 'sparseStoreParity', 'tokenBlockParity', 'lineTokensParity', 'tokenArrayParity', 'cursorColumnsParity', 'unicodeParity', 'decorationsParity', 'textShapeParity', 'bracketEditsParity', 'bracketLengthsParity', 'smallImmutableSetParity', 'bracketTreesParity', 'bracketNodeReaderParity', 'bracketPositionMapperParity', 'bracketParserParity', 'bracketTokenizerParity', 'fastBracketTokenizerParity', 'bracketCollectionParity', 'bracketPairCollectionParity'];
+const tests = browserTests ? ['browserWorkerParity'] : ['textBufferParity', 'mirrorModelParity', 'sequenceDiffParity', 'textChangeParity', 'foldingParity', 'guidesParity', 'tokensParity', 'sparseStoreParity', 'tokenBlockParity', 'lineTokensParity', 'tokenArrayParity', 'cursorColumnsParity', 'unicodeParity', 'decorationsParity', 'textShapeParity', 'bracketEditsParity', 'bracketLengthsParity', 'smallImmutableSetParity', 'bracketTreesParity', 'bracketNodeReaderParity', 'bracketPositionMapperParity', 'bracketParserParity', 'bracketTokenizerParity', 'fastBracketTokenizerParity', 'bracketCollectionParity', 'bracketPairCollectionParity', 'bracketSearchParity'];
 await build({
 	entryPoints: (browserTests ? tests : [...tests, 'editorWorkerRealm']).map(file => resolve(root, `test/rust/${file}.ts`)),
 	outdir: outputDirectory,

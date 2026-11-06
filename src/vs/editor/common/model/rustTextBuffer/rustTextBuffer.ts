@@ -31,6 +31,7 @@ import { IRustBracketTokenizerModule, registerRustBracketTokenizer } from '../br
 import { IRustFastBracketTokenizerModule, registerRustFastBracketTokenizer } from '../bracketPairsTextModelPart/bracketPairsTree/rustFastBracketTokenizer.js';
 import { IRustBracketCollectionModule, registerRustBracketCollection } from '../bracketPairsTextModelPart/bracketPairsTree/rustBracketCollection.js';
 import { IRustBracketPairCollectionModule, registerRustBracketPairCollection } from '../bracketPairsTextModelPart/bracketPairsTree/rustBracketPairCollection.js';
+import { IRustBracketSearchModule, registerRustBracketSearch } from '../bracketPairsTextModelPart/bracketPairsTree/rustBracketSearch.js';
 
 /** The generated binding surface; UTF-16 arrays preserve JavaScript string semantics. */
 export interface IRustTextBuffer {
@@ -68,7 +69,7 @@ interface IRustTextSnapshot {
 	free(): void;
 }
 
-export interface IRustTextBufferModule extends IRustSequenceDiffModule, IRustTextChangeModule, IRustTokensModule, IRustCursorColumnsModule, IRustDecorationsModule, IRustTextShapeModule, IRustBracketEditsModule, IRustBracketLengthsModule, IRustSmallSetModule, IRustBracketTreesModule, IRustBracketNodeReaderModule, IRustBracketPositionMapperModule, IRustBracketParserModule, IRustBracketTokenizerModule, IRustFastBracketTokenizerModule, IRustBracketCollectionModule, IRustBracketPairCollectionModule {
+export interface IRustTextBufferModule extends IRustSequenceDiffModule, IRustTextChangeModule, IRustTokensModule, IRustCursorColumnsModule, IRustDecorationsModule, IRustTextShapeModule, IRustBracketEditsModule, IRustBracketLengthsModule, IRustSmallSetModule, IRustBracketTreesModule, IRustBracketNodeReaderModule, IRustBracketPositionMapperModule, IRustBracketParserModule, IRustBracketTokenizerModule, IRustFastBracketTokenizerModule, IRustBracketCollectionModule, IRustBracketPairCollectionModule, IRustBracketSearchModule {
 	text_buffer_abi_version(): number;
 	WasmTextBuffer: {
 		new(units: Uint16Array): IRustTextBuffer;
@@ -385,6 +386,7 @@ export function registerRustTextBuffer(module: IRustTextBufferModule, initializa
 		registration.add(registerRustFastBracketTokenizer(module));
 		registration.add(registerRustBracketCollection(module));
 		registration.add(registerRustBracketPairCollection(module));
+		registration.add(registerRustBracketSearch(module));
 	} catch (error) {
 		registration.dispose();
 		throw error;

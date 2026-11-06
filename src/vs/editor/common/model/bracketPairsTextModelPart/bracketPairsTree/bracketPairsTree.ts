@@ -25,6 +25,7 @@ import { combineTextEditInfos } from './combineTextEditInfos.js';
 import { ClosingBracketKind, OpeningBracketKind } from '../../../languages/supports/languageBracketsConfiguration.js';
 import { IRustBracketCollectionHost, tryCollectRustBrackets } from './rustBracketCollection.js';
 import { IRustBracketPairCollectionHost, tryCollectRustBracketPairs } from './rustBracketPairCollection.js';
+import { IRustBracketSearchHost, tryFindRustBracket, tryHasUnmatchedRustBracket } from './rustBracketSearch.js';
 
 export class BracketPairsTree extends Disposable {
 	private readonly didChangeEmitter;
@@ -206,6 +207,8 @@ export class BracketPairsTree extends Disposable {
 }
 
 function hasUnmatchedClosingBracketAfter(root: AstNode, positionLength: Length, openingBracketToken: Token): boolean {
+	const native = tryHasUnmatchedRustBracket(root, () => createRustBracketSearchHost(positionLength, openingBracketToken));
+	if (native !== undefined) { return native; }
 	const openingBracketIds = openingBracketToken.bracketIds;
 	if (!root.missingOpeningBracketIds.intersects(openingBracketIds)) {
 		return false;
@@ -238,6 +241,8 @@ function hasUnmatchedClosingBracketAfter(root: AstNode, positionLength: Length, 
 }
 
 function getFirstBracketBefore(node: AstNode, nodeOffsetStart: Length, nodeOffsetEnd: Length, position: Length): IFoundBracket | null {
+	const native = tryFindRustBracket(node, nodeOffsetStart, nodeOffsetEnd, true, () => createRustBracketSearchHost(position));
+	if (native !== undefined) { return native.bracket; }
 	if (node.kind === AstNodeKind.List || node.kind === AstNodeKind.Pair) {
 		const lengths: { nodeOffsetStart: Length; nodeOffsetEnd: Length }[] = [];
 		for (const child of node.children) {
@@ -268,6 +273,8 @@ function getFirstBracketBefore(node: AstNode, nodeOffsetStart: Length, nodeOffse
 }
 
 function getFirstBracketAfter(node: AstNode, nodeOffsetStart: Length, nodeOffsetEnd: Length, position: Length): IFoundBracket | null {
+	const native = tryFindRustBracket(node, nodeOffsetStart, nodeOffsetEnd, false, () => createRustBracketSearchHost(position));
+	if (native !== undefined) { return native.bracket; }
 	if (node.kind === AstNodeKind.List || node.kind === AstNodeKind.Pair) {
 		for (const child of node.children) {
 			nodeOffsetEnd = lengthAdd(nodeOffsetStart, child.length);
@@ -574,6 +581,44 @@ function* iterateBracketChildren(node: AstNode): Generator<AstNode, void, void> 
 	for (const child of node.children) {
 		yield child;
 	}
+}
+
+/** Ordered capabilities retain nearest-query rereads and unmatched-query stack/provider order. */
+function createRustBracketSearchHost(position: Length, openingBracketToken?: Token): IRustBracketSearchHost {
+	return {
+		truthy: value => !!value,
+		container: node => node.kind === AstNodeKind.List || node.kind === AstNodeKind.Pair,
+		unexpected: node => node.kind === AstNodeKind.UnexpectedClosingBracket,
+		bracket: node => node.kind === AstNodeKind.Bracket,
+		found: (node, start, end) => { const range = lengthsToRange(start, end); return { bracketInfo: (node as PairAstNode['openingBracket']).bracketInfo, range }; },
+		iterator: node => iterateBracketChildren(node),
+		next: iterator => iterator.next(),
+		done: step => !!step.done,
+		stepValue: step => step.value,
+		close: iterator => { iterator.return(undefined); },
+		end: (start, node) => lengthAdd(start, node.length),
+		beforePosition: offset => lengthLessThan(offset, position),
+		positionBefore: offset => lengthLessThan(position, offset),
+		find: (node, start, end, before) => before ? getFirstBracketBefore(node, start, end, position) : getFirstBracketAfter(node, start, end, position),
+		lengths: () => [],
+		pushLength: (lengths, start, end) => { lengths.push({ nodeOffsetStart: start, nodeOffsetEnd: end }); },
+		lastIndex: lengths => lengths.length - 1,
+		validIndex: index => index >= 0,
+		lengthEntry: (lengths, index) => lengths[index],
+		entryStart: entry => entry.nodeOffsetStart,
+		entryEnd: entry => entry.nodeOffsetEnd,
+		indexedChild: (node, index) => node.children[index],
+		decrement: index => --index,
+		openingIds: () => openingBracketToken!.bracketIds,
+		intersects: (node, ids) => node.missingOpeningBracketIds.intersects(ids),
+		stack: root => [{ node: root, offset: lengthZero }],
+		hasStack: stack => stack.length > 0,
+		pop: stack => stack.pop()!,
+		entryNode: entry => entry.node,
+		entryOffset: entry => entry.offset,
+		afterPosition: offset => lengthGreaterThanEqual(offset, position),
+		pushNode: (stack, node, offset) => { stack.push({ node, offset }); }
+	};
 }
 
 /** Ordered capabilities preserve pair factories, context reads, and partially restored nesting. */
