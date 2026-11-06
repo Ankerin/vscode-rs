@@ -5,6 +5,79 @@
 
 //! Bracket AST construction, metadata, reuse, and mutable-edge control preserve live node contracts.
 
+/// Child-slot capabilities preserve strict indices, repeated reads, and host array construction.
+pub trait BracketChildHost {
+	type Value;
+	type Error;
+
+	fn number(&self, value: f64) -> Self::Value;
+	fn undefined(&self) -> Self::Value;
+	fn item(&self, index: u32) -> Result<Self::Value, Self::Error>;
+	fn is_null(&self, value: &Self::Value) -> bool;
+	fn truthy(&self, value: &Self::Value) -> bool;
+	fn is_index(&self, index: u32) -> Result<bool, Self::Error>;
+	fn invalid_index(&self) -> Result<Self::Value, Self::Error>;
+	fn set_item(&self, index: u32) -> Result<(), Self::Error>;
+	fn create_array(&self) -> Result<Self::Value, Self::Error>;
+	fn push_item(&self, array: &Self::Value, index: u32) -> Result<(), Self::Error>;
+	fn array2(&self, first: &Self::Value, second: &Self::Value)
+	-> Result<Self::Value, Self::Error>;
+	fn array3(
+		&self,
+		first: &Self::Value,
+		second: &Self::Value,
+		third: &Self::Value,
+	) -> Result<Self::Value, Self::Error>;
+}
+
+/// Executes compact child counts, strict slot reads/writes, and pair/compact child construction.
+pub fn access_bracket_child<H: BracketChildHost>(
+	host: &H,
+	operation: u32,
+) -> Result<H::Value, H::Error> {
+	match operation {
+		0 => {
+			let third = host.item(2)?;
+			Ok(host.number(if host.is_null(&third) { 2.0 } else { 3.0 }))
+		}
+		1 | 2 => {
+			for index in 0..3 {
+				if host.is_index(index)? {
+					return if operation == 1 {
+						host.item(index)
+					} else {
+						host.set_item(index)?;
+						Ok(host.undefined())
+					};
+				}
+			}
+			host.invalid_index()
+		}
+		3 => {
+			let result = host.create_array()?;
+			host.push_item(&result, 0)?;
+			if host.truthy(&host.item(1)?) {
+				host.push_item(&result, 1)?;
+			}
+			if host.truthy(&host.item(2)?) {
+				host.push_item(&result, 2)?;
+			}
+			Ok(result)
+		}
+		4 => {
+			let include_third = host.truthy(&host.item(2)?);
+			let first = host.item(0)?;
+			let second = host.item(1)?;
+			if include_third {
+				host.array3(&first, &second, &host.item(2)?)
+			} else {
+				host.array2(&first, &second)
+			}
+		}
+		_ => host.invalid_index(),
+	}
+}
+
 /// Original node/factory/set capabilities retain reference identity and ordered partial mutation.
 pub trait BracketAstHost {
 	type Value: Clone;
@@ -357,6 +430,136 @@ mod tests {
 			metadata: Cell::new((0.0, 0.0)),
 			writes: RefCell::new(Vec::new()),
 		}
+	}
+
+	struct ChildHost {
+		third_reads: Cell<usize>,
+		third: f64,
+		index: u32,
+		fail_push: bool,
+		values: RefCell<Vec<f64>>,
+		reads: RefCell<Vec<u32>>,
+	}
+
+	impl BracketChildHost for ChildHost {
+		type Value = f64;
+		type Error = &'static str;
+		fn number(&self, value: f64) -> f64 {
+			value
+		}
+		fn undefined(&self) -> f64 {
+			f64::NAN
+		}
+		fn item(&self, index: u32) -> Result<f64, Self::Error> {
+			self.reads.borrow_mut().push(index);
+			if index != 2 {
+				return Ok(f64::from(index + 1));
+			}
+			let reads = self.third_reads.get();
+			self.third_reads.set(reads + 1);
+			Ok(if reads == 0 { self.third } else { 0.0 })
+		}
+		fn is_null(&self, value: &f64) -> bool {
+			*value == -1.0
+		}
+		fn truthy(&self, value: &f64) -> bool {
+			*value != -1.0 && *value != 0.0
+		}
+		fn is_index(&self, index: u32) -> Result<bool, Self::Error> {
+			Ok(self.index == index)
+		}
+		fn invalid_index(&self) -> Result<f64, Self::Error> {
+			Err("index")
+		}
+		fn set_item(&self, index: u32) -> Result<(), Self::Error> {
+			self.values.borrow_mut().push(f64::from(index));
+			Ok(())
+		}
+		fn create_array(&self) -> Result<f64, Self::Error> {
+			Ok(10.0)
+		}
+		fn push_item(&self, _: &f64, index: u32) -> Result<(), Self::Error> {
+			if self.fail_push && index == 1 {
+				return Err("push");
+			}
+			let value = self.item(index)?;
+			self.values.borrow_mut().push(value);
+			Ok(())
+		}
+		fn array2(&self, first: &f64, second: &f64) -> Result<f64, Self::Error> {
+			self.values.borrow_mut().extend([first, second]);
+			Ok(2.0)
+		}
+		fn array3(&self, first: &f64, second: &f64, third: &f64) -> Result<f64, Self::Error> {
+			self.values.borrow_mut().extend([first, second, third]);
+			Ok(3.0)
+		}
+	}
+
+	fn child_host(third: f64) -> ChildHost {
+		ChildHost {
+			third_reads: Cell::new(0),
+			third,
+			index: 3,
+			fail_push: false,
+			values: RefCell::new(Vec::new()),
+			reads: RefCell::new(Vec::new()),
+		}
+	}
+
+	#[test]
+	fn child_arrays_keep_repeated_getters_and_count_distinguishes_null_from_falsy_values() {
+		let pair = child_host(3.0);
+		let compact = child_host(3.0);
+		assert_eq!(access_bracket_child(&pair, 3), Ok(10.0));
+		assert_eq!(access_bracket_child(&compact, 4), Ok(3.0));
+		assert_eq!(
+			(
+				pair.values.into_inner(),
+				pair.reads.into_inner(),
+				compact.values.into_inner(),
+				compact.reads.into_inner()
+			),
+			(
+				vec![1.0, 2.0, 0.0],
+				vec![0, 1, 1, 2, 2],
+				vec![1.0, 2.0, 0.0],
+				vec![2, 0, 1, 2]
+			)
+		);
+		assert_eq!(
+			(
+				access_bracket_child(&child_host(-1.0), 0),
+				access_bracket_child(&child_host(0.0), 0)
+			),
+			(Ok(2.0), Ok(3.0))
+		);
+	}
+
+	#[test]
+	fn child_failures_preserve_preceding_array_mutations_and_invalid_indices_do_not_read_slots() {
+		let pair = ChildHost {
+			fail_push: true,
+			..child_host(3.0)
+		};
+		let invalid = child_host(3.0);
+		assert_eq!(
+			(
+				access_bracket_child(&pair, 3),
+				access_bracket_child(&invalid, 1),
+				access_bracket_child(&invalid, 2)
+			),
+			(Err("push"), Err("index"), Err("index"))
+		);
+		assert_eq!(
+			(
+				pair.values.into_inner(),
+				pair.reads.into_inner(),
+				invalid.values.into_inner(),
+				invalid.reads.into_inner()
+			),
+			(vec![1.0], vec![0, 1], vec![], vec![])
+		);
 	}
 
 	#[test]

@@ -11,7 +11,7 @@ import { Length, lengthAdd, lengthGetLineCount, lengthToObj, lengthZero } from '
 import { SmallImmutableSet } from './smallImmutableSet.js';
 import { OpeningBracketId } from './tokenizer.js';
 import { IRustBracketIndentationHost, RustBracketIndentationOperation, tryComputeRustBracketIndentation } from './rustBracketIndentation.js';
-import { IRustBracketAstHost, RustBracketAstOperation, tryRunRustBracketAst } from './rustBracketAst.js';
+import { IRustBracketAstHost, IRustBracketChildHost, RustBracketAstOperation, RustBracketChildOperation, tryAccessRustBracketChild, tryRunRustBracketAst } from './rustBracketAst.js';
 import { IRustBracketMutationHost, RustBracketMutationOperation, tryMutateRustBracketList } from './rustBracketMutation.js';
 import { IRustBracketTransformHost, RustBracketTransformOperation, tryTransformRustBracketAst } from './rustBracketTransform.js';
 import { ownRustBracketNodeMetadata } from './rustBracketNodeMetadata.js';
@@ -122,6 +122,8 @@ export class PairAstNode extends BaseAstNode {
 		return 3;
 	}
 	public getChild(idx: number): AstNode | null {
+		const native = tryAccessRustBracketChild(RustBracketChildOperation.ReadChild, () => PairAstNode.createRustChildHost(this, idx));
+		if (native !== undefined) { return native.value as AstNode | null; }
 		switch (idx) {
 			case 0: return this.openingBracket;
 			case 1: return this.child;
@@ -134,6 +136,8 @@ export class PairAstNode extends BaseAstNode {
 	 * Avoid using this property, it allocates an array!
 	*/
 	public get children() {
+		const native = tryAccessRustBracketChild(RustBracketChildOperation.PairChildren, () => PairAstNode.createRustChildHost(this));
+		if (native !== undefined) { return native.value as AstNode[]; }
 		const result: AstNode[] = [];
 		result.push(this.openingBracket);
 		if (this.child) {
@@ -153,6 +157,18 @@ export class PairAstNode extends BaseAstNode {
 		public readonly missingOpeningBracketIds: SmallImmutableSet<OpeningBracketId>
 	) {
 		super(length);
+	}
+
+	/** Preserves pair property reads and push method lookup before each child argument. */
+	private static createRustChildHost(node: PairAstNode, index?: number): IRustBracketChildHost {
+		const fields = ['openingBracket', 'child', 'closingBracket'] as const;
+		return {
+			item: slot => node[fields[slot]],
+			isIndex: slot => index === slot,
+			invalidIndex: () => { throw new Error('Invalid child index'); },
+			createArray: () => [],
+			pushItem: (array, slot) => { array.push(node[fields[slot]]!); }
+		};
 	}
 
 	public canBeReused(openBracketIds: SmallImmutableSet<OpeningBracketId>) {
@@ -422,9 +438,13 @@ export abstract class ListAstNode extends BaseAstNode {
 
 class TwoThreeListAstNode extends ListAstNode {
 	public get childrenLength(): number {
+		const native = tryAccessRustBracketChild(RustBracketChildOperation.CompactCount, () => TwoThreeListAstNode.createRustChildHost(this));
+		if (native !== undefined) { return native.value as number; }
 		return this._item3 !== null ? 3 : 2;
 	}
 	public getChild(idx: number): AstNode | null {
+		const native = tryAccessRustBracketChild(RustBracketChildOperation.ReadChild, () => TwoThreeListAstNode.createRustChildHost(this, idx));
+		if (native !== undefined) { return native.value as AstNode | null; }
 		switch (idx) {
 			case 0: return this._item1;
 			case 1: return this._item2;
@@ -433,6 +453,8 @@ class TwoThreeListAstNode extends ListAstNode {
 		throw new Error('Invalid child index');
 	}
 	protected setChild(idx: number, node: AstNode): void {
+		const native = tryAccessRustBracketChild(RustBracketChildOperation.WriteChild, () => TwoThreeListAstNode.createRustChildHost(this, idx, node));
+		if (native !== undefined) { return; }
 		switch (idx) {
 			case 0: this._item1 = node; return;
 			case 1: this._item2 = node; return;
@@ -442,7 +464,22 @@ class TwoThreeListAstNode extends ListAstNode {
 	}
 
 	public get children(): readonly AstNode[] {
+		const native = tryAccessRustBracketChild(RustBracketChildOperation.CompactChildren, () => TwoThreeListAstNode.createRustChildHost(this));
+		if (native !== undefined) { return native.value as readonly AstNode[]; }
 		return this._item3 ? [this._item1, this._item2, this._item3] : [this._item1, this._item2];
+	}
+
+	/** Preserves private slot receivers, strict index checks, and array-literal child identities. */
+	private static createRustChildHost(node: TwoThreeListAstNode, index?: number, incoming?: AstNode): IRustBracketChildHost {
+		const fields = ['_item1', '_item2', '_item3'] as const;
+		return {
+			item: slot => node[fields[slot]],
+			isIndex: slot => index === slot,
+			invalidIndex: () => { throw new Error('Invalid child index'); },
+			setItem: slot => { node[fields[slot]] = incoming!; },
+			array2: (first, second) => [first, second],
+			array3: (first, second, third) => [first, second, third!]
+		};
 	}
 
 	public get item1(): AstNode {

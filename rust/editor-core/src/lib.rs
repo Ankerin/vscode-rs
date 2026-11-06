@@ -50,8 +50,8 @@ mod word_part;
 
 pub use atomic_tab_move::{atomic_tab_position, whitespace_visible_column};
 pub use bracket_ast::{
-	BracketAstHost, create_bracket_list, create_bracket_pair, make_bracket_edge_mutable,
-	reuse_bracket_node, update_bracket_children,
+	BracketAstHost, BracketChildHost, access_bracket_child, create_bracket_list,
+	create_bracket_pair, make_bracket_edge_mutable, reuse_bracket_node, update_bracket_children,
 };
 pub use bracket_collection::{BracketCollectionHost, collect_brackets};
 pub use bracket_edits::combine_bracket_edits;

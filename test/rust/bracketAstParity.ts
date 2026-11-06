@@ -11,7 +11,7 @@ import { pathToFileURL } from 'node:url';
 import { LanguageBracketsConfiguration } from '../../src/vs/editor/common/languages/supports/languageBracketsConfiguration.js';
 import { AstNode, BracketAstNode, InvalidBracketAstNode, ListAstNode, PairAstNode, TextAstNode } from '../../src/vs/editor/common/model/bracketPairsTextModelPart/bracketPairsTree/ast.js';
 import { toLength } from '../../src/vs/editor/common/model/bracketPairsTextModelPart/bracketPairsTree/length.js';
-import { IRustBracketAstModule, registerRustBracketAst } from '../../src/vs/editor/common/model/bracketPairsTextModelPart/bracketPairsTree/rustBracketAst.js';
+import { IRustBracketAstModule, registerRustBracketAst, RustBracketChildOperation } from '../../src/vs/editor/common/model/bracketPairsTextModelPart/bracketPairsTree/rustBracketAst.js';
 import { identityKeyProvider, SmallImmutableSet } from '../../src/vs/editor/common/model/bracketPairsTextModelPart/bracketPairsTree/smallImmutableSet.js';
 import { OpeningBracketId } from '../../src/vs/editor/common/model/bracketPairsTextModelPart/bracketPairsTree/tokenizer.js';
 import { IRustTextBufferModule, registerRustTextBuffer } from '../../src/vs/editor/common/model/rustTextBuffer/rustTextBuffer.js';
@@ -141,6 +141,86 @@ test('Rust bracket AST retains invalid heights, nested empty lists, immutable er
 		};
 		if (native) { withRust(run); } else { run(); }
 	}
+});
+
+test('Rust bracket child access preserves strict indices, receiver traps, slot writes, and original array identities', () => {
+	const indices = [-0, 0, 1, 2, 3, -1, 0.5, Number.NaN, Number.POSITIVE_INFINITY, '1', 1n, undefined, null, Symbol('child index'), { valueOf: () => 1 }];
+	const operations = new Set<RustBracketChildOperation>();
+	const module: IRustBracketAstModule = { ...rust, run_bracket_child_access: (...args) => { operations.add(args[1]); return rust.run_bracket_child_access(...args); } };
+	const run = () => {
+		const observations: string[] = [];
+		const text = new TextAstNode(toLength(0, 1));
+		const second = new TextAstNode(toLength(0, 2));
+		const configuration = new LanguageBracketsConfiguration('parity', { brackets: [['(', ')']] });
+		const opening = BracketAstNode.create(toLength(0, 1), configuration.getOpeningBracketInfo('(')!, SmallImmutableSet.getEmpty());
+		const nodes = [PairAstNode.create(opening, text, null), ListAstNode.create23(text, second, null), ListAstNode.create23(text, second, text, true), ListAstNode.create([text, second]), text];
+		return nodes.map((node, kind) => {
+			const receiver = new Proxy(node, {
+				get: (target, key, receiver) => { observations.push(`${kind}:get:${String(key)}`); return Reflect.get(target, key, receiver); },
+				set: (target, key, value, receiver) => { observations.push(`${kind}:set:${String(key)}`); return Reflect.set(target, key, value, receiver); }
+			});
+			const reads = indices.map(index => {
+				try { return { child: Reflect.apply(receiver.getChild, receiver, [index]) === text ? 'text' : Reflect.apply(receiver.getChild, receiver, [index]) === second ? 'second' : 'other' }; }
+				catch (error) { return { error: error instanceof Error ? error.message : 'non-error' }; }
+			});
+			const writes = indices.map(index => {
+				const setter = Reflect.get(receiver, 'setChild') as ((index: number, child: AstNode) => void) | undefined;
+				if (!setter) { return 'unavailable'; }
+				try { Reflect.apply(setter, receiver, [index, text]); return 'written'; }
+				catch (error) { return error instanceof Error ? error.message : 'non-error'; }
+			});
+			const children = receiver.children;
+			return { reads, writes, count: receiver.childrenLength, sameArray: children === receiver.children, identities: children.map(child => child === text ? 'text' : child === second ? 'second' : 'other'), observations: observations.splice(0) };
+		});
+	};
+	assert.deepStrictEqual(withRust(run, module), run());
+	assert.deepStrictEqual([...operations].sort(), [RustBracketChildOperation.CompactCount, RustBracketChildOperation.ReadChild, RustBracketChildOperation.WriteChild, RustBracketChildOperation.PairChildren, RustBracketChildOperation.CompactChildren]);
+});
+
+test('Rust bracket child arrays preserve reentrant getters, null versus falsy counts, and provider failures', () => {
+	const failure = new Error('Original child slot getter failure');
+	for (const initial of [null, undefined, false, 0, 1, {}]) {
+		const run = () => {
+			const observations: string[] = [];
+			const text = new TextAstNode(toLength(0, 1));
+			const compact = ListAstNode.create23(text, text, null);
+			let reads = 0;
+			Object.defineProperty(compact, '_item3', { get: () => { observations.push(`third:${reads}`); return reads++ % 2 === 0 ? initial : null; } });
+			const count = compact.childrenLength;
+			const children = compact.children;
+			const second = compact.children;
+			Object.defineProperty(compact, '_item1', { get: () => { throw failure; } });
+			assert.throws(() => compact.getChild(0), error => error === failure);
+			assert.throws(() => compact.children, error => error === failure);
+			return { observations, count, first: children.map(child => child === text ? 'text' : child), second: second.map(child => child === text ? 'text' : child) };
+		};
+		assert.deepStrictEqual(withRust(run), run());
+	}
+	const run = () => {
+		const configuration = new LanguageBracketsConfiguration('parity', { brackets: [['(', ')']] });
+		const opening = BracketAstNode.create(toLength(0, 1), configuration.getOpeningBracketInfo('(')!, SmallImmutableSet.getEmpty());
+		const pair = PairAstNode.create(opening, new TextAstNode(toLength(0, 1)), opening);
+		const observations: string[] = [];
+		let reads = 0;
+		Object.defineProperty(pair, 'child', { get: () => { observations.push(`child:${reads}`); return reads++ === 0 ? opening : null; } });
+		Object.defineProperty(pair, 'closingBracket', { get: () => { observations.push('closing'); throw failure; } });
+		assert.throws(() => pair.children, error => error === failure);
+		return observations;
+	};
+	assert.deepStrictEqual(withRust(run), run());
+});
+
+test('Rust child access releases failed result consumption and rejects stale child contracts atomically', () => {
+	let frees = 0;
+	const failure = new Error('Original bracket child result failure');
+	const module: IRustBracketAstModule = { ...rust, run_bracket_child_access: () => ({ take: () => { throw failure; }, free: () => { frees++; } }) };
+	withRust(() => {
+		const compact = ListAstNode.create23(new TextAstNode(toLength(0, 1)), new TextAstNode(toLength(0, 2)), null);
+		assert.throws(() => compact.childrenLength, error => error === failure);
+	}, module);
+	assert.strictEqual(frees, 1);
+	assert.throws(() => registerRustTextBuffer({ ...rust, bracket_ast_abi_version: () => 1 }), /AST algorithm contract/);
+	assert.strictEqual(tryRustBracketLength(RustBracketLengthOperation.Pack, 1, 2), undefined);
 });
 
 test('Rust bracket AST releases scoped results and rejects incompatible registration atomically', () => {

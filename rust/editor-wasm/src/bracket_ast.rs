@@ -10,6 +10,94 @@ use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
 extern "C" {
+	pub type ChildHost;
+	#[wasm_bindgen(method, catch, js_name = item)]
+	fn child_item(this: &ChildHost, index: u32) -> Result<JsValue, JsValue>;
+	#[wasm_bindgen(method, catch, js_name = isIndex)]
+	fn is_index(this: &ChildHost, index: u32) -> Result<bool, JsValue>;
+	#[wasm_bindgen(method, catch, js_name = invalidIndex)]
+	fn invalid_index(this: &ChildHost) -> Result<JsValue, JsValue>;
+	#[wasm_bindgen(method, catch, js_name = setItem)]
+	fn set_item(this: &ChildHost, index: u32) -> Result<(), JsValue>;
+	#[wasm_bindgen(method, catch, js_name = createArray)]
+	fn create_array(this: &ChildHost) -> Result<JsValue, JsValue>;
+	#[wasm_bindgen(method, catch, js_name = pushItem)]
+	fn push_item(this: &ChildHost, array: &JsValue, index: u32) -> Result<(), JsValue>;
+	#[wasm_bindgen(method, catch, js_name = array2)]
+	fn array2(this: &ChildHost, first: &JsValue, second: &JsValue) -> Result<JsValue, JsValue>;
+	#[wasm_bindgen(method, catch, js_name = array3)]
+	fn array3(
+		this: &ChildHost,
+		first: &JsValue,
+		second: &JsValue,
+		third: &JsValue,
+	) -> Result<JsValue, JsValue>;
+}
+
+struct ChildAccessHost(ChildHost);
+
+impl vscode_editor_core::BracketChildHost for ChildAccessHost {
+	type Value = JsValue;
+	type Error = JsValue;
+	fn number(&self, value: f64) -> JsValue {
+		JsValue::from_f64(value)
+	}
+	fn undefined(&self) -> JsValue {
+		JsValue::UNDEFINED
+	}
+	fn item(&self, index: u32) -> Result<JsValue, JsValue> {
+		self.0.child_item(index)
+	}
+	fn is_null(&self, value: &JsValue) -> bool {
+		value.is_null()
+	}
+	fn truthy(&self, value: &JsValue) -> bool {
+		value.is_truthy()
+	}
+	fn is_index(&self, index: u32) -> Result<bool, JsValue> {
+		self.0.is_index(index)
+	}
+	fn invalid_index(&self) -> Result<JsValue, JsValue> {
+		self.0.invalid_index()
+	}
+	fn set_item(&self, index: u32) -> Result<(), JsValue> {
+		self.0.set_item(index)
+	}
+	fn create_array(&self) -> Result<JsValue, JsValue> {
+		self.0.create_array()
+	}
+	fn push_item(&self, array: &JsValue, index: u32) -> Result<(), JsValue> {
+		self.0.push_item(array, index)
+	}
+	fn array2(&self, first: &JsValue, second: &JsValue) -> Result<JsValue, JsValue> {
+		self.0.array2(first, second)
+	}
+	fn array3(
+		&self,
+		first: &JsValue,
+		second: &JsValue,
+		third: &JsValue,
+	) -> Result<JsValue, JsValue> {
+		self.0.array3(first, second, third)
+	}
+}
+
+/// Runs strict child-slot and children-array control using the original property capabilities.
+#[wasm_bindgen]
+pub fn run_bracket_child_access(
+	host: ChildHost,
+	operation: u32,
+) -> Result<WasmBracketTreeResult, JsValue> {
+	if operation > 4 {
+		return Err(JsValue::from_str("Invalid Rust bracket child operation"));
+	}
+	Ok(WasmBracketTreeResult::new(
+		vscode_editor_core::access_bracket_child(&ChildAccessHost(host), operation)?,
+	))
+}
+
+#[wasm_bindgen]
+extern "C" {
 	pub type AstHost;
 	#[wasm_bindgen(method, catch, js_name = receiver)]
 	fn receiver(this: &AstHost) -> Result<JsValue, JsValue>;
@@ -209,7 +297,7 @@ impl vscode_editor_core::BracketAstHost for Host {
 /// Versions AST construction, metadata, reuse, and mutable-edge control independently of ownership.
 #[wasm_bindgen]
 pub fn bracket_ast_abi_version() -> u32 {
-	1
+	2
 }
 
 /// Executes one complete original AST operation and scopes its actual result reference.
