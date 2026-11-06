@@ -57,7 +57,7 @@ impl ScalarValue {
 impl WasmBracketNodeMetadata {
 	#[wasm_bindgen(constructor)]
 	pub fn new(field_count: u32) -> Result<Self, JsValue> {
-		if field_count > 16 {
+		if field_count > 64 {
 			return Err(JsValue::from_str("Invalid Rust bracket field schema"));
 		}
 		LIVE_RECORDS.with(|count| count.set(count.get() + 1));
@@ -154,7 +154,7 @@ impl Drop for WasmBracketNodeMetadata {
 /// Versions the owning scalar metadata contract independently of AST traversal operations.
 #[wasm_bindgen]
 pub fn bracket_node_metadata_abi_version() -> u32 {
-	4
+	5
 }
 
 /// Exposes resource ownership to disposal tests without retaining a handle registry.

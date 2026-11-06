@@ -155,7 +155,7 @@ test('Rust reference slots own live AST fields through collector-visible anchors
 
 test('Rust reference definitions validate schema bounds and preserve prior handles on failures', () => {
 	const before = rust.bracket_node_metadata_live_count();
-	assert.throws(() => new rust.WasmBracketNodeMetadata(17), /Invalid Rust bracket field schema/);
+	assert.throws(() => new rust.WasmBracketNodeMetadata(65), /Invalid Rust bracket field schema/);
 	const record = new rust.WasmBracketNodeMetadata(2);
 	try {
 		record.define_reference(0, 123, false, true);

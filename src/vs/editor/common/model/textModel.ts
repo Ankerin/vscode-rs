@@ -56,6 +56,7 @@ import { ownRustModelSnapshot, tryRustModelSnapshot } from './rustModelSnapshot.
 import { IRustModelLifecycleHost, RustModelLifecycleOperation, RustModelLifecycleValue, rustModelLifecycleFields, tryRustModelLifecycle } from './rustModelLifecycle.js';
 import { IRustModelOptionsControllerHost, RustModelOptionsControllerOperation, tryRustModelOptionsController } from './rustModelOptionsController.js';
 import { IRustModelSearchHost, IRustModelSearchModule, RustModelSearchOperation, tryRustModelSearch } from './rustModelSearch.js';
+import { ownRustTextModel, releaseRustTextModel } from './rustModelState.js';
 import { AttachedViews } from './tokens/abstractSyntaxTokenBackend.js';
 import { TokenizationFontDecorationProvider } from './tokens/tokenizationFontDecorationsProvider.js';
 import { LineFontChangingDecoration, LineHeightChangingDecoration } from './decorationProvider.js';
@@ -337,7 +338,7 @@ export class TextModel extends Disposable implements model.ITextModel, IDecorati
 		@ILanguageConfigurationService private readonly _languageConfigurationService: ILanguageConfigurationService,
 		@IInstantiationService private readonly instantiationService: IInstantiationService
 	) {
-		super();
+		super(ownRustTextModel);
 
 		// Generate a new unique model id
 		MODEL_ID++;
@@ -481,7 +482,7 @@ export class TextModel extends Disposable implements model.ITextModel, IDecorati
 
 	public override dispose(): void {
 		const rust = tryRustModelLifecycle<void>(RustModelLifecycleOperation.Dispose, undefined, () => this._createRustModelLifecycleHost());
-		if (rust) { return rust.value; }
+		if (rust) { releaseRustTextModel(this); return rust.value; }
 		this.__isDisposing = true;
 		this._onWillDispose.fire();
 		this._commandManager.releaseResources();
@@ -496,6 +497,7 @@ export class TextModel extends Disposable implements model.ITextModel, IDecorati
 		emptyDisposedTextBuffer.dispose();
 		this._buffer = emptyDisposedTextBuffer;
 		this._bufferDisposable = Disposable.None;
+		releaseRustTextModel(this);
 	}
 
 	_hasListeners(): boolean {

@@ -20,7 +20,11 @@ export interface IRustBracketNodeMetadataModule {
 }
 
 let registeredModule: IRustBracketNodeMetadataModule | undefined;
+const ownedStateReleases = new WeakMap<object, () => void>();
 const fieldNames = ['_length', 'listHeight', 'cachedMinIndentation', 'openingBracket', 'child', 'closingBracket', 'missingOpeningBracketIds', '_missingOpeningBracketIds', '_item1', '_item2', '_item3', 'bracketInfo', 'bracketIds', '_children'] as const;
+
+/** Model fields are installed through the facade before services and callbacks capture it. */
+export const rustTextModelStateFields = ['_store', '_onWillDispose', 'onWillDispose', '_onDidChangeDecorations', 'onDidChangeDecorations', '_onDidChangeOptions', '_onDidChangeAttached', '_onDidChangeLineHeight', '_onDidChangeFont', '_eventEmitter', 'id', 'isForSimpleWidget', '_associatedResource', '_attachedEditorCount', '_buffer', '_bufferDisposable', '_options', '_languageSelectionListener', '_isDisposed', '__isDisposing', '_versionId', '_alternativeVersionId', '_initialUndoRedoSnapshot', '_isTooLargeForSyncing', '_isTooLargeForTokenization', '_isTooLargeForHeapOperation', '_commandManager', '_isUndoing', '_isRedoing', '_trimAutoWhitespaceLines', '_instanceId', '_deltaDecorationCallCnt', '_lastDecorationId', '_decorations', '_decorationsTree', '_decorationProvider', '_fontTokenDecorationsProvider', '_tokenizationTextModelPart', '_bracketPairs', '_guidesTextModelPart', '_attachedViews', '_viewModels', '_undoRedoService', '_languageService', '_languageConfigurationService', 'instantiationService'] as const;
 
 /** Scalar state schemas preserve each subsystem's existing field names and source shape. */
 export const enum RustBracketNumericStateKind {
@@ -38,7 +42,8 @@ export const enum RustBracketNumericStateKind {
 	SearchParams,
 	Searcher,
 	ModelSnapshot,
-	ModelOptions
+	ModelOptions,
+	TextModel
 }
 
 const stateFieldNames: readonly (readonly string[])[] = [
@@ -56,12 +61,13 @@ const stateFieldNames: readonly (readonly string[])[] = [
 	['searchString', 'isRegex', 'matchCase', 'wordSeparators'],
 	['_wordSeparators', '_searchRegex', '_prevMatchStartIndex', '_prevMatchLength'],
 	['_source', '_eos'],
-	['tabSize', 'indentSize', '_indentSizeIsTabSize', 'insertSpaces', 'defaultEOL', 'trimAutoWhitespace', 'bracketPairColorizationOptions']
+	['tabSize', 'indentSize', '_indentSizeIsTabSize', 'insertSpaces', 'defaultEOL', 'trimAutoWhitespace', 'bracketPairColorizationOptions'],
+	rustTextModelStateFields
 ];
 
 /** Installs ownership for subsequently constructed AST nodes; existing nodes retain their owners. */
 export function registerRustBracketNodeMetadata(module: IRustBracketNodeMetadataModule): IDisposable {
-	if (typeof module.bracket_node_metadata_abi_version !== 'function' || module.bracket_node_metadata_abi_version() !== 4 || typeof module.bracket_node_metadata_live_count !== 'function' || typeof module.WasmBracketNodeMetadata !== 'function') {
+	if (typeof module.bracket_node_metadata_abi_version !== 'function' || module.bracket_node_metadata_abi_version() !== 5 || typeof module.bracket_node_metadata_live_count !== 'function' || typeof module.WasmBracketNodeMetadata !== 'function') {
 		throw new Error('The Rust bracket node metadata bindings do not match the owning AST contract');
 	}
 	if (registeredModule) {
@@ -83,6 +89,12 @@ export function ownRustBracketNodeMetadata<T extends object>(node: T): T {
 /** Transfers live parser/tokenizer state and reference handles through the same property contract. */
 export function ownRustBracketNumericState<T extends object>(state: T, kind: RustBracketNumericStateKind): T {
 	return ownRustBracketNumbers(state, stateFieldNames[kind]);
+}
+
+/** Releases native state without changing the original extensibility or property descriptors. */
+export function releaseRustBracketNumericState(state: object): void {
+	ownedStateReleases.get(state)?.();
+	ownedStateReleases.delete(state);
 }
 
 /** Shares descriptor compatibility while each subsystem retains its own native scalar record. */
@@ -129,7 +141,20 @@ function ownRustBracketNumbers<T extends object>(node: T, fieldNames: readonly s
 		record.free();
 		throw error;
 	}
-	return new Proxy(node, {
+	const materialize = () => {
+		if (record) {
+			for (const key of fieldNames) {
+				const index = indexOf(key);
+				if (record.has(index)) {
+					Reflect.defineProperty(node, key, descriptorOf(key)!);
+				}
+			}
+			record.free();
+			record = undefined;
+			properties.clearReferences();
+		}
+	};
+	const facade = new Proxy(node, {
 		get: (target, key, receiver) => {
 			const index = indexOf(key);
 			return record && index >= 0 && record.has(index) ? properties.get(index) : Reflect.get(target, key, receiver);
@@ -196,18 +221,10 @@ function ownRustBracketNumbers<T extends object>(node: T, fieldNames: readonly s
 		},
 		preventExtensions: target => {
 			// Nonconfigurable/nonextensible proxy invariants require real target properties.
-			if (record) {
-				for (const key of fieldNames) {
-					const index = indexOf(key);
-					if (record.has(index)) {
-						Reflect.defineProperty(target, key, descriptorOf(key)!);
-					}
-				}
-				record.free();
-				record = undefined;
-				properties.clearReferences();
-			}
+			materialize();
 			return Reflect.preventExtensions(target);
 		}
 	});
+	ownedStateReleases.set(facade, materialize);
+	return facade;
 }

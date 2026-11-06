@@ -534,9 +534,14 @@ export abstract class Disposable implements IDisposable {
 
 	protected readonly _store = new DisposableStore();
 
-	constructor() {
-		trackDisposable(this);
-		setParentOfDisposable(this._store, this);
+	/** Establishes an optional owning facade before derived fields or observers capture this. */
+	constructor(createFacade: <T extends Disposable>(instance: T) => T);
+	constructor();
+	constructor(createFacade: (<T extends Disposable>(instance: T) => T) | undefined = undefined) {
+		const instance = createFacade ? createFacade(this) : this;
+		trackDisposable(instance);
+		setParentOfDisposable(instance._store, instance);
+		return instance;
 	}
 
 	public dispose(): void {
