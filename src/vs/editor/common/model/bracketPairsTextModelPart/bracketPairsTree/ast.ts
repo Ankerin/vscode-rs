@@ -10,6 +10,7 @@ import { ITextModel } from '../../../model.js';
 import { Length, lengthAdd, lengthGetLineCount, lengthToObj, lengthZero } from './length.js';
 import { SmallImmutableSet } from './smallImmutableSet.js';
 import { OpeningBracketId } from './tokenizer.js';
+import { IRustBracketIndentationHost, RustBracketIndentationOperation, tryComputeRustBracketIndentation } from './rustBracketIndentation.js';
 
 export const enum AstNodeKind {
 	Text = 0,
@@ -185,6 +186,8 @@ export class PairAstNode extends BaseAstNode {
 	}
 
 	public computeMinIndentation(offset: Length, textModel: ITextModel): number {
+		const native = tryComputeRustBracketIndentation(RustBracketIndentationOperation.Pair, offset, () => createRustBracketIndentationHost(this, textModel));
+		if (native !== undefined) { return native.indentation; }
 		return this.child ? this.child.computeMinIndentation(lengthAdd(offset, this.openingBracket.length), textModel) : Number.MAX_SAFE_INTEGER;
 	}
 }
@@ -347,6 +350,8 @@ export abstract class ListAstNode extends BaseAstNode {
 	}
 
 	public computeMinIndentation(offset: Length, textModel: ITextModel): number {
+		const native = tryComputeRustBracketIndentation(RustBracketIndentationOperation.List, offset, () => createRustBracketIndentationHost(this, textModel, () => this.cachedMinIndentation, value => { this.cachedMinIndentation = value; }));
+		if (native !== undefined) { return native.indentation; }
 		if (this.cachedMinIndentation !== -1) {
 			return this.cachedMinIndentation;
 		}
@@ -611,6 +616,8 @@ export class TextAstNode extends ImmutableLeafAstNode {
 	}
 
 	public computeMinIndentation(offset: Length, textModel: ITextModel): number {
+		const native = tryComputeRustBracketIndentation(RustBracketIndentationOperation.Text, offset, () => createRustBracketIndentationHost(this, textModel));
+		if (native !== undefined) { return native.indentation; }
 		const start = lengthToObj(offset);
 		// Text ast nodes don't have partial indentation (ensured by the tokenizer).
 		// Thus, if this text node does not start at column 0, the first line cannot have any indentation at all.
@@ -680,6 +687,8 @@ export class BracketAstNode extends ImmutableLeafAstNode {
 	}
 
 	public computeMinIndentation(offset: Length, textModel: ITextModel): number {
+		const native = tryComputeRustBracketIndentation(RustBracketIndentationOperation.Leaf, offset, () => createRustBracketIndentationHost(this, textModel));
+		if (native !== undefined) { return native.indentation; }
 		return Number.MAX_SAFE_INTEGER;
 	}
 }
@@ -701,6 +710,34 @@ export class InvalidBracketAstNode extends ImmutableLeafAstNode {
 	}
 
 	public computeMinIndentation(offset: Length, textModel: ITextModel): number {
+		const native = tryComputeRustBracketIndentation(RustBracketIndentationOperation.Leaf, offset, () => createRustBracketIndentationHost(this, textModel));
+		if (native !== undefined) { return native.indentation; }
 		return Number.MAX_SAFE_INTEGER;
 	}
+}
+
+/** Ordered capabilities retain Math/cursor callbacks, repeated child reads, and private cache writes. */
+function createRustBracketIndentationHost(node: AstNode, textModel: ITextModel, readCached?: () => number, writeCached?: (value: number) => void): IRustBracketIndentationHost {
+	return {
+		maximum: () => Number.MAX_SAFE_INTEGER,
+		pairHasChild: () => !!(node as PairAstNode).child,
+		pairCompute: offset => (node as PairAstNode).child!.computeMinIndentation(lengthAdd(offset, (node as PairAstNode).openingBracket.length), textModel),
+		cacheUncomputed: () => readCached!() === -1,
+		cached: () => readCached!(),
+		indexBeforeCount: index => index < node.childrenLength,
+		child: index => node.getChild(index),
+		truthy: value => !!value,
+		minimumChild: (current, child, offset) => Math.min(current, child.computeMinIndentation(offset, textModel)),
+		end: (offset, child) => lengthAdd(offset, child.length),
+		setCached: value => { writeCached!(value); },
+		startLine: offset => { const start = lengthToObj(offset); return (start.columnCount === 0 ? start.lineCount : start.lineCount + 1) + 1; },
+		endLine: offset => lengthGetLineCount(lengthAdd(offset, node.length)) + 1,
+		lineBeforeEnd: (line, end) => line <= end,
+		firstColumn: line => textModel.getLineFirstNonWhitespaceColumn(line),
+		lineContent: line => textModel.getLineContent(line),
+		isZero: value => value === 0,
+		visibleColumn: (content, first) => CursorColumns.visibleColumnFromColumn(content, first, textModel.getOptions().tabSize),
+		minimum: (first, second) => Math.min(first, second),
+		increment: line => ++line
+	};
 }
