@@ -35,7 +35,8 @@ export const enum RustBracketNumericStateKind {
 	TextBufferTokenizer,
 	NonPeekableTokenizer,
 	FastTokenizer,
-	Token
+	Token,
+	SmallSet
 }
 
 const stateFieldNames: readonly (readonly string[])[] = [
@@ -46,7 +47,8 @@ const stateFieldNames: readonly (readonly string[])[] = [
 	['textBufferLineCount', 'textBufferLastLineLength', '_offset'],
 	['textBufferLineCount', 'textBufferLastLineLength', 'lineIdx', 'lineCharOffset', 'lineTokenOffset'],
 	['_offset', 'idx', 'length'],
-	['length', 'kind', 'bracketId']
+	['length', 'kind', 'bracketId'],
+	['items']
 ];
 
 /** Installs ownership for subsequently constructed AST nodes; existing nodes retain their owners. */

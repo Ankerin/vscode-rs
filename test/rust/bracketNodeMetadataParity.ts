@@ -150,17 +150,20 @@ test('Rust bracket metadata releases records when frozen and retains live nodes 
 
 test('Rust numeric bracket records release unreachable and cyclic AST facades without retaining a graph', async () => {
 	assert.ok(global.gc, 'The compatibility runner exposes garbage collection');
+	// Cached immutable identifier sets retain their original permanent cache lifetime.
+	for (let attempt = 0; attempt < 5; attempt++) { global.gc(); await setTimeout(10); }
+	const retained = rust.bracket_node_metadata_live_count();
 	withRust(() => {
 		for (let index = 0; index < 256; index++) {
 			const node = ListAstNode.create23(new TextAstNode(toLength(0, 1)), new TextAstNode(toLength(0, 2)), null);
 			Object.defineProperty(node, '_item1', { value: node });
 		}
 	});
-	for (let attempt = 0; attempt < 100 && rust.bracket_node_metadata_live_count() > 0; attempt++) {
+	for (let attempt = 0; attempt < 100 && rust.bracket_node_metadata_live_count() > retained; attempt++) {
 		global.gc();
 		await setTimeout(10);
 	}
-	assert.strictEqual(rust.bracket_node_metadata_live_count(), 0);
+	assert.strictEqual(rust.bracket_node_metadata_live_count(), retained);
 });
 
 test('Rust owning bracket metadata rejects stale registrations and frees failed record construction', () => {

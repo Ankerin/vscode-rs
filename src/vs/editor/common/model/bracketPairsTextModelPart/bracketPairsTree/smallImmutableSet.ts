@@ -4,9 +4,9 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { canTrackRustSmallSetSlice, trackRustSmallSet, trackRustSmallSetItems, tryAddRustSmallSet, tryMergeRustSmallSet, tryQueryRustSmallSet } from './rustSmallImmutableSet.js';
+import { ownRustBracketNumericState, RustBracketNumericStateKind } from './rustBracketNodeMetadata.js';
 
-const emptyArr: number[] = [];
-trackRustSmallSetItems(emptyArr);
+const emptyArr: number[] = trackRustSmallSetItems([]);
 
 /**
  * Represents an immutable set that works best for a small number of elements (less than 32).
@@ -40,7 +40,9 @@ export class SmallImmutableSet<T> {
 		private readonly items: number,
 		private readonly additionalItems: readonly number[]
 	) {
-		if (new.target === SmallImmutableSet) { trackRustSmallSet(this); }
+		const set = ownRustBracketNumericState(this, RustBracketNumericStateKind.SmallSet);
+		if (new.target === SmallImmutableSet) { trackRustSmallSet(set); }
+		return set;
 	}
 
 	public add(value: T, keyProvider: IDenseKeyProvider<T>): SmallImmutableSet<T> {
@@ -51,8 +53,7 @@ export class SmallImmutableSet<T> {
 			if (native[2] === 1) { return SmallImmutableSet.create(native[0], this.additionalItems); }
 			const newItems: number[] = [];
 			for (let index = 3; index < native.length; index++) { newItems.push(native[index]); }
-			trackRustSmallSetItems(newItems);
-			return SmallImmutableSet.create(native[0], newItems);
+			return SmallImmutableSet.create(native[0], trackRustSmallSetItems(newItems));
 		}
 		let idx = key >> 5; // divided by 32
 		if (idx === 0) {
@@ -72,9 +73,7 @@ export class SmallImmutableSet<T> {
 			newItems.push(0);
 		}
 		newItems[idx] |= 1 << (key & 31);
-		if (standardSlice) { trackRustSmallSetItems(newItems); }
-
-		return SmallImmutableSet.create(this.items, newItems);
+		return SmallImmutableSet.create(this.items, standardSlice ? trackRustSmallSetItems(newItems) : newItems);
 	}
 
 	public has(value: T, keyProvider: IDenseKeyProvider<T>): boolean {
@@ -102,8 +101,7 @@ export class SmallImmutableSet<T> {
 			}
 			const newItems: number[] = [];
 			for (let index = 1; index < native.length; index++) { newItems.push(native[index]); }
-			trackRustSmallSetItems(newItems);
-			return SmallImmutableSet.create(merged, newItems);
+			return SmallImmutableSet.create(merged, trackRustSmallSetItems(newItems));
 		}
 		const merged = this.items | other.items;
 
@@ -126,8 +124,7 @@ export class SmallImmutableSet<T> {
 			newItems.push(item1 | item2);
 		}
 
-		trackRustSmallSetItems(newItems);
-		return SmallImmutableSet.create(merged, newItems);
+		return SmallImmutableSet.create(merged, trackRustSmallSetItems(newItems));
 	}
 
 	public intersects(other: SmallImmutableSet<T>): boolean {

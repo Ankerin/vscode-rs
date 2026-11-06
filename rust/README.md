@@ -21,7 +21,7 @@ See [Architecture](ARCHITECTURE.md) for the complete target, subsystem boundarie
 | `../src/vs/editor/common/core/rustTextShape.ts` | UTF-16 line-ending counts and leading indentation normalization | Implemented; follows the core registration |
 | `../src/vs/editor/common/model/bracketPairsTextModelPart/bracketPairsTree/rustBracketEdits.ts` | Composition of queued bracket-tree edits | Implemented; follows the core registration |
 | `../src/vs/editor/common/model/bracketPairsTextModelPart/bracketPairsTree/rustBracketLengths.ts` | Packed length arithmetic and coordinate/text-length conversions | Implemented; follows the core registration |
-| `../src/vs/editor/common/model/bracketPairsTextModelPart/bracketPairsTree/rustSmallImmutableSet.ts` | Immutable bracket identifier set operations | Implemented; follows the core registration |
+| `../src/vs/editor/common/model/bracketPairsTextModelPart/bracketPairsTree/rustSmallImmutableSet.ts` | Immutable bracket identifier set operations and supported word payload ownership | Implemented; follows the core registration |
 | `../src/vs/editor/common/model/bracketPairsTextModelPart/bracketPairsTree/rustBracketTrees.ts` | In-place bracket AST grouping and append/prepend balancing | Implemented; follows the core registration |
 | `../src/vs/editor/common/model/bracketPairsTextModelPart/bracketPairsTree/rustBracketNodeReader.ts` | Longest-node cache lookup and live reader-stack advancement | Implemented; follows the core registration |
 | `../src/vs/editor/common/model/bracketPairsTextModelPart/bracketPairsTree/rustBracketPositionMapper.ts` | Edit cursor advancement, coordinate translation, and next-change distances | Implemented; follows the core registration |

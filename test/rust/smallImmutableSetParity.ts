@@ -6,6 +6,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { setTimeout } from 'node:timers/promises';
 import { test } from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { DenseKeyProvider, identityKeyProvider, SmallImmutableSet } from '../../src/vs/editor/common/model/bracketPairsTextModelPart/bracketPairsTree/smallImmutableSet.js';
@@ -25,6 +26,57 @@ function withRust<T>(compute: () => T, module: IRustSmallSetModule = rust): T {
 	const registration = registerRustSmallSet(module);
 	try { return compute(); } finally { registration.dispose(); }
 }
+
+function withCore<T>(compute: () => T, module: IRustTextBufferModule = rust): T {
+	const registration = registerRustTextBuffer(module);
+	try { return compute(); } finally { registration.dispose(); }
+}
+
+test('Rust owning identifier words retain native kernels, immutable copies, held aliases, and cache identities', () => {
+	let seed = 1511;
+	let additions = 0;
+	let queries = 0;
+	const random = (limit: number) => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed % limit; };
+	const module: IRustTextBufferModule = { ...rust, small_set_add: (...args) => { additions++; return rust.small_set_add(...args); }, small_set_query: (...args) => { queries++; return rust.small_set_query(...args); } };
+	for (let trace = 0; trace < 128; trace++) {
+		const keys = Array.from({ length: 32 }, () => random(320));
+		const run = () => {
+			let set = SmallImmutableSet.getEmpty<number>();
+			const states = keys.map(key => {
+				const previous = set;
+				set = set.add(key, identityKeyProvider);
+				return { same: set === previous, has: set.has(key, identityKeyProvider), previous: previous.has(key, identityKeyProvider), set };
+			});
+			const first = set.add(64, identityKeyProvider);
+			const words = Object.getOwnPropertyDescriptor(first, 'additionalItems')!.value as number[];
+			const shared = first.add(0, identityKeyProvider);
+			const copied = first.add(192, identityKeyProvider);
+			words[1] = Number.NaN;
+			Reflect.deleteProperty(words, '2');
+			const mutated = { shared: Object.getOwnPropertyDescriptor(shared, 'additionalItems')!.value === words, copied: Object.getOwnPropertyDescriptor(copied, 'additionalItems')!.value !== words, source: first.has(64, identityKeyProvider), other: shared.has(64, identityKeyProvider), present: copied.has(192, identityKeyProvider), merge: first.merge(copied), equal: first.equals(shared) };
+			const cached = SmallImmutableSet.getEmpty<number>().add(0, identityKeyProvider);
+			return { states, mutated, cached: cached === SmallImmutableSet.getEmpty<number>().add(0, identityKeyProvider) };
+		};
+		assert.deepStrictEqual(withCore(run, module), run(), `Owning identifier words trace ${trace}`);
+	}
+	assert.ok(additions > 4000 && queries > 8000, 'Native kernels consume the actual Rust-owned word fields and arrays');
+	assert.ok(rust.bracket_number_array_live_count() > 0 && rust.bracket_node_metadata_live_count() > 0, 'Both native word containers own real set payloads');
+});
+
+test('Rust owning identifier arrays release discarded and cyclic word facades while retaining cache lifetimes', async () => {
+	assert.ok(global.gc, 'The compatibility runner exposes garbage collection');
+	for (let attempt = 0; attempt < 5; attempt++) { global.gc(); await setTimeout(10); }
+	const retained = rust.bracket_number_array_live_count();
+	withCore(() => {
+		for (let index = 0; index < 256; index++) {
+			const set = SmallImmutableSet.getEmpty<number>().add(64, identityKeyProvider).add(160, identityKeyProvider);
+			const words = Object.getOwnPropertyDescriptor(set, 'additionalItems')!.value as number[];
+			Object.defineProperty(words, '0', { value: words });
+		}
+	});
+	for (let attempt = 0; attempt < 100 && rust.bracket_number_array_live_count() > retained; attempt++) { global.gc(); await setTimeout(10); }
+	assert.strictEqual(rust.bracket_number_array_live_count(), retained);
+});
 
 test('Rust bracket identifier sets preserve seeded additions, merges, membership, exact equality, and cache identities', () => {
 	let seed = 691;

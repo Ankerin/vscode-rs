@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { IDisposable, toDisposable } from '../../../../../base/common/lifecycle.js';
+import { ownRustBracketNumberArray } from './rustBracketNumberArray.js';
 
 /** Generated bracket identifier set bindings borrow only the words required by each operation. */
 export interface IRustSmallSetModule {
@@ -33,8 +34,10 @@ export function trackRustSmallSet(set: object): void {
 }
 
 /** Records arrays created by internal literals, native result reconstruction, or a verified intrinsic slice. */
-export function trackRustSmallSetItems(items: readonly number[]): void {
-	standardItems.add(items);
+export function trackRustSmallSetItems(items: number[]): number[] {
+	const owned = ownRustBracketNumberArray(items);
+	standardItems.add(owned);
+	return owned;
 }
 
 /** Verifies the complete intrinsic slice construction without invoking caller accessors or proxy traps. */
