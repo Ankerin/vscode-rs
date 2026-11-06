@@ -15,7 +15,7 @@ See [Architecture](ARCHITECTURE.md) for the complete target, subsystem boundarie
 | `../src/vs/editor/common/services/textModelSync/` | Rust-backed editor worker mirror storage and lifecycle | Implemented; follows the renderer's opt-in initialization |
 | `../src/vs/editor/common/diff/defaultLinesDiffComputer/` | Complete native advanced diff with display ranges, moves, and raw edits | Implemented; follows the core registration |
 | `../src/vs/editor/common/core/rustTextChanges.ts` | Native composition and owning storage for open undo batches | Implemented; follows the core registration |
-| `../src/vs/editor/common/core/rustCursorColumns.ts` | Native visible/status-bar columns, UTF-16/grapheme traversal, tab stops, and atomic indentation movement | Implemented; follows the core registration |
+| `../src/vs/editor/common/core/rustCursorColumns.ts` | Native visible/status-bar columns, UTF-16/grapheme traversal, tab stops, atomic indentation movement, and word-part scans | Implemented; follows the core registration |
 | `../src/vs/base/common/rustUnicode.ts` | Borrowed-string code-point, forward/backward grapheme, and Unicode Backspace kernels | Implemented; follows the core registration |
 | `../src/vs/editor/common/model/rustDecorations.ts` | Historical marker-affinity and collapse behavior for decoration edits | Implemented; follows the core registration |
 | `../src/vs/editor/common/tokens/rustTokens.ts` | Native metadata composition, sparse/contiguous editing, and syntax store creation | Implemented; follows the core registration |
@@ -172,6 +172,8 @@ pnpm run test-rust-editor-cursor
 The runner uses Chromium and runs both implementations in fresh browser sessions. An optional `--grep` selects the same original cases for both engines.
 
 Decoration edit checks compare 65,536 native node edits and 4,096 numeric-edge cases against the original two-marker algorithm. They retain all four affinities, forced movement, collapsed replacements, partial/common replacement boundaries, unsigned metadata coercion, NaN/infinities, fractional values, signed zero, original node identity/caches/links, accessor effects, partial writes on exceptions, subclass behavior, proxy traps, and atomic registration rollback. Decorations ABI 1 passes 110 differential tests, 68 native tests, 581 canonical model/string/interval tests and 263 canonical Chromium cursor tests per implementation, plus the Chromium worker lifecycle test. Existing tree topology, queries, decoration ownership, cache orchestration, and rendering remain separate boundaries.
+
+Word-part checks compare both directions at every position in 512 seeded mixed-case, digit, delimiter, whitespace, and Unicode lines through existing WordOperations. They retain directional snake/kebab affinity, acronym boundaries, digit-to-upper transitions, model callback and position getter order, line-edge identity, fractional/out-of-range fallback, string callbacks, and binding validation. Cursor-columns ABI 3 passes 112 differential tests, 70 native tests, 581 canonical model/string/interval tests and 278 canonical Chromium cursor/word-part tests per implementation, plus the Chromium worker lifecycle test. The browser selector includes the unchanged word-part navigation and deletion suite. General word segmentation, command orchestration, cursor state, view coordinates, and rendering remain separate boundaries.
 
 ## Benchmark
 

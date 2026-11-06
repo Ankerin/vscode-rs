@@ -13,6 +13,9 @@ import { CursorColumns } from '../../src/vs/editor/common/core/cursorColumns.js'
 import { IRustCursorColumnsModule, registerRustCursorColumns, tryComputeRustCursorColumn } from '../../src/vs/editor/common/core/rustCursorColumns.js';
 import { IRustTextBufferModule, registerRustTextBuffer } from '../../src/vs/editor/common/model/rustTextBuffer/rustTextBuffer.js';
 import { AtomicTabMoveOperations, Direction } from '../../src/vs/editor/common/cursor/cursorAtomicMoveOperations.js';
+import { WordOperations } from '../../src/vs/editor/common/cursor/cursorWordOperations.js';
+import { Position } from '../../src/vs/editor/common/core/position.js';
+import { createTextModel } from '../../src/vs/editor/test/common/testTextModel.js';
 
 interface IRustModule extends IRustTextBufferModule {
 	default(options: { module_or_path: Uint8Array }): Promise<object>;
@@ -138,4 +141,55 @@ test('Rust atomic tabs preserve base-class callbacks, string accessors, subclass
 	assert.throws(() => withRust(() => AtomicTabMoveOperations.atomicPosition('', 0, 4, Direction.Left), { ...rust, cursor_atomic_position: () => 'invalid' as never }), /atomic position result/);
 	assert.throws(() => registerRustTextBuffer({ ...rust, cursor_atomic_position: undefined as never }), /column contract/);
 	assert.strictEqual(withRust(() => AtomicTabMoveOperations.atomicPosition('    x', '2' as never, 4, Direction.Left)), -1);
+});
+
+test('Rust word parts retain seeded ASCII case and digit boundaries, directional separators, and Unicode text', () => {
+	let seed = 113;
+	let calls = 0;
+	const random = (limit: number) => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed % limit; };
+	const parts = ['abc', 'ABC', 'Ab', 'A', '2', '_', '-', ' ', '\t', '\uD800', '\uDC00', '\u0301', '\uD83D\uDE00', 'thisISMixed', 'one_word-Two', '\u4E00'];
+	const module: IRustCursorColumnsModule = { ...rust, cursor_word_part_column: (text, column, maximum, right) => { calls++; return rust.cursor_word_part_column(text, column, maximum, right); } };
+	for (let trace = 0; trace < 512; trace++) {
+		const text = Array.from({ length: 1 + random(24) }, () => parts[random(parts.length)]).join('');
+		const model = createTextModel(text);
+		try {
+			const positions = Array.from({ length: text.length + 1 }, (_, index) => new Position(1, index + 1));
+			const run = () => positions.map(position => [WordOperations._moveWordPartLeft(model, position), WordOperations._moveWordPartRight(model, position)]);
+			assert.deepStrictEqual(withRust(run, module), run(), `Word part trace ${trace}`);
+		} finally { model.dispose(); }
+	}
+	assert.ok(calls > 10000, 'Existing WordOperations dispatch their same-line word-part scans to Rust');
+});
+
+test('Rust word parts retain model callback and position getter order, line-edge identity, and unusual domains', () => {
+	const run = () => {
+		const model = createTextModel('aB_cD\nsecondLine');
+		const reads: string[] = [];
+		const content = model.getLineContent;
+		Object.defineProperty(model, 'getLineContent', { value: (line: number) => { reads.push(`line:${line}`); return content.call(model, line); } });
+		const position = new Position(1, 4);
+		Object.defineProperty(position, 'column', { get: () => { reads.push('column'); return 4; } });
+		try { return [WordOperations._moveWordPartLeft(model, position), WordOperations._moveWordPartRight(model, position), reads]; }
+		finally { model.dispose(); }
+	};
+	assert.deepStrictEqual(withRust(run), run());
+	const model = createTextModel('aB_cD\nsecondLine');
+	try {
+		const start = new Position(1, 1);
+		const end = new Position(2, model.getLineMaxColumn(2));
+		assert.strictEqual(withRust(() => WordOperations._moveWordPartLeft(model, start)), start);
+		assert.strictEqual(withRust(() => WordOperations._moveWordPartRight(model, end)), end);
+		for (const column of [-1, -0, 0, 1.5, 3.25, 7, Number.NaN]) {
+			const run = () => [WordOperations._moveWordPartLeft(model, new Position(1, column)), WordOperations._moveWordPartRight(model, new Position(1, column))];
+			assert.deepStrictEqual(withRust(run), run());
+		}
+		const failure = new Error('Original word-part string callback failure');
+		const character = Object.getOwnPropertyDescriptor(String.prototype, 'charCodeAt')!;
+		Object.defineProperty(String.prototype, 'charCodeAt', { configurable: true, get: () => { throw failure; } });
+		try { assert.throws(() => withRust(() => WordOperations._moveWordPartLeft(model, new Position(1, 4))), error => error === failure); }
+		finally { Object.defineProperty(String.prototype, 'charCodeAt', character); }
+		assert.throws(() => withRust(() => WordOperations._moveWordPartLeft(model, new Position(1, 4)), { ...rust, cursor_word_part_column: () => 0 }), /word part result/);
+	} finally { model.dispose(); }
+	assert.strictEqual(rust.cursor_word_part_column('text', 2.5, 5, false), undefined);
+	assert.throws(() => registerRustTextBuffer({ ...rust, cursor_word_part_column: undefined as never }), /column contract/);
 });

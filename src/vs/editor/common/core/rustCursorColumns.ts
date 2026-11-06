@@ -14,6 +14,7 @@ export interface IRustCursorColumnsModule extends IRustUnicodeModule {
 	cursor_tab_stop(column: number, size: number, previous: boolean): number;
 	cursor_whitespace_column(text: string, position: number, tabSize: number): Float64Array | undefined;
 	cursor_atomic_position(text: string, position: number, tabSize: number, direction: number): number | undefined;
+	cursor_word_part_column(text: string, column: number, maxColumn: number, right: boolean): number | undefined;
 	grapheme_break_type(point: number): number | undefined;
 }
 
@@ -26,7 +27,7 @@ const standardMethods = [
 
 /** Installs cursor computation for the same disposable lifetime as the initialized editor core. */
 export function registerRustCursorColumns(module: IRustCursorColumnsModule): IDisposable {
-	if (typeof module.cursor_columns_abi_version !== 'function' || module.cursor_columns_abi_version() !== 2 || typeof module.cursor_column !== 'function' || typeof module.cursor_tab_stop !== 'function' || typeof module.cursor_whitespace_column !== 'function' || typeof module.cursor_atomic_position !== 'function' || typeof module.grapheme_break_type !== 'function') { throw new Error('The Rust cursor bindings do not match the current column contract'); }
+	if (typeof module.cursor_columns_abi_version !== 'function' || module.cursor_columns_abi_version() !== 3 || typeof module.cursor_column !== 'function' || typeof module.cursor_tab_stop !== 'function' || typeof module.cursor_whitespace_column !== 'function' || typeof module.cursor_atomic_position !== 'function' || typeof module.cursor_word_part_column !== 'function' || typeof module.grapheme_break_type !== 'function') { throw new Error('The Rust cursor bindings do not match the current column contract'); }
 	if (registeredModule) { throw new Error('A Rust cursor column module is already registered'); }
 	const unicode = registerRustUnicode(module);
 	registeredModule = module;
@@ -69,6 +70,14 @@ export function tryComputeRustAtomicPosition(text: string, position: number, tab
 	if (!registeredModule || !standardAtomicInput(text, position, tabSize) || typeof direction !== 'number') { return undefined; }
 	const result = registeredModule.cursor_atomic_position(text, position, tabSize, direction);
 	if (result !== undefined && typeof result !== 'number') { throw new Error('The Rust atomic position result does not match the editor contract'); }
+	return result;
+}
+
+/** Computes a word-part boundary after the original model and position callback reads. */
+export function tryComputeRustWordPartColumn(text: string, column: number, maxColumn: number, right: boolean): number | undefined {
+	if (!registeredModule || !standardAtomicInput(text, column, maxColumn) || !Number.isSafeInteger(column) || !Number.isSafeInteger(maxColumn) || maxColumn < 1 || maxColumn > text.length + 1 || (right ? column < 2 : column >= maxColumn && column > 1)) { return undefined; }
+	const result = registeredModule.cursor_word_part_column(text, column, maxColumn, right);
+	if (result !== undefined && (!Number.isInteger(result) || result < 1 || result > maxColumn)) { throw new Error('The Rust word part result does not match the cursor contract'); }
 	return result;
 }
 

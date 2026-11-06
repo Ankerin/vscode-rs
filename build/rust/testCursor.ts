@@ -27,14 +27,15 @@ await initialize();
 const registration = registerRustTextBuffer(rust);
 globalThis.addEventListener('unload', () => registration.dispose(), { once: true });
 await import('./cursor.test.js');
+await import('../../../contrib/wordPartOperations/test/browser/wordPartOperations.test.js');
 `);
 
 try {
 	for (const engine of ['existing', 'rust']) {
-		const suite = engine === 'rust' ? 'rustCursor' : 'cursor';
+		const suites = engine === 'rust' ? ['src/vs/editor/test/browser/controller/rustCursor.test.ts'] : ['src/vs/editor/test/browser/controller/cursor.test.ts', 'src/vs/editor/contrib/wordPartOperations/test/browser/wordPartOperations.test.ts'];
 		const result = spawnSync(process.execPath, [
 			resolve(root, 'test/unit/browser/index.js'),
-			'--run', `src/vs/editor/test/browser/controller/${suite}.test.ts`,
+			...suites.flatMap(suite => ['--run', suite]),
 			'--browser', 'chromium', '--workers', '1', '--reporter', 'dot',
 			...process.argv.slice(2)
 		], { cwd: root, encoding: 'utf8', windowsHide: true, maxBuffer: 10 * 1024 * 1024 });

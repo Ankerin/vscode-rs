@@ -25,6 +25,7 @@ mod tokens;
 mod tree;
 mod unicode_deletion;
 mod unicode_grapheme_data;
+mod word_part;
 
 pub use atomic_tab_move::{atomic_tab_position, whitespace_visible_column};
 pub use contiguous_tokens::{
@@ -65,3 +66,4 @@ pub use text_chunk::{TextChunk, TextChunkIter};
 pub use token_array::{create_line_token_array, line_token_array, slice_token_array};
 pub use tokens::{TokensError, merge_semantic_tokens};
 pub use unicode_deletion::unicode_left_delete_offset;
+pub use word_part::word_part_column;

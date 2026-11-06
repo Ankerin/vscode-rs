@@ -15,6 +15,7 @@ import { Selection } from '../core/selection.js';
 import { ITextModel } from '../model.js';
 import { IWordAtPosition } from '../core/wordHelper.js';
 import { AutoClosingPairs } from '../languages/languageConfiguration.js';
+import { tryComputeRustWordPartColumn } from '../core/rustCursorColumns.js';
 
 interface IFindWordResult {
 	/**
@@ -270,7 +271,10 @@ export class WordOperations {
 		}
 
 		const lineContent = model.getLineContent(lineNumber);
-		for (let column = position.column - 1; column > 1; column--) {
+		let column = position.column - 1;
+		const native = tryComputeRustWordPartColumn(lineContent, column, maxColumn, false);
+		if (native !== undefined) { return new Position(lineNumber, native); }
+		for (; column > 1; column--) {
 			const left = lineContent.charCodeAt(column - 2);
 			const right = lineContent.charCodeAt(column - 1);
 
@@ -377,7 +381,10 @@ export class WordOperations {
 		}
 
 		const lineContent = model.getLineContent(lineNumber);
-		for (let column = position.column + 1; column < maxColumn; column++) {
+		let column = position.column + 1;
+		const native = tryComputeRustWordPartColumn(lineContent, column, maxColumn, true);
+		if (native !== undefined) { return new Position(lineNumber, native); }
+		for (; column < maxColumn; column++) {
 			const left = lineContent.charCodeAt(column - 2);
 			const right = lineContent.charCodeAt(column - 1);
 

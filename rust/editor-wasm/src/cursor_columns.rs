@@ -19,7 +19,7 @@ extern "C" {
 /// Versions cursor arithmetic and the repository's exact grapheme and width contracts.
 #[wasm_bindgen]
 pub fn cursor_columns_abi_version() -> u32 {
-	2
+	3
 }
 
 /// Traverses only requested units without transferring or retaining a second full line.
@@ -109,6 +109,40 @@ pub fn cursor_atomic_position(
 		},
 	)?;
 	Ok(Some(result))
+}
+
+/// Scans a word part using the original loop start and the model's already-read maximum column.
+#[wasm_bindgen]
+pub fn cursor_word_part_column(
+	text: JsString,
+	column: f64,
+	max_column: f64,
+	right: bool,
+) -> Result<Option<u32>, JsValue> {
+	if text.length() > 4 * 1024 * 1024
+		|| !column.is_finite()
+		|| column.fract() != 0.0
+		|| max_column.fract() != 0.0
+		|| max_column < 1.0
+		|| max_column > f64::from(text.length()) + 1.0
+		|| if right {
+			column < 2.0
+		} else {
+			column >= max_column && column > 1.0
+		} {
+		return Ok(None);
+	}
+	let result = vscode_editor_core::word_part_column(
+		column.max(0.0) as usize,
+		max_column as usize,
+		right,
+		|offset| {
+			text.unchecked_ref::<Text>()
+				.character(offset as u32)
+				.map(|value| value as u16)
+		},
+	)?;
+	Ok(Some(result as u32))
 }
 
 /// Exposes the exact classification contract for exhaustive differential validation.
