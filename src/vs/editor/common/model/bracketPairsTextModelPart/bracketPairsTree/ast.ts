@@ -11,6 +11,7 @@ import { Length, lengthAdd, lengthGetLineCount, lengthToObj, lengthZero } from '
 import { SmallImmutableSet } from './smallImmutableSet.js';
 import { OpeningBracketId } from './tokenizer.js';
 import { IRustBracketIndentationHost, RustBracketIndentationOperation, tryComputeRustBracketIndentation } from './rustBracketIndentation.js';
+import { IRustBracketAstHost, RustBracketAstOperation, tryRunRustBracketAst } from './rustBracketAst.js';
 
 export const enum AstNodeKind {
 	Text = 0,
@@ -95,6 +96,8 @@ export class PairAstNode extends BaseAstNode {
 		child: AstNode | null,
 		closingBracket: BracketAstNode | null
 	) {
+		const native = tryRunRustBracketAst(RustBracketAstOperation.CreatePair, () => createRustBracketAstHost({ items: [openingBracket, child, closingBracket], createPair: (length, ids) => new PairAstNode(length, openingBracket, child, closingBracket, ids) }));
+		if (native !== undefined) { return native.value as PairAstNode; }
 		let length = openingBracket.length;
 		if (child) {
 			length = lengthAdd(length, child.length);
@@ -149,6 +152,8 @@ export class PairAstNode extends BaseAstNode {
 	}
 
 	public canBeReused(openBracketIds: SmallImmutableSet<OpeningBracketId>) {
+		const native = tryRunRustBracketAst(RustBracketAstOperation.ReusePair, () => createRustBracketAstHost({ node: this, openBracketIds }));
+		if (native !== undefined) { return native.value as boolean; }
 		if (this.closingBracket === null) {
 			// Unclosed pair ast nodes only
 			// end at the end of the document
@@ -197,6 +202,8 @@ export abstract class ListAstNode extends BaseAstNode {
 	 * This method uses more memory-efficient list nodes that can only store 2 or 3 children.
 	*/
 	public static create23(item1: AstNode, item2: AstNode, item3: AstNode | null, immutable: boolean = false): ListAstNode {
+		const native = tryRunRustBracketAst(RustBracketAstOperation.CreateCompactList, () => createRustBracketAstHost({ items: [item1, item2, item3], immutable }));
+		if (native !== undefined) { return native.value as ListAstNode; }
 		let length = item1.length;
 		let missingBracketIds = item1.missingOpeningBracketIds;
 
@@ -220,6 +227,8 @@ export abstract class ListAstNode extends BaseAstNode {
 	}
 
 	public static create(items: AstNode[], immutable: boolean = false): ListAstNode {
+		const native = tryRunRustBracketAst(RustBracketAstOperation.CreateArrayList, () => createRustBracketAstHost({ items, immutable, emptyList: () => this.getEmpty() }));
+		if (native !== undefined) { return native.value as ListAstNode; }
 		if (items.length === 0) {
 			return this.getEmpty();
 		} else {
@@ -267,6 +276,8 @@ export abstract class ListAstNode extends BaseAstNode {
 	protected abstract setChild(idx: number, child: AstNode): void;
 
 	public makeLastElementMutable(): AstNode | undefined {
+		const native = tryRunRustBracketAst(RustBracketAstOperation.MakeLastMutable, () => ListAstNode.createRustMutationHost(this));
+		if (native !== undefined) { return native.value as AstNode | undefined; }
 		this.throwIfImmutable();
 		const childCount = this.childrenLength;
 		if (childCount === 0) {
@@ -281,6 +292,8 @@ export abstract class ListAstNode extends BaseAstNode {
 	}
 
 	public makeFirstElementMutable(): AstNode | undefined {
+		const native = tryRunRustBracketAst(RustBracketAstOperation.MakeFirstMutable, () => ListAstNode.createRustMutationHost(this));
+		if (native !== undefined) { return native.value as AstNode | undefined; }
 		this.throwIfImmutable();
 		const childCount = this.childrenLength;
 		if (childCount === 0) {
@@ -295,6 +308,8 @@ export abstract class ListAstNode extends BaseAstNode {
 	}
 
 	public canBeReused(openBracketIds: SmallImmutableSet<OpeningBracketId>): boolean {
+		const native = tryRunRustBracketAst(RustBracketAstOperation.ReuseList, () => createRustBracketAstHost({ node: this, openBracketIds }));
+		if (native !== undefined) { return native.value as boolean; }
 		if (openBracketIds.intersects(this.missingOpeningBracketIds)) {
 			return false;
 		}
@@ -318,6 +333,8 @@ export abstract class ListAstNode extends BaseAstNode {
 	}
 
 	public handleChildrenChanged(): void {
+		const native = tryRunRustBracketAst(RustBracketAstOperation.UpdateChildren, () => ListAstNode.createRustMutationHost(this));
+		if (native !== undefined) { return; }
 		this.throwIfImmutable();
 
 		const count = this.childrenLength;
@@ -379,6 +396,18 @@ export abstract class ListAstNode extends BaseAstNode {
 	public abstract unappendChild(): AstNode | undefined;
 	public abstract prependChildOfSameHeight(node: AstNode): void;
 	public abstract unprependChild(): AstNode | undefined;
+
+	/** Static capabilities retain protected dispatch and private metadata setter observations. */
+	private static createRustMutationHost(node: ListAstNode): IRustBracketAstHost {
+		return createRustBracketAstHost({
+			node,
+			throwIfImmutable: () => node.throwIfImmutable(),
+			setLength: value => { node._length = value; },
+			setMissing: value => { node._missingOpeningBracketIds = value; },
+			resetIndentation: () => { node.cachedMinIndentation = -1; },
+			setEdge: (count, child, last) => node.setChild(last ? count - 1 : 0, child)
+		});
+	}
 }
 
 class TwoThreeListAstNode extends ListAstNode {
@@ -612,6 +641,8 @@ export class TextAstNode extends ImmutableLeafAstNode {
 	}
 
 	public canBeReused(_openedBracketIds: SmallImmutableSet<OpeningBracketId>) {
+		const native = tryRunRustBracketAst(RustBracketAstOperation.ReuseText, () => createRustBracketAstHost({ node: this, openBracketIds: _openedBracketIds }));
+		if (native !== undefined) { return native.value as boolean; }
 		return true;
 	}
 
@@ -680,6 +711,8 @@ export class BracketAstNode extends ImmutableLeafAstNode {
 	}
 
 	public canBeReused(_openedBracketIds: SmallImmutableSet<OpeningBracketId>) {
+		const native = tryRunRustBracketAst(RustBracketAstOperation.ReuseBracket, () => createRustBracketAstHost({ node: this, openBracketIds: _openedBracketIds }));
+		if (native !== undefined) { return native.value as boolean; }
 		// These nodes could be reused,
 		// but not in a general way.
 		// Their parent may be reused.
@@ -706,6 +739,8 @@ export class InvalidBracketAstNode extends ImmutableLeafAstNode {
 	}
 
 	public canBeReused(openedBracketIds: SmallImmutableSet<OpeningBracketId>) {
+		const native = tryRunRustBracketAst(RustBracketAstOperation.ReuseInvalid, () => createRustBracketAstHost({ node: this, openBracketIds: openedBracketIds }));
+		if (native !== undefined) { return native.value as boolean; }
 		return !openedBracketIds.intersects(this.missingOpeningBracketIds);
 	}
 
@@ -739,5 +774,64 @@ function createRustBracketIndentationHost(node: AstNode, textModel: ITextModel, 
 		visibleColumn: (content, first) => CursorColumns.visibleColumnFromColumn(content, first, textModel.getOptions().tabSize),
 		minimum: (first, second) => Math.min(first, second),
 		increment: line => ++line
+	};
+}
+
+/** Original constructors and private mutation hooks remain at the AST class boundary. */
+interface IBracketAstCapabilities {
+	node?: AstNode;
+	items?: (AstNode | null)[];
+	immutable?: boolean;
+	openBracketIds?: SmallImmutableSet<OpeningBracketId>;
+	createPair?: (length: Length, ids: SmallImmutableSet<OpeningBracketId>) => PairAstNode;
+	emptyList?: () => ListAstNode;
+	throwIfImmutable?: () => void;
+	setLength?: (value: Length) => void;
+	setMissing?: (value: SmallImmutableSet<OpeningBracketId>) => void;
+	resetIndentation?: () => void;
+	setEdge?: (count: number, child: AstNode, last: boolean) => void;
+}
+
+/** Ordered capabilities preserve method lookup before array/provider arguments and partial setters. */
+function createRustBracketAstHost(capabilities: IBracketAstCapabilities): IRustBracketAstHost {
+	return {
+		receiver: () => capabilities.node!,
+		item: index => capabilities.items![index],
+		truthy: value => !!value,
+		length: node => node.length,
+		missing: node => node.missingOpeningBracketIds,
+		emptyIds: () => SmallImmutableSet.getEmpty(),
+		addLength: (length, node) => lengthAdd(length, node.length),
+		mergeIds: (ids, node) => ids.merge(node.missingOpeningBracketIds),
+		mergeItem: (ids, index) => ids.merge(capabilities.items![index]!.missingOpeningBracketIds),
+		equalHeights: (first, second) => first.listHeight === second.listHeight,
+		invalidHeights: () => { throw new Error('Invalid list heights'); },
+		createPair: (length, ids) => capabilities.createPair!(length, ids),
+		createList: (length, ids, compact) => {
+			const items = capabilities.items!;
+			if (compact) {
+				return capabilities.immutable ? new Immutable23ListAstNode(length, items[0]!.listHeight + 1, items[0]!, items[1]!, items[2], ids) : new TwoThreeListAstNode(length, items[0]!.listHeight + 1, items[0]!, items[1]!, items[2], ids);
+			}
+			return capabilities.immutable ? new ImmutableArrayListAstNode(length, items[0]!.listHeight + 1, items as AstNode[], ids) : new ArrayListAstNode(length, items[0]!.listHeight + 1, items as AstNode[], ids);
+		},
+		itemCount: () => capabilities.items!.length,
+		isZero: value => value === 0,
+		indexBefore: (index, count) => index < count,
+		emptyList: () => capabilities.emptyList!(),
+		throwIfImmutable: () => capabilities.throwIfImmutable!(),
+		childCount: node => node.childrenLength,
+		child: (node, index) => node.getChild(index),
+		setLength: value => capabilities.setLength!(value),
+		setMissing: value => capabilities.setMissing!(value),
+		resetIndentation: () => capabilities.resetIndentation!(),
+		closingMissing: () => (capabilities.node as PairAstNode).closingBracket === null,
+		intersectsNode: node => capabilities.openBracketIds!.intersects(node.missingOpeningBracketIds),
+		isList: node => node.kind === AstNodeKind.List,
+		invalidEmptyChild: () => { throw new BugIndicatingError(); },
+		edgeChild: (node, count, last) => node.getChild(last ? count - 1 : 0)!,
+		reuseLeaf: node => node.canBeReused(capabilities.openBracketIds!),
+		toMutable: node => (node as ListAstNode).toMutable(),
+		same: (first, second) => first === second,
+		setEdge: (count, child, last) => capabilities.setEdge!(count, child, last)
 	};
 }

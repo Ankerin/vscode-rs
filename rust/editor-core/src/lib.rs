@@ -6,6 +6,7 @@
 //! Platform-independent editor algorithms. Text coordinates use UTF-16 code units.
 
 mod atomic_tab_move;
+mod bracket_ast;
 mod bracket_collection;
 mod bracket_edits;
 mod bracket_indentation;
@@ -44,6 +45,10 @@ mod unicode_grapheme_data;
 mod word_part;
 
 pub use atomic_tab_move::{atomic_tab_position, whitespace_visible_column};
+pub use bracket_ast::{
+	BracketAstHost, create_bracket_list, create_bracket_pair, make_bracket_edge_mutable,
+	reuse_bracket_node, update_bracket_children,
+};
 pub use bracket_collection::{BracketCollectionHost, collect_brackets};
 pub use bracket_edits::combine_bracket_edits;
 pub use bracket_indentation::{
