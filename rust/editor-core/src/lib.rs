@@ -9,6 +9,7 @@ mod atomic_tab_move;
 mod bracket_collection;
 mod bracket_edits;
 mod bracket_lengths;
+mod bracket_lifecycle;
 mod bracket_node_reader;
 mod bracket_pair_collection;
 mod bracket_parser;
@@ -45,6 +46,10 @@ pub use atomic_tab_move::{atomic_tab_position, whitespace_visible_column};
 pub use bracket_collection::{BracketCollectionHost, collect_brackets};
 pub use bracket_edits::combine_bracket_edits;
 pub use bracket_lengths::{bracket_length, bracket_length_parts};
+pub use bracket_lifecycle::{
+	BracketLifecycleHost, complete_bracket_tokenization, flush_bracket_queues,
+	handle_bracket_change, initialize_bracket_tree, queue_bracket_edits,
+};
 pub use bracket_node_reader::{
 	BracketNodeReaderHost, advance_bracket_node, read_longest_bracket_node,
 };

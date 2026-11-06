@@ -26,6 +26,7 @@ import { ClosingBracketKind, OpeningBracketKind } from '../../../languages/suppo
 import { IRustBracketCollectionHost, tryCollectRustBrackets } from './rustBracketCollection.js';
 import { IRustBracketPairCollectionHost, tryCollectRustBracketPairs } from './rustBracketPairCollection.js';
 import { IRustBracketSearchHost, tryFindRustBracket, tryHasUnmatchedRustBracket } from './rustBracketSearch.js';
+import { IRustBracketLifecycleHost, RustBracketLifecycleOperation, tryRunRustBracketLifecycle } from './rustBracketLifecycle.js';
 
 export class BracketPairsTree extends Disposable {
 	private readonly didChangeEmitter;
@@ -65,6 +66,7 @@ export class BracketPairsTree extends Disposable {
 		this.queuedTextEditsForInitialAstWithoutTokens = [];
 		this.queuedTextEdits = [];
 
+		if (tryRunRustBracketLifecycle(RustBracketLifecycleOperation.Initialize, false, () => BracketPairsTree.createRustLifecycleHost(this, [], textModel))) { return; }
 		if (!textModel.tokenization.hasTokens) {
 			const brackets = this.brackets.getSingleLanguageBracketTokens(this.textModel.getLanguageId());
 			const tokenizer = new FastTokenizer(this.textModel.getValue(), brackets);
@@ -85,6 +87,7 @@ export class BracketPairsTree extends Disposable {
 	//#region TextModel events
 
 	public handleDidChangeBackgroundTokenizationState(): void {
+		if (tryRunRustBracketLifecycle(RustBracketLifecycleOperation.CompleteTokenization, false, () => BracketPairsTree.createRustLifecycleHost(this))) { return; }
 		if (this.textModel.tokenization.backgroundTokenizationState === BackgroundTokenizationState.Completed) {
 			const wasUndefined = this.initialAstWithoutTokens === undefined;
 			// Clear the initial tree as we can use the tree with token information now.
@@ -104,6 +107,7 @@ export class BracketPairsTree extends Disposable {
 			)
 		);
 
+		if (tryRunRustBracketLifecycle(RustBracketLifecycleOperation.HandleChange, true, () => BracketPairsTree.createRustLifecycleHost(this, edits))) { return; }
 		this.handleEdits(edits, true);
 
 		if (!this.initialAstWithoutTokens) {
@@ -113,10 +117,12 @@ export class BracketPairsTree extends Disposable {
 
 	public handleContentChanged(change: IModelContentChangedEvent) {
 		const edits = TextEditInfo.fromModelContentChanges(change.changes);
+		if (tryRunRustBracketLifecycle(RustBracketLifecycleOperation.HandleChange, false, () => BracketPairsTree.createRustLifecycleHost(this, edits))) { return; }
 		this.handleEdits(edits, false);
 	}
 
 	private handleEdits(edits: TextEditInfo[], tokenChange: boolean): void {
+		if (tryRunRustBracketLifecycle(RustBracketLifecycleOperation.QueueEdits, tokenChange, () => BracketPairsTree.createRustLifecycleHost(this, edits))) { return; }
 		// Lazily queue the edits and only apply them when the tree is accessed.
 		const result = combineTextEditInfos(this.queuedTextEdits, edits);
 
@@ -129,6 +135,7 @@ export class BracketPairsTree extends Disposable {
 	//#endregion
 
 	private flushQueue() {
+		if (tryRunRustBracketLifecycle(RustBracketLifecycleOperation.FlushQueues, false, () => BracketPairsTree.createRustLifecycleHost(this))) { return; }
 		if (this.queuedTextEdits.length > 0) {
 			this.astWithTokens = this.parseDocumentFromTextBuffer(this.queuedTextEdits, this.astWithTokens, false);
 			this.queuedTextEdits = [];
@@ -203,6 +210,30 @@ export class BracketPairsTree extends Disposable {
 
 		const node = this.initialAstWithoutTokens || this.astWithTokens!;
 		return getFirstBracketBefore(node, lengthZero, node.length, positionToLength(position));
+	}
+
+	/** Static capabilities avoid additional instance property reads before the original lifecycle. */
+	private static createRustLifecycleHost(tree: BracketPairsTree, edits: TextEditInfo[] = [], constructorModel?: TextModel): IRustBracketLifecycleHost {
+		return {
+			truthy: node => !!node,
+			isUndefined: node => node === undefined,
+			hasTokens: () => !!constructorModel!.tokenization.hasTokens,
+			completed: constructing => (constructing ? constructorModel! : tree.textModel).tokenization.backgroundTokenizationState === BackgroundTokenizationState.Completed,
+			initialBrackets: () => tree.brackets.getSingleLanguageBracketTokens(tree.textModel.getLanguageId()),
+			fastTokenizer: brackets => new FastTokenizer(tree.textModel.getValue(), brackets),
+			parseInitial: tokenizer => parseDocument(tokenizer, [], undefined, true),
+			initial: () => tree.initialAstWithoutTokens,
+			setInitial: node => { tree.initialAstWithoutTokens = node; },
+			setCurrent: node => { tree.astWithTokens = node; },
+			parseEmpty: immutable => tree.parseDocumentFromTextBuffer([], undefined, immutable),
+			fire: () => { tree.didChangeEmitter.fire(); },
+			combineQueue: initial => combineTextEditInfos(initial ? tree.queuedTextEditsForInitialAstWithoutTokens : tree.queuedTextEdits, edits),
+			setQueue: (initial, edits) => { if (initial) { tree.queuedTextEditsForInitialAstWithoutTokens = edits; } else { tree.queuedTextEdits = edits; } },
+			handleEdits: tokenChange => { tree.handleEdits(edits, tokenChange); },
+			queueNonempty: initial => (initial ? tree.queuedTextEditsForInitialAstWithoutTokens : tree.queuedTextEdits).length > 0,
+			parseQueue: initial => initial ? tree.parseDocumentFromTextBuffer(tree.queuedTextEditsForInitialAstWithoutTokens, tree.initialAstWithoutTokens, false) : tree.parseDocumentFromTextBuffer(tree.queuedTextEdits, tree.astWithTokens, false),
+			clearQueue: initial => { if (initial) { tree.queuedTextEditsForInitialAstWithoutTokens = []; } else { tree.queuedTextEdits = []; } }
+		};
 	}
 }
 
