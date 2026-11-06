@@ -14,6 +14,7 @@ use wasm_bindgen::prelude::*;
 mod arrays;
 mod bracket_edits;
 mod bracket_lengths;
+mod bracket_trees;
 mod contiguous_tokens_block;
 mod contiguous_tokens_store;
 mod cursor_columns;

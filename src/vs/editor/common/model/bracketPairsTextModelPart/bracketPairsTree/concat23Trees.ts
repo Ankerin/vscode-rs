@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { AstNode, AstNodeKind, ListAstNode } from './ast.js';
+import { tryConcatRustBracketTrees } from './rustBracketTrees.js';
 
 /**
  * Concatenates a list of (2,3) AstNode's into a single (2,3) AstNode.
@@ -73,6 +74,12 @@ export function concat23TreesOfSameHeight(items: AstNode[], createImmutableLists
 	}
 
 	let length = items.length;
+	const native = tryConcatRustBracketTrees(length, (target, first, second, third) => {
+		const node = ListAstNode.create23(items[first], items[second], third < 0 ? null : items[third], createImmutableLists);
+		if (target >= 0) { items[target] = node; }
+		return node;
+	});
+	if (native !== undefined) { return native.node; }
 	// All trees have same height, just create parent nodes.
 	while (length > 3) {
 		const newLength = length >> 1;
