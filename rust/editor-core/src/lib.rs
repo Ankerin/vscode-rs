@@ -34,6 +34,7 @@ mod indentation;
 mod line_tokens;
 mod model_content_events;
 mod model_decoration_events;
+mod model_edit_application;
 mod model_edit_validation;
 mod model_editing;
 mod model_edits;
@@ -132,6 +133,7 @@ pub use model_content_events::{
 pub use model_decoration_events::{
 	ModelDecorationEventsHost, ModelDecorationEventsOperation, run_model_decoration_events,
 };
+pub use model_edit_application::{ModelEditApplicationHost, apply_model_edits};
 pub use model_edit_validation::{
 	ModelEditValidationHost, validate_model_edit, validate_model_edits,
 };

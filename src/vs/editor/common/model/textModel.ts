@@ -59,6 +59,7 @@ import { IRustModelSearchHost, IRustModelSearchModule, RustModelSearchOperation,
 import { ownRustTextModel, releaseRustTextModel } from './rustModelState.js';
 import { IRustModelEditValidationHost, RustModelEditValidationOperation, tryRustModelEditValidation } from './rustModelEditValidation.js';
 import { IRustModelEditingHost, IRustModelEditingModule, ownRustPreparedModelEdit, RustModelEditingOperation, tryRustModelEditing } from './rustModelEditing.js';
+import { IRustModelEditApplicationHost, tryRustModelEditApplication } from './rustModelEditApplication.js';
 import { IRustModelContentEventsHost, ownRustModelContentEmitter, releaseRustModelContentEmitter, RustModelContentEventsOperation, tryRustModelContentEvents } from './rustModelContentEvents.js';
 import { ownRustModelContentData } from './rustModelEventData.js';
 import { IRustAffectedDecorationLine, IRustModelDecorationEventsHost, ownRustModelDecorationEmitter, ownRustModelDecorationEvent, releaseRustModelDecorationEmitter, RustModelDecorationEventsOperation, rustModelDecorationEventFields, tryRustModelDecorationEvents } from './rustModelDecorationEvents.js';
@@ -1985,7 +1986,63 @@ export class TextModel extends Disposable implements model.ITextModel, IDecorati
 		}
 	}
 
+	private _createRustModelEditApplicationHost(): IRustModelEditApplicationHost {
+		return {
+			lineCount: () => this._buffer.getLineCount(),
+			bufferMethod: () => { const buffer = this._buffer; const method = buffer.applyEdits; return (operations, trim, undo) => Reflect.apply(method, buffer, [operations, trim, undo]); },
+			trim: () => this._options.trimAutoWhitespace,
+			bufferApply: (method, operations, trim, undo) => method(operations, trim, undo),
+			changes: result => result.changes,
+			trimLines: result => result.trimAutoWhitespaceLineNumbers,
+			storeTrim: lines => { this._trimAutoWhitespaceLines = lines; },
+			length: value => value.length,
+			less: (index, length) => index < length,
+			change: (changes, index) => changes[index],
+			replaceMethod: () => { const tree = this._decorationsTree; const method = tree.acceptReplace; return (offset, deleted, inserted, markers) => Reflect.apply(method, tree, [offset, deleted, inserted, markers]); },
+			changeField: (change, index) => {
+				switch (index) {
+					case 0: return change.rangeOffset;
+					case 1: return change.rangeLength;
+					case 2: return change.text;
+					case 3: return change.forceMoveMarkers;
+					default: throw new BugIndicatingError('Unsupported applied model change field');
+				}
+			},
+			replace: (method, offset, deleted, inserted, markers) => method(offset, deleted, inserted, markers),
+			rawChanges: () => [],
+			increaseVersion: () => this._increaseVersionId(),
+			eolCount: change => { const [count] = countEOL(change.text); return count; },
+			decorationsFire: () => this._onDidChangeDecorations.fire(),
+			rangeLine: (change, index) => index === 0 ? change.range.startLineNumber : change.range.endLineNumber,
+			subtract: (first, second) => first - second,
+			add: (first, second) => first + second,
+			minimum: (first, second) => Math.min(first, second),
+			atLeastZero: value => value >= 0,
+			decrement: value => { value--; return value; },
+			below: (first, second) => first < second,
+			rawChange: (changes, kind, first, second, third) => {
+				switch (kind) {
+					case 0: changes.push(new ModelRawLineChanged(first, second)); break;
+					case 1: changes.push(new ModelRawLinesDeleted(first, second, third!)); break;
+					case 2: changes.push(new ModelRawLinesInserted(first, second, third!)); break;
+					default: throw new BugIndicatingError('Unsupported applied model raw change');
+				}
+			},
+			emitMethod: () => { const method = this._emitContentChangedEvent; return (raw, content, selection) => Reflect.apply(method, this, [raw, content, selection]); },
+			rawMethod: () => ModelRawContentChangedEvent,
+			version: () => this.getVersionId(),
+			flag: index => index === 0 ? this._isUndoing : this._isRedoing,
+			rawEvent: (method, changes, version, undo, redo) => new method(changes, version, undo, redo),
+			bufferEOL: () => this._buffer.getEOL(),
+			contentEvent: (changes, eol, version, undo, redo, reason, length) => ownRustModelContentData({ changes, eol, isEolChange: false, versionId: version, isUndoing: undo, isRedoing: redo, isFlush: false, detailedReasons: [reason], detailedReasonsChangeLengths: [length] }),
+			emit: (method, raw, content, selection) => method(raw, content, selection),
+			reverse: result => result.reverseEdits,
+		};
+	}
+
 	private _doApplyEdits(rawOperations: model.ValidAnnotatedEditOperation[], computeUndoEdits: boolean, reason: TextModelEditSource, resultingSelection: Selection[] | null = null): void | model.IValidEditOperation[] {
+		const rust = tryRustModelEditApplication(rawOperations, computeUndoEdits, reason, resultingSelection, () => this._createRustModelEditApplicationHost());
+		if (rust) { return rust.value; }
 
 		const oldLineCount = this._buffer.getLineCount();
 		const result = this._buffer.applyEdits(rawOperations, this._options.trimAutoWhitespace, computeUndoEdits);
