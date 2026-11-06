@@ -38,6 +38,7 @@ mod line_tokens;
 mod model_content_events;
 mod model_decoration_events;
 mod model_edit_validation;
+mod model_editing;
 mod model_edits;
 mod model_event_data;
 mod model_lifecycle;

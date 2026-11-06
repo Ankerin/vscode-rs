@@ -90,6 +90,22 @@ test('Rust edit validation retains live text lengths, method capture, receivers,
 	assert.deepStrictEqual(withRust(run, true), run());
 });
 
+test('Rust captured validation methods ignore callable call properties', () => {
+	const run = () => {
+		const model = createTextModel('abc\r\n');
+		const range = new Range(1, 1, 1, 4);
+		const validate = () => range;
+		const charCodeAt = () => 13;
+		const substring = () => 'normalized';
+		for (const method of [validate, charCodeAt, substring]) { Object.defineProperty(method, 'call', { get: () => { throw new Error('Direct invocation must not observe call'); } }); }
+		model.validateRange = validate;
+		const text = { length: 2, charCodeAt, substring };
+		try { return (model as unknown as IValidationModel)._validateEditOperation({ range, text: text as unknown as string }).text; }
+		finally { model.dispose(); }
+	};
+	assert.strictEqual(withRust(run), run());
+});
+
 test('Rust edit validation preserves coercing and exceptional runtime length behavior', () => {
 	const values = [0, -1, NaN, '2', null, undefined, 2n, Symbol('length')];
 	const run = () => values.map(length => {

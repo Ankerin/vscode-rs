@@ -35,6 +35,7 @@ mod line_tokens;
 mod model_content_events;
 mod model_decoration_events;
 mod model_edit_validation;
+mod model_editing;
 mod model_edits;
 mod model_event_data;
 mod model_lifecycle;
@@ -133,6 +134,9 @@ pub use model_decoration_events::{
 };
 pub use model_edit_validation::{
 	ModelEditValidationHost, validate_model_edit, validate_model_edits,
+};
+pub use model_editing::{
+	ModelEditingHost, ModelEditingOperation, map_model_undo_change, run_model_editing,
 };
 pub use model_edits::{
 	MAX_MODEL_EDIT_UNITS, MAX_MODEL_EDITS, ModelEdit, ModelEditOptions, ModelTextFlags,

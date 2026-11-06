@@ -58,6 +58,7 @@ import { IRustModelOptionsControllerHost, RustModelOptionsControllerOperation, t
 import { IRustModelSearchHost, IRustModelSearchModule, RustModelSearchOperation, tryRustModelSearch } from './rustModelSearch.js';
 import { ownRustTextModel, releaseRustTextModel } from './rustModelState.js';
 import { IRustModelEditValidationHost, RustModelEditValidationOperation, tryRustModelEditValidation } from './rustModelEditValidation.js';
+import { IRustModelEditingHost, IRustModelEditingModule, RustModelEditingOperation, tryRustModelEditing } from './rustModelEditing.js';
 import { IRustModelContentEventsHost, ownRustModelContentEmitter, releaseRustModelContentEmitter, RustModelContentEventsOperation, tryRustModelContentEvents } from './rustModelContentEvents.js';
 import { ownRustModelContentData } from './rustModelEventData.js';
 import { IRustAffectedDecorationLine, IRustModelDecorationEventsHost, ownRustModelDecorationEmitter, ownRustModelDecorationEvent, releaseRustModelDecorationEmitter, RustModelDecorationEventsOperation, rustModelDecorationEventFields, tryRustModelDecorationEvents } from './rustModelDecorationEvents.js';
@@ -1599,15 +1600,75 @@ export class TextModel extends Disposable implements model.ITextModel, IDecorati
 
 	//#region Editing
 
+	private _createRustModelEditingHost(module: IRustModelEditingModule): IRustModelEditingHost {
+		const host: IRustModelEditingHost = {
+			beginDecorations: () => this._onDidChangeDecorations.beginDeferredEmit(),
+			beginContent: () => this._eventEmitter.beginDeferredEmit(),
+			endContent: (selection, present) => { if (present) { this._eventEmitter.endDeferredEmit(selection); } else { this._eventEmitter.endDeferredEmit(); } },
+			endDecorations: () => this._onDidChangeDecorations.endDeferredEmit(),
+			eol: () => this.getEOL(),
+			snapshot: () => this._initialUndoRedoSnapshot,
+			createSnapshot: () => this._undoRedoService.createSnapshot(this.uri),
+			storeSnapshot: snapshot => { this._initialUndoRedoSnapshot = snapshot; },
+			commandEOL: eol => this._commandManager.pushEOL(eol),
+			pushMethod: () => { const method = this._pushEditOperations; return (before, operations, cursor, group, reason) => Reflect.apply(method, this, [before, operations, cursor, group, reason]); },
+			validate: operations => this._validateEditOperations(operations),
+			push: (method, before, operations, cursor, group, reason) => method(before, operations, cursor, group, reason),
+			applyMethod: () => { const method = this._doApplyEdits; return (...args) => Reflect.apply(method, this, args); },
+			source: () => EditSources.applyEdits(),
+			apply: (method, operations, undo, reason, selection, present) => present ? method(operations, undo, reason, selection) : method(operations, undo, reason),
+			undoing: value => { this._isUndoing = value; },
+			redoing: value => { this._isRedoing = value; },
+			setEOL: eol => this.setEOL(eol),
+			alternative: version => this._overwriteAlternativeVersionId(version),
+			mapChanges: (changes, undo) => changes.map(change => module.map_model_undo_change(host, change, undo)),
+			undoRedo: (edits, eol, undo, redo, version, selection) => this._applyUndoRedoEdits(edits, eol, undo, redo, version, selection),
+			stack: push => { if (push) { this._commandManager.pushStackElement(); } else { this._commandManager.popStackElement(); } },
+			service: operation => {
+				switch (operation) {
+					case 0: return this._undoRedoService.undo(this.uri);
+					case 1: return this._undoRedoService.canUndo(this.uri);
+					case 2: return this._undoRedoService.redo(this.uri);
+					case 3: return this._undoRedoService.canRedo(this.uri);
+					default: throw new BugIndicatingError('Unsupported model undo service operation');
+				}
+			},
+			positionMethod: () => { const method = this.getPositionAt; return offset => Reflect.apply(method, this, [offset]); },
+			changeField: (change, index) => {
+				switch (index) {
+					case 0: return change.newPosition;
+					case 1: return change.newEnd;
+					case 2: return change.oldText;
+					case 3: return change.oldPosition;
+					case 4: return change.oldEnd;
+					case 5: return change.newText;
+					default: throw new BugIndicatingError('Unsupported model undo change field');
+				}
+			},
+			position: (method, offset) => method(offset),
+			rangeMethod: () => Range,
+			positionField: (position, index) => index === 0 ? position.lineNumber : position.column,
+			range: (method, first, second, third, fourth) => new method(first, second, third, fourth),
+			edit: (range, text) => ({ range, text }),
+		};
+		return host;
+	}
+
 	public pushStackElement(): void {
+		const rust = tryRustModelEditing<void>(RustModelEditingOperation.PushStack, module => this._createRustModelEditingHost(module));
+		if (rust) { return rust.value; }
 		this._commandManager.pushStackElement();
 	}
 
 	public popStackElement(): void {
+		const rust = tryRustModelEditing<void>(RustModelEditingOperation.PopStack, module => this._createRustModelEditingHost(module));
+		if (rust) { return rust.value; }
 		this._commandManager.popStackElement();
 	}
 
 	public pushEOL(eol: model.EndOfLineSequence): void {
+		const rust = tryRustModelEditing<void>(RustModelEditingOperation.PushEOL, module => this._createRustModelEditingHost(module), eol);
+		if (rust) { return rust.value; }
 		const currentEOL = (this.getEOL() === '\n' ? model.EndOfLineSequence.LF : model.EndOfLineSequence.CRLF);
 		if (currentEOL === eol) {
 			return;
@@ -1639,26 +1700,26 @@ export class TextModel extends Disposable implements model.ITextModel, IDecorati
 					default: throw new BugIndicatingError('Unsupported model edit field');
 				}
 			},
-			rangeMethod: () => { const method = this.validateRange; return range => method.call(this, range); },
+			rangeMethod: () => { const method = this.validateRange; return range => Reflect.apply(method, this, [range]); },
 			validateRange: (method, range) => method(range),
 			length: text => text.length,
 			aboveZero: value => value > 0,
 			minusOne: value => value - 1,
-			charMethod: text => { const method = text.charCodeAt; return index => method.call(text, index); },
+			charMethod: text => { const method = text.charCodeAt; return index => Reflect.apply(method, text, [index]); },
 			charCode: (method, index) => method(index),
 			eol: () => this.getEOL(),
 			endColumn: range => range.endColumn,
-			maxMethod: () => { const method = this.getLineMaxColumn; return line => method.call(this, line); },
+			maxMethod: () => { const method = this.getLineMaxColumn; return line => Reflect.apply(method, this, [line]); },
 			endLine: range => range.endLineNumber,
 			maxColumn: (method, line) => method(line),
-			substringMethod: text => { const method = text.substring; return end => method.call(text, 0, end); },
+			substringMethod: text => { const method = text.substring; return end => Reflect.apply(method, text, [0, end]); },
 			substring: (method, end) => method(end),
 			constructMethod: () => model.ValidAnnotatedEditOperation,
 			construct: (method, identifier, range, text, markers, whitespace, tracked) => new method(identifier, range, text, markers, whitespace, tracked),
 			result: () => [],
 			operationLength: operations => operations.length,
 			less: (index, length) => index < length,
-			editMethod: () => { const method = this._validateEditOperation; return operation => method.call(this, operation); },
+			editMethod: () => { const method = this._validateEditOperation; return operation => Reflect.apply(method, this, [operation]); },
 			operation: (operations, index) => operations[index],
 			validateEdit: (method, operation) => method(operation),
 			write: (result, index, operation) => { result[index] = operation; },
@@ -1715,6 +1776,8 @@ export class TextModel extends Disposable implements model.ITextModel, IDecorati
 	}
 
 	public pushEditOperations(beforeCursorState: Selection[] | null, editOperations: model.IIdentifiedSingleEditOperation[], cursorStateComputer: model.ICursorStateComputer | null, group?: UndoRedoGroup, reason?: TextModelEditSource): Selection[] | null {
+		const rust = tryRustModelEditing<Selection[] | null>(RustModelEditingOperation.PushEdits, module => this._createRustModelEditingHost(module), beforeCursorState, editOperations, cursorStateComputer, group, reason);
+		if (rust) { return rust.value; }
 		try {
 			this._onDidChangeDecorations.beginDeferredEmit();
 			this._eventEmitter.beginDeferredEmit();
@@ -1816,6 +1879,8 @@ export class TextModel extends Disposable implements model.ITextModel, IDecorati
 	}
 
 	_applyUndo(changes: TextChange[], eol: model.EndOfLineSequence, resultingAlternativeVersionId: number, resultingSelection: Selection[] | null): void {
+		const rust = tryRustModelEditing<void>(RustModelEditingOperation.UndoEdits, module => this._createRustModelEditingHost(module), changes, eol, resultingAlternativeVersionId, resultingSelection);
+		if (rust) { return rust.value; }
 		const edits = changes.map<ISingleEditOperation>((change) => {
 			const rangeStart = this.getPositionAt(change.newPosition);
 			const rangeEnd = this.getPositionAt(change.newEnd);
@@ -1828,6 +1893,8 @@ export class TextModel extends Disposable implements model.ITextModel, IDecorati
 	}
 
 	_applyRedo(changes: TextChange[], eol: model.EndOfLineSequence, resultingAlternativeVersionId: number, resultingSelection: Selection[] | null): void {
+		const rust = tryRustModelEditing<void>(RustModelEditingOperation.RedoEdits, module => this._createRustModelEditingHost(module), changes, eol, resultingAlternativeVersionId, resultingSelection);
+		if (rust) { return rust.value; }
 		const edits = changes.map<ISingleEditOperation>((change) => {
 			const rangeStart = this.getPositionAt(change.oldPosition);
 			const rangeEnd = this.getPositionAt(change.oldEnd);
@@ -1840,6 +1907,8 @@ export class TextModel extends Disposable implements model.ITextModel, IDecorati
 	}
 
 	private _applyUndoRedoEdits(edits: ISingleEditOperation[], eol: model.EndOfLineSequence, isUndoing: boolean, isRedoing: boolean, resultingAlternativeVersionId: number, resultingSelection: Selection[] | null): void {
+		const rust = tryRustModelEditing<void>(RustModelEditingOperation.UndoRedoEdits, module => this._createRustModelEditingHost(module), edits, eol, isUndoing, isRedoing, resultingAlternativeVersionId, resultingSelection);
+		if (rust) { return rust.value; }
 		try {
 			this._onDidChangeDecorations.beginDeferredEmit();
 			this._eventEmitter.beginDeferredEmit();
@@ -1865,6 +1934,8 @@ export class TextModel extends Disposable implements model.ITextModel, IDecorati
 	/** @internal */
 	public applyEdits(operations: readonly model.IIdentifiedSingleEditOperation[], computeUndoEdits: true, reason: TextModelEditSource): model.IValidEditOperation[];
 	public applyEdits(rawOperations: readonly model.IIdentifiedSingleEditOperation[], computeUndoEdits?: boolean, reason?: TextModelEditSource): void | model.IValidEditOperation[] {
+		const rust = tryRustModelEditing<void | model.IValidEditOperation[]>(RustModelEditingOperation.ApplyEdits, module => this._createRustModelEditingHost(module), rawOperations, computeUndoEdits, reason);
+		if (rust) { return rust.value; }
 		try {
 			this._onDidChangeDecorations.beginDeferredEmit();
 			this._eventEmitter.beginDeferredEmit();
@@ -1979,18 +2050,26 @@ export class TextModel extends Disposable implements model.ITextModel, IDecorati
 	}
 
 	public undo(): void | Promise<void> {
+		const rust = tryRustModelEditing<void | Promise<void>>(RustModelEditingOperation.Undo, module => this._createRustModelEditingHost(module));
+		if (rust) { return rust.value; }
 		return this._undoRedoService.undo(this.uri);
 	}
 
 	public canUndo(): boolean {
+		const rust = tryRustModelEditing<boolean>(RustModelEditingOperation.CanUndo, module => this._createRustModelEditingHost(module));
+		if (rust) { return rust.value; }
 		return this._undoRedoService.canUndo(this.uri);
 	}
 
 	public redo(): void | Promise<void> {
+		const rust = tryRustModelEditing<void | Promise<void>>(RustModelEditingOperation.Redo, module => this._createRustModelEditingHost(module));
+		if (rust) { return rust.value; }
 		return this._undoRedoService.redo(this.uri);
 	}
 
 	public canRedo(): boolean {
+		const rust = tryRustModelEditing<boolean>(RustModelEditingOperation.CanRedo, module => this._createRustModelEditingHost(module));
+		if (rust) { return rust.value; }
 		return this._undoRedoService.canRedo(this.uri);
 	}
 
@@ -3019,7 +3098,7 @@ class DidChangeDecorationsEmitter extends Disposable {
 				}
 			},
 			optionFlag: (input, index) => index === 0 ? !!input.minimap?.position : index === 1 ? !!input.overviewRuler?.color : index === 2 ? !!input.glyphMarginClassName : !!input.lineNumberClassName,
-			beforeMethod: () => { const method = this.handleBeforeFire; return (injected, heights, fonts) => method.call(this, injected, heights, fonts); },
+			beforeMethod: () => { const method = this.handleBeforeFire; return (injected, heights, fonts) => Reflect.apply(method, this, [injected, heights, fonts]); },
 			before: (method, injected, heights, fonts) => method(injected, heights, fonts),
 			event: (affectsMinimap, affectsOverviewRuler, affectsGlyphMargin, affectsLineNumber) => ownRustModelDecorationEvent({ affectsMinimap, affectsOverviewRuler, affectsGlyphMargin, affectsLineNumber }),
 			fireEvent: event => this._actual.fire(event)
