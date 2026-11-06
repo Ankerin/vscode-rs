@@ -63,3 +63,5 @@ dist
 # Local instructions for the Rust editor migration
 /RUST_MIGRATION.local.md
 /rust/target/
+
+extensions/copilot/test/simulation/cache/
