@@ -53,6 +53,7 @@ import { SearchParams, TextModelSearch } from './textModelSearch.js';
 import { IRustModelValidationHost, RustModelValidationOperation, compareRustModelValues, readRustModelCoordinate, tryRustModelValidation } from './rustModelValidation.js';
 import { IRustModelQueryHost, RustModelQueryMethod, RustModelQueryOperation, RustModelQueryValue, rustModelQueryMethodNames, tryRustModelQuery } from './rustModelQuery.js';
 import { ownRustModelSnapshot, tryRustModelSnapshot } from './rustModelSnapshot.js';
+import { IRustModelLifecycleHost, RustModelLifecycleOperation, RustModelLifecycleValue, rustModelLifecycleFields, tryRustModelLifecycle } from './rustModelLifecycle.js';
 import { AttachedViews } from './tokens/abstractSyntaxTokenBackend.js';
 import { TokenizationFontDecorationProvider } from './tokens/tokenizationFontDecorationsProvider.js';
 import { LineFontChangingDecoration, LineHeightChangingDecoration } from './decorationProvider.js';
@@ -274,7 +275,11 @@ export class TextModel extends Disposable implements model.ITextModel, IDecorati
 
 	private _isDisposed: boolean;
 	private __isDisposing: boolean;
-	public _isDisposing(): boolean { return this.__isDisposing; }
+	public _isDisposing(): boolean {
+		const rust = tryRustModelLifecycle<boolean>(RustModelLifecycleOperation.Disposing, undefined, () => this._createRustModelLifecycleHost());
+		if (rust) { return rust.value; }
+		return this.__isDisposing;
+	}
 	private _versionId: number;
 	/**
 	 * Unlike, versionId, this can go down (via undo) or go to previous values (via redo)
@@ -427,7 +432,52 @@ export class TextModel extends Disposable implements model.ITextModel, IDecorati
 		}));
 	}
 
+	/** Keeps original field and service owners live during native lifecycle transitions. */
+	private _createRustModelLifecycleHost(): IRustModelLifecycleHost {
+		return {
+			get: field => (this as object as Record<string, RustModelLifecycleValue>)[rustModelLifecycleFields[field]],
+			set: (field, value) => { (this as object as Record<string, RustModelLifecycleValue>)[rustModelLifecycleFields[field]] = value; },
+			action: (operation, value) => {
+				switch (operation) {
+					case 0: this._onWillDispose.fire(); return undefined;
+					case 1: this._commandManager.releaseResources(); return undefined;
+					case 2: this._tokenizationTextModelPart.dispose(); return undefined;
+					case 3: super.dispose(); return undefined;
+					case 4: this._bufferDisposable.dispose(); return undefined;
+					case 5: return new PieceTreeTextBuffer([], '', '\n', false, false, true, true);
+					case 6: (value as model.ITextBuffer).dispose(); return undefined;
+					case 7: this._buffer = value as model.ITextBuffer; return undefined;
+					case 8: this._bufferDisposable = Disposable.None; return undefined;
+					case 9: this._tokenizationTextModelPart.handleDidChangeAttached(); return undefined;
+					case 10: this._onDidChangeAttached.fire(undefined); return undefined;
+					case 11: return this._attachedViews.attachView();
+					case 12: this._attachedViews.detachView(value as model.IAttachedView); return undefined;
+					case 13: throw new BugIndicatingError('Model is disposed!');
+					default: throw new BugIndicatingError('Invalid model lifecycle action');
+				}
+			},
+			listener: index => {
+				switch (index) {
+					case 0: return this._onWillDispose.hasListeners();
+					case 1: return this._onDidChangeDecorations.hasListeners();
+					case 2: return this._tokenizationTextModelPart._hasListeners();
+					case 3: return this._onDidChangeOptions.hasListeners();
+					case 4: return this._onDidChangeAttached.hasListeners();
+					case 5: return this._onDidChangeLineHeight.hasListeners();
+					case 6: return this._onDidChangeFont.hasListeners();
+					case 7: return this._eventEmitter.hasListeners();
+					default: throw new BugIndicatingError('Invalid model listener index');
+				}
+			},
+			add: (first, second) => first + second,
+			increment: (value, increase) => { if (increase) { value++; } else { value--; } return value; },
+			compare: compareRustModelValues
+		};
+	}
+
 	public override dispose(): void {
+		const rust = tryRustModelLifecycle<void>(RustModelLifecycleOperation.Dispose, undefined, () => this._createRustModelLifecycleHost());
+		if (rust) { return rust.value; }
 		this.__isDisposing = true;
 		this._onWillDispose.fire();
 		this._commandManager.releaseResources();
@@ -445,6 +495,8 @@ export class TextModel extends Disposable implements model.ITextModel, IDecorati
 	}
 
 	_hasListeners(): boolean {
+		const rust = tryRustModelLifecycle<boolean>(RustModelLifecycleOperation.HasListeners, undefined, () => this._createRustModelLifecycleHost());
+		if (rust) { return rust.value; }
 		return (
 			this._onWillDispose.hasListeners()
 			|| this._onDidChangeDecorations.hasListeners()
@@ -458,6 +510,8 @@ export class TextModel extends Disposable implements model.ITextModel, IDecorati
 	}
 
 	private _assertNotDisposed(): void {
+		const rust = tryRustModelLifecycle<void>(RustModelLifecycleOperation.AssertAlive, undefined, () => this._createRustModelLifecycleHost());
+		if (rust) { return rust.value; }
 		if (this._isDisposed) {
 			throw new BugIndicatingError('Model is disposed!');
 		}
@@ -622,6 +676,8 @@ export class TextModel extends Disposable implements model.ITextModel, IDecorati
 	}
 
 	public onBeforeAttached(): model.IAttachedView {
+		const rust = tryRustModelLifecycle<model.IAttachedView>(RustModelLifecycleOperation.Attach, undefined, () => this._createRustModelLifecycleHost());
+		if (rust) { return rust.value; }
 		this._attachedEditorCount++;
 		if (this._attachedEditorCount === 1) {
 			this._tokenizationTextModelPart.handleDidChangeAttached();
@@ -631,6 +687,8 @@ export class TextModel extends Disposable implements model.ITextModel, IDecorati
 	}
 
 	public onBeforeDetached(view: model.IAttachedView): void {
+		const rust = tryRustModelLifecycle<void>(RustModelLifecycleOperation.Detach, view, () => this._createRustModelLifecycleHost());
+		if (rust) { return rust.value; }
 		this._attachedEditorCount--;
 		if (this._attachedEditorCount === 0) {
 			this._tokenizationTextModelPart.handleDidChangeAttached();
@@ -640,26 +698,38 @@ export class TextModel extends Disposable implements model.ITextModel, IDecorati
 	}
 
 	public isAttachedToEditor(): boolean {
+		const rust = tryRustModelLifecycle<boolean>(RustModelLifecycleOperation.IsAttached, undefined, () => this._createRustModelLifecycleHost());
+		if (rust) { return rust.value; }
 		return this._attachedEditorCount > 0;
 	}
 
 	public getAttachedEditorCount(): number {
+		const rust = tryRustModelLifecycle<number>(RustModelLifecycleOperation.AttachedCount, undefined, () => this._createRustModelLifecycleHost());
+		if (rust) { return rust.value; }
 		return this._attachedEditorCount;
 	}
 
 	public isTooLargeForSyncing(): boolean {
+		const rust = tryRustModelLifecycle<boolean>(RustModelLifecycleOperation.TooLargeSync, undefined, () => this._createRustModelLifecycleHost());
+		if (rust) { return rust.value; }
 		return this._isTooLargeForSyncing;
 	}
 
 	public isTooLargeForTokenization(): boolean {
+		const rust = tryRustModelLifecycle<boolean>(RustModelLifecycleOperation.TooLargeTokens, undefined, () => this._createRustModelLifecycleHost());
+		if (rust) { return rust.value; }
 		return this._isTooLargeForTokenization;
 	}
 
 	public isTooLargeForHeapOperation(): boolean {
+		const rust = tryRustModelLifecycle<boolean>(RustModelLifecycleOperation.TooLargeHeap, undefined, () => this._createRustModelLifecycleHost());
+		if (rust) { return rust.value; }
 		return this._isTooLargeForHeapOperation;
 	}
 
 	public isDisposed(): boolean {
+		const rust = tryRustModelLifecycle<boolean>(RustModelLifecycleOperation.Disposed, undefined, () => this._createRustModelLifecycleHost());
+		if (rust) { return rust.value; }
 		return this._isDisposed;
 	}
 
@@ -848,19 +918,27 @@ export class TextModel extends Disposable implements model.ITextModel, IDecorati
 	}
 
 	private _increaseVersionId(): void {
+		const rust = tryRustModelLifecycle<void>(RustModelLifecycleOperation.IncreaseVersion, undefined, () => this._createRustModelLifecycleHost());
+		if (rust) { return rust.value; }
 		this._versionId = this._versionId + 1;
 		this._alternativeVersionId = this._versionId;
 	}
 
 	public _overwriteVersionId(versionId: number): void {
+		const rust = tryRustModelLifecycle<void>(RustModelLifecycleOperation.OverwriteVersion, versionId, () => this._createRustModelLifecycleHost());
+		if (rust) { return rust.value; }
 		this._versionId = versionId;
 	}
 
 	public _overwriteAlternativeVersionId(newAlternativeVersionId: number): void {
+		const rust = tryRustModelLifecycle<void>(RustModelLifecycleOperation.OverwriteAlternative, newAlternativeVersionId, () => this._createRustModelLifecycleHost());
+		if (rust) { return rust.value; }
 		this._alternativeVersionId = newAlternativeVersionId;
 	}
 
 	public _overwriteInitialUndoRedoSnapshot(newInitialUndoRedoSnapshot: ResourceEditStackSnapshot | null): void {
+		const rust = tryRustModelLifecycle<void>(RustModelLifecycleOperation.OverwriteInitial, newInitialUndoRedoSnapshot, () => this._createRustModelLifecycleHost());
+		if (rust) { return rust.value; }
 		this._initialUndoRedoSnapshot = newInitialUndoRedoSnapshot;
 	}
 

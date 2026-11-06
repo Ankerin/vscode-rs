@@ -33,6 +33,7 @@ mod guides;
 mod indentation;
 mod line_tokens;
 mod model_edits;
+mod model_lifecycle;
 mod model_query;
 mod model_snapshot;
 mod model_validation;
@@ -120,6 +121,10 @@ pub use line_tokens::{
 pub use model_edits::{
 	MAX_MODEL_EDIT_UNITS, MAX_MODEL_EDITS, ModelEdit, ModelEditOptions, ModelTextFlags,
 	PreparedModelEdit, PreparedModelEdits, count_eol, prepare_model_edits,
+};
+pub use model_lifecycle::{
+	ModelLifecycleAction, ModelLifecycleField, ModelLifecycleHost, ModelLifecycleOperation,
+	run_model_lifecycle,
 };
 pub use model_query::{
 	ModelQueryHost, ModelQueryMethod, ModelQueryOperation, bound_model_offset, query_model,
