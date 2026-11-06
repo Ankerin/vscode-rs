@@ -37,6 +37,7 @@ mod fast_bracket_tokenizer;
 mod line_tokens;
 mod model_content_events;
 mod model_edits;
+mod model_event_data;
 mod model_lifecycle;
 mod model_options;
 mod model_options_controller;

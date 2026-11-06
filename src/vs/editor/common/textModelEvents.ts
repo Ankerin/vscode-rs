@@ -10,6 +10,7 @@ import { IModelDecoration, InjectedTextOptions } from './model.js';
 import { IModelContentChange } from './model/mirrorTextModel.js';
 import { AnnotationsUpdate } from './model/tokens/annotations.js';
 import { TextModelEditSource } from './textModelEditSource.js';
+import { IRustModelEventDataHost, ownRustInternalModelEvent, ownRustModelContentData, ownRustRawModelEvent, RustModelEventDataOperation, rustModelEventDataFields, tryRustModelEventData } from './model/rustModelEventData.js';
 
 /**
  * An event describing that the current language associated with a model has changed.
@@ -522,9 +523,12 @@ export class ModelRawContentChangedEvent {
 		this.isUndoing = isUndoing;
 		this.isRedoing = isRedoing;
 		this.resultingSelection = null;
+		return ownRustRawModelEvent(this);
 	}
 
 	public containsEvent(type: RawContentChangedType): boolean {
+		const rust = tryRustModelEventData<boolean>(RustModelEventDataOperation.Contains, this, type, createRustModelEventDataHost);
+		if (rust) { return rust.value; }
 		for (let i = 0, len = this.changes.length; i < len; i++) {
 			const change = this.changes[i];
 			if (change.changeType === type) {
@@ -535,6 +539,8 @@ export class ModelRawContentChangedEvent {
 	}
 
 	public static merge(a: ModelRawContentChangedEvent, b: ModelRawContentChangedEvent): ModelRawContentChangedEvent {
+		const rust = tryRustModelEventData<ModelRawContentChangedEvent>(RustModelEventDataOperation.RawMerge, a, b, createRustModelEventDataHost);
+		if (rust) { return rust.value; }
 		const changes = ([] as ModelRawChange[]).concat(a.changes).concat(b.changes);
 		const versionId = b.versionId;
 		const isUndoing = (a.isUndoing || b.isUndoing);
@@ -607,15 +613,19 @@ export class InternalModelContentChangeEvent {
 	constructor(
 		public readonly rawContentChangedEvent: ModelRawContentChangedEvent,
 		public readonly contentChangedEvent: IModelContentChangedEvent,
-	) { }
+	) { return ownRustInternalModelEvent(this); }
 
 	public merge(other: InternalModelContentChangeEvent): InternalModelContentChangeEvent {
+		const rust = tryRustModelEventData<InternalModelContentChangeEvent>(RustModelEventDataOperation.InternalMerge, this, other, createRustModelEventDataHost);
+		if (rust) { return rust.value; }
 		const rawContentChangedEvent = ModelRawContentChangedEvent.merge(this.rawContentChangedEvent, other.rawContentChangedEvent);
 		const contentChangedEvent = InternalModelContentChangeEvent._mergeChangeEvents(this.contentChangedEvent, other.contentChangedEvent);
 		return new InternalModelContentChangeEvent(rawContentChangedEvent, contentChangedEvent);
 	}
 
 	private static _mergeChangeEvents(a: IModelContentChangedEvent, b: IModelContentChangedEvent): IModelContentChangedEvent {
+		const rust = tryRustModelEventData<IModelContentChangedEvent>(RustModelEventDataOperation.ContentMerge, a, b, createRustModelEventDataHost);
+		if (rust) { return rust.value; }
 		const changes = ([] as IModelContentChange[]).concat(a.changes).concat(b.changes);
 		const eol = b.eol;
 		const versionId = b.versionId;
@@ -623,7 +633,7 @@ export class InternalModelContentChangeEvent {
 		const isRedoing = (a.isRedoing || b.isRedoing);
 		const isFlush = (a.isFlush || b.isFlush);
 		const isEolChange = a.isEolChange && b.isEolChange; // both must be true to not confuse listeners who skip such edits
-		return {
+		return ownRustModelContentData({
 			changes: changes,
 			eol: eol,
 			isEolChange: isEolChange,
@@ -633,6 +643,32 @@ export class InternalModelContentChangeEvent {
 			isFlush: isFlush,
 			detailedReasons: a.detailedReasons.concat(b.detailedReasons),
 			detailedReasonsChangeLengths: a.detailedReasonsChangeLengths.concat(b.detailedReasonsChangeLengths),
-		};
+		});
 	}
+}
+
+/** Captures existing array/static methods before their argument getters are observed. */
+function createRustModelEventDataHost(): IRustModelEventDataHost {
+	return {
+		get: (event, index) => (event as IModelContentChangedEvent)[rustModelEventDataFields[index]],
+		empty: () => [],
+		concatMethod: array => { const method = array.concat; return incoming => method.call(array, incoming); },
+		concat: (method, input) => method(input),
+		raw: (changes, version, undo, redo) => new ModelRawContentChangedEvent(changes as ModelRawChange[], version, undo, redo),
+		content: (changes, eol, isEolChange, versionId, isUndoing, isRedoing, isFlush, reasons, lengths) => ownRustModelContentData({ changes: changes as IModelContentChange[], eol, isEolChange, versionId, isUndoing, isRedoing, isFlush, detailedReasons: reasons as TextModelEditSource[], detailedReasonsChangeLengths: lengths as number[] }),
+		mergeMethod: raw => {
+			if (raw) {
+				const method = ModelRawContentChangedEvent.merge;
+				return (first, second) => method.call(ModelRawContentChangedEvent, first as ModelRawContentChangedEvent, second as ModelRawContentChangedEvent);
+			}
+			const method = Reflect.get(InternalModelContentChangeEvent, '_mergeChangeEvents') as (first: IModelContentChangedEvent, second: IModelContentChangedEvent) => IModelContentChangedEvent;
+			return (first, second) => method.call(InternalModelContentChangeEvent, first as IModelContentChangedEvent, second as IModelContentChangedEvent);
+		},
+		internalField: (event, raw) => raw ? event.rawContentChangedEvent : event.contentChangedEvent,
+		merge: (method, first, second) => method(first, second),
+		internal: (raw, content) => new InternalModelContentChangeEvent(raw, content),
+		length: array => array.length,
+		less: (index, length) => index < length,
+		changeType: (event, index) => event.changes[index].changeType
+	};
 }

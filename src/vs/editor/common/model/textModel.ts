@@ -58,6 +58,7 @@ import { IRustModelOptionsControllerHost, RustModelOptionsControllerOperation, t
 import { IRustModelSearchHost, IRustModelSearchModule, RustModelSearchOperation, tryRustModelSearch } from './rustModelSearch.js';
 import { ownRustTextModel, releaseRustTextModel } from './rustModelState.js';
 import { IRustModelContentEventsHost, ownRustModelContentEmitter, releaseRustModelContentEmitter, RustModelContentEventsOperation, tryRustModelContentEvents } from './rustModelContentEvents.js';
+import { ownRustModelContentData } from './rustModelEventData.js';
 import { AttachedViews } from './tokens/abstractSyntaxTokenBackend.js';
 import { TokenizationFontDecorationProvider } from './tokens/tokenizationFontDecorationsProvider.js';
 import { LineFontChangingDecoration, LineHeightChangingDecoration } from './decorationProvider.js';
@@ -571,7 +572,7 @@ export class TextModel extends Disposable implements model.ITextModel, IDecorati
 	}
 
 	private _createContentChanged2(range: Range, rangeOffset: number, rangeLength: number, rangeEndPosition: Position, text: string, isUndoing: boolean, isRedoing: boolean, isFlush: boolean, isEolChange: boolean, reason: TextModelEditSource): IModelContentChangedEvent {
-		return {
+		return ownRustModelContentData({
 			changes: [{
 				range: range,
 				rangeOffset: rangeOffset,
@@ -586,7 +587,7 @@ export class TextModel extends Disposable implements model.ITextModel, IDecorati
 			isFlush: isFlush,
 			detailedReasons: [reason],
 			detailedReasonsChangeLengths: [1],
-		};
+		});
 	}
 
 	private _setValueFromTextBuffer(textBuffer: model.ITextBuffer, textBufferDisposable: IDisposable, reason: TextModelEditSource): void {
@@ -1913,7 +1914,7 @@ export class TextModel extends Disposable implements model.ITextModel, IDecorati
 					this._isUndoing,
 					this._isRedoing
 				),
-				{
+				ownRustModelContentData({
 					changes: contentChanges,
 					eol: this._buffer.getEOL(),
 					isEolChange: false,
@@ -1923,7 +1924,7 @@ export class TextModel extends Disposable implements model.ITextModel, IDecorati
 					isFlush: false,
 					detailedReasons: [reason],
 					detailedReasonsChangeLengths: [contentChanges.length],
-				},
+				}),
 				resultingSelection
 			);
 		}
