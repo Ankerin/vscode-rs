@@ -17,6 +17,7 @@ mod bracket_lengths;
 mod bracket_node_reader;
 mod bracket_parser;
 mod bracket_position_mapper;
+mod bracket_tokenizer;
 mod bracket_trees;
 mod contiguous_tokens_block;
 mod contiguous_tokens_store;

@@ -10,6 +10,7 @@ import { BracketAstNode, TextAstNode } from './ast.js';
 import { BracketTokens, LanguageAgnosticBracketTokens } from './brackets.js';
 import { Length, lengthAdd, lengthDiff, lengthGetColumnCountIfZeroLineCount, lengthToObj, lengthZero, toLength } from './length.js';
 import { SmallImmutableSet } from './smallImmutableSet.js';
+import { IRustBracketTokenizerHost, IRustPeekableBracketTokenizerHost, tryReadRustBracketToken, tryReadRustPeekableBracketToken, trySetRustBracketTokenPosition, trySkipRustBracketTokens } from './rustBracketTokenizer.js';
 
 export interface Tokenizer {
 	readonly offset: Length;
@@ -93,6 +94,7 @@ export class TextBufferTokenizer implements Tokenizer {
 	}
 
 	skip(length: Length): void {
+		if (trySkipRustBracketTokens(length, () => TextBufferTokenizer.createRustHost(this))) { return; }
 		this.didPeek = false;
 		this._offset = lengthAdd(this._offset, length);
 		const obj = lengthToObj(this._offset);
@@ -103,6 +105,8 @@ export class TextBufferTokenizer implements Tokenizer {
 	private peeked: Token | null;
 
 	read(): Token | null {
+		const native = tryReadRustPeekableBracketToken(false, () => TextBufferTokenizer.createRustHost(this));
+		if (native !== undefined) { return native.token; }
 		let token: Token | null;
 		if (this.peeked) {
 			this.didPeek = false;
@@ -117,11 +121,28 @@ export class TextBufferTokenizer implements Tokenizer {
 	}
 
 	peek(): Token | null {
+		const native = tryReadRustPeekableBracketToken(true, () => TextBufferTokenizer.createRustHost(this));
+		if (native !== undefined) { return native.token; }
 		if (!this.didPeek) {
 			this.peeked = this.reader.read();
 			this.didPeek = true;
 		}
 		return this.peeked;
+	}
+
+	/** Static capabilities preserve the wrapper's original receiver and reader observations. */
+	private static createRustHost(tokenizer: TextBufferTokenizer): IRustPeekableBracketTokenizerHost {
+		return {
+			peeked: () => tokenizer.peeked,
+			truthy: token => !!token,
+			didPeek: () => !!tokenizer.didPeek,
+			setDidPeek: value => { tokenizer.didPeek = value; },
+			setPeeked: token => { tokenizer.peeked = token; },
+			read: () => tokenizer.reader.read(),
+			advanceToken: token => { tokenizer._offset = lengthAdd(tokenizer._offset, token.length); },
+			advanceLength: length => { tokenizer._offset = lengthAdd(tokenizer._offset, length); },
+			updatePosition: () => { const obj = lengthToObj(tokenizer._offset); tokenizer.reader.setPosition(obj.lineCount, obj.columnCount); }
+		};
 	}
 }
 
@@ -144,6 +165,7 @@ class NonPeekableTextBufferTokenizer {
 	private lineTokenOffset = 0;
 
 	public setPosition(lineIdx: number, column: number): void {
+		if (trySetRustBracketTokenPosition(lineIdx, column, () => NonPeekableTextBufferTokenizer.createRustHost(this))) { return; }
 		// We must not jump into a token!
 		if (lineIdx === this.lineIdx) {
 			this.lineCharOffset = column;
@@ -162,6 +184,8 @@ class NonPeekableTextBufferTokenizer {
 	private peekedToken: Token | null = null;
 
 	public read(): Token | null {
+		const native = tryReadRustBracketToken(() => NonPeekableTextBufferTokenizer.createRustHost(this));
+		if (native !== undefined) { return native.token; }
 		if (this.peekedToken) {
 			const token = this.peekedToken;
 			this.peekedToken = null;
@@ -276,6 +300,53 @@ class NonPeekableTextBufferTokenizer {
 		// Thus, the min indentation of the document is the minimum min indentation of every text node.
 		const length = lengthDiff(startLineIdx, startLineCharOffset, this.lineIdx, this.lineCharOffset);
 		return new Token(length, TokenKind.Text, -1, SmallImmutableSet.getEmpty(), new TextAstNode(length));
+	}
+
+	/** Provider capabilities retain method lookup before arguments and exact partial assignments. */
+	private static createRustHost(reader: NonPeekableTextBufferTokenizer): IRustBracketTokenizerHost {
+		return {
+			add: (first, second) => first + second,
+			subtract: (first, second) => first - second,
+			greater: (first, second) => first > second,
+			truthy: value => !!value,
+			peeked: () => reader.peekedToken,
+			setPeeked: token => { reader.peekedToken = token; },
+			consume: token => { reader.lineCharOffset += lengthGetColumnCountIfZeroLineCount(token.length); },
+			atEnd: () => reader.lineIdx > reader.textBufferLineCount - 1 || (reader.lineIdx === reader.textBufferLineCount - 1 && reader.lineCharOffset >= reader.textBufferLastLineLength),
+			lineMissing: () => reader.line === null,
+			loadTokens: () => { reader.lineTokens = reader.textModel.tokenization.getLineTokens(reader.lineIdx + 1); },
+			loadLine: () => { reader.line = reader.lineTokens!.getLineContent(); },
+			selectIndex: () => { reader.lineTokenOffset = reader.lineCharOffset === 0 ? 0 : reader.lineTokens!.findTokenIndexAtOffset(reader.lineCharOffset); },
+			lineIndex: () => reader.lineIdx,
+			column: () => reader.lineCharOffset,
+			tokens: () => reader.lineTokens!,
+			count: tokens => tokens.getCount(),
+			hasToken: count => reader.lineTokenOffset < count,
+			metadata: tokens => tokens.getMetadata(reader.lineTokenOffset),
+			identical: (tokens, count, metadata) => reader.lineTokenOffset + 1 < count && metadata === tokens.getMetadata(reader.lineTokenOffset + 1),
+			incrementIndex: () => { reader.lineTokenOffset++; },
+			isOther: metadata => TokenMetadata.getTokenType(metadata) === StandardTokenType.Other,
+			containsBrackets: metadata => TokenMetadata.containsBalancedBrackets(metadata),
+			endOffset: tokens => tokens.getEndOffset(reader.lineTokenOffset),
+			beforeEnd: end => reader.lineCharOffset < end,
+			language: tokens => tokens.getLanguageId(reader.lineTokenOffset),
+			text: end => reader.line!.substring(reader.lineCharOffset, end),
+			brackets: language => reader.bracketTokens.getSingleLanguageBracketTokens(language),
+			regexp: brackets => brackets.regExpGlobal,
+			resetRegexp: regexp => { regexp.lastIndex = 0; },
+			exec: (regexp, text) => regexp.exec(text),
+			matchedToken: (brackets, matched) => brackets.getToken(matched[0]),
+			consumeMatch: matched => { reader.lineCharOffset += matched.index; },
+			changed: (line, column) => line !== reader.lineIdx || column !== reader.lineCharOffset,
+			setColumn: column => { reader.lineCharOffset = column; },
+			lastLine: () => reader.lineIdx === reader.textBufferLineCount - 1,
+			incrementLine: () => { reader.lineIdx++; },
+			zeroIndex: () => { reader.lineTokenOffset = 0; },
+			finishText: (line, column) => { const length = lengthDiff(line, column, reader.lineIdx, reader.lineCharOffset); return new Token(length, TokenKind.Text, -1, SmallImmutableSet.getEmpty(), new TextAstNode(length)); },
+			sameLine: line => line === reader.lineIdx,
+			setLine: line => { reader.lineIdx = line; },
+			clearLine: () => { reader.line = null; }
+		};
 	}
 }
 
