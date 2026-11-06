@@ -133,6 +133,96 @@ pub fn contains_raw_model_event<H: ModelEventDataHost>(
 }
 
 #[cfg(test)]
+mod line_end_tests {
+	use super::*;
+	use std::cell::RefCell;
+
+	struct Host {
+		start: f64,
+		count: f64,
+		failure: Option<&'static str>,
+		trace: RefCell<Vec<&'static str>>,
+	}
+	impl Host {
+		fn read(&self, name: &'static str, value: f64) -> Result<f64, &'static str> {
+			self.trace.borrow_mut().push(name);
+			if self.failure == Some(name) {
+				Err(name)
+			} else {
+				Ok(value)
+			}
+		}
+	}
+	impl InsertedModelLineEndHost for Host {
+		type Value = f64;
+		type Error = &'static str;
+		fn start(&self) -> Result<f64, Self::Error> {
+			self.read("start", self.start)
+		}
+		fn count(&self) -> Result<f64, Self::Error> {
+			self.read("count", self.count)
+		}
+		fn add(&self, start: &f64, count: &f64) -> Result<f64, Self::Error> {
+			self.read("add", start + count)
+		}
+		fn minus_one(&self, value: &f64) -> Result<f64, Self::Error> {
+			self.read("minusOne", value - 1.0)
+		}
+	}
+	#[test]
+	fn endpoints_retain_float_arithmetic_and_field_before_operator_order() {
+		for (start, count) in [(1.0, 3.0), (-2.5, 7.25), (f64::INFINITY, 0.0), (-0.0, -0.0)] {
+			let host = Host {
+				start,
+				count,
+				failure: None,
+				trace: RefCell::new(Vec::new()),
+			};
+			assert_eq!(inserted_model_line_end(&host), Ok(start + count - 1.0));
+			assert_eq!(*host.trace.borrow(), ["start", "count", "add", "minusOne"]);
+		}
+	}
+	#[test]
+	fn endpoint_failures_skip_later_fields_and_operators() {
+		for (index, failure) in ["start", "count", "add", "minusOne"]
+			.into_iter()
+			.enumerate()
+		{
+			let host = Host {
+				start: 1.0,
+				count: 3.0,
+				failure: Some(failure),
+				trace: RefCell::new(Vec::new()),
+			};
+			assert_eq!(inserted_model_line_end(&host), Err(failure));
+			assert_eq!(
+				*host.trace.borrow(),
+				["start", "count", "add", "minusOne"][..=index]
+			);
+		}
+	}
+}
+
+/// Original getters and arithmetic preserve exceptional JavaScript value behavior.
+pub trait InsertedModelLineEndHost {
+	type Value;
+	type Error;
+	fn start(&self) -> Result<Self::Value, Self::Error>;
+	fn count(&self) -> Result<Self::Value, Self::Error>;
+	fn add(&self, start: &Self::Value, count: &Self::Value) -> Result<Self::Value, Self::Error>;
+	fn minus_one(&self, value: &Self::Value) -> Result<Self::Value, Self::Error>;
+}
+
+/// Reads both insertion fields before arithmetic, retaining getter/coercion order.
+pub fn inserted_model_line_end<H: InsertedModelLineEndHost>(
+	host: &H,
+) -> Result<H::Value, H::Error> {
+	let start = host.start()?;
+	let count = host.count()?;
+	host.minus_one(&host.add(&start, &count)?)
+}
+
+#[cfg(test)]
 mod tests {
 	use super::*;
 	use std::cell::RefCell;

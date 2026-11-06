@@ -10,7 +10,7 @@ import { IModelDecoration, InjectedTextOptions } from './model.js';
 import { IModelContentChange } from './model/mirrorTextModel.js';
 import { AnnotationsUpdate } from './model/tokens/annotations.js';
 import { TextModelEditSource } from './textModelEditSource.js';
-import { IRustModelEventDataHost, ownRustInternalModelEvent, ownRustModelContentData, ownRustRawModelEvent, RustModelEventDataOperation, rustModelEventDataFields, tryRustModelEventData } from './model/rustModelEventData.js';
+import { IRustModelEventDataHost, ownRustInternalModelEvent, ownRustModelContentData, ownRustRawModelEvent, ownRustRawModelChange, RustModelEventDataOperation, RustRawModelChangeKind, rustModelEventDataFields, tryRustInsertedModelLineEnd, tryRustModelEventData } from './model/rustModelEventData.js';
 
 /**
  * An event describing that the current language associated with a model has changed.
@@ -233,6 +233,10 @@ export const enum RawContentChangedType {
  */
 export class ModelRawFlush {
 	public readonly changeType = RawContentChangedType.Flush;
+
+	constructor() {
+		return ownRustRawModelChange(this, RustRawModelChangeKind.TypeOnly);
+	}
 }
 
 /**
@@ -364,6 +368,7 @@ export class ModelRawLineChanged {
 	constructor(lineNumber: number, lineNumberPostEdit: number) {
 		this.lineNumber = lineNumber;
 		this.lineNumberPostEdit = lineNumberPostEdit;
+		return ownRustRawModelChange(this, RustRawModelChangeKind.Line);
 	}
 }
 
@@ -441,6 +446,7 @@ export class ModelRawLinesDeleted {
 		this.fromLineNumber = fromLineNumber;
 		this.toLineNumber = toLineNumber;
 		this.lastUntouchedLinePostEdit = lastUntouchedLinePostEdit;
+		return ownRustRawModelChange(this, RustRawModelChangeKind.Deleted);
 	}
 }
 
@@ -466,12 +472,16 @@ export class ModelRawLinesInserted {
 	 * `toLineNumber` - `fromLineNumber` + 1 denotes the number of lines that were inserted
 	 */
 	public get toLineNumber(): number {
+		const rust = tryRustInsertedModelLineEnd(() => this.fromLineNumber, () => this.count);
+		if (rust) { return rust.value; }
 		return this.fromLineNumber + this.count - 1;
 	}
 	/**
 	 * The actual end line number of the insertion in the updated buffer.
 	 */
 	public get toLineNumberPostEdit(): number {
+		const rust = tryRustInsertedModelLineEnd(() => this.fromLineNumberPostEdit, () => this.count);
+		if (rust) { return rust.value; }
 		return this.fromLineNumberPostEdit + this.count - 1;
 	}
 
@@ -479,6 +489,7 @@ export class ModelRawLinesInserted {
 		this.fromLineNumber = fromLineNumber;
 		this.fromLineNumberPostEdit = fromLineNumberPostEdit;
 		this.count = count;
+		return ownRustRawModelChange(this, RustRawModelChangeKind.Inserted);
 	}
 }
 
@@ -488,6 +499,10 @@ export class ModelRawLinesInserted {
  */
 export class ModelRawEOLChanged {
 	public readonly changeType = RawContentChangedType.EOLChanged;
+
+	constructor() {
+		return ownRustRawModelChange(this, RustRawModelChangeKind.TypeOnly);
+	}
 }
 
 /**

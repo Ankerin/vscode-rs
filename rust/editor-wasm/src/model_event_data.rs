@@ -5,7 +5,7 @@
 
 //! Event data merging preserves original fields, array capabilities, and factory results.
 
-use vscode_editor_core::ModelEventDataHost;
+use vscode_editor_core::{InsertedModelLineEndHost, ModelEventDataHost};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
@@ -129,7 +129,54 @@ impl ModelEventDataHost for Host {
 /// Identifies model raw/internal/content event data control separately from event batching.
 #[wasm_bindgen]
 pub fn model_event_data_abi_version() -> u32 {
-	1
+	2
+}
+
+#[wasm_bindgen]
+extern "C" {
+	pub type InsertedLineEndHost;
+	#[wasm_bindgen(method, catch, js_name = start)]
+	fn start(this: &InsertedLineEndHost) -> Result<JsValue, JsValue>;
+	#[wasm_bindgen(method, catch, js_name = count)]
+	fn count(this: &InsertedLineEndHost) -> Result<JsValue, JsValue>;
+	#[wasm_bindgen(method, catch, js_name = add)]
+	fn add(
+		this: &InsertedLineEndHost,
+		start: &JsValue,
+		count: &JsValue,
+	) -> Result<JsValue, JsValue>;
+	#[wasm_bindgen(method, catch, js_name = minusOne)]
+	fn minus_one(this: &InsertedLineEndHost, value: &JsValue) -> Result<JsValue, JsValue>;
+}
+
+struct LineEndHost(InsertedLineEndHost);
+impl InsertedModelLineEndHost for LineEndHost {
+	type Value = JsValue;
+	type Error = JsValue;
+	fn start(&self) -> Result<JsValue, JsValue> {
+		self.0.start()
+	}
+	fn count(&self) -> Result<JsValue, JsValue> {
+		self.0.count()
+	}
+	fn add(&self, start: &JsValue, count: &JsValue) -> Result<JsValue, JsValue> {
+		match (start.as_f64(), count.as_f64()) {
+			(Some(start), Some(count)) => Ok(JsValue::from_f64(start + count)),
+			_ => self.0.add(start, count),
+		}
+	}
+	fn minus_one(&self, value: &JsValue) -> Result<JsValue, JsValue> {
+		match value.as_f64() {
+			Some(value) => Ok(JsValue::from_f64(value - 1.0)),
+			None => self.0.minus_one(value),
+		}
+	}
+}
+
+/// Computes original inserted-line endpoints while preserving live field and coercion order.
+#[wasm_bindgen]
+pub fn inserted_model_line_end(host: InsertedLineEndHost) -> Result<JsValue, JsValue> {
+	vscode_editor_core::inserted_model_line_end(&LineEndHost(host))
 }
 
 /// Runs complete event merging or raw event presence scanning through original capabilities.

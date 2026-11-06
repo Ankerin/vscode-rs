@@ -146,8 +146,9 @@ pub use model_edits::{
 	PreparedModelEdit, PreparedModelEdits, count_eol, prepare_model_edits,
 };
 pub use model_event_data::{
-	ModelEventDataHost, contains_raw_model_event, merge_internal_model_events,
-	merge_model_content_data, merge_raw_model_events,
+	InsertedModelLineEndHost, ModelEventDataHost, contains_raw_model_event,
+	inserted_model_line_end, merge_internal_model_events, merge_model_content_data,
+	merge_raw_model_events,
 };
 pub use model_lifecycle::{
 	ModelLifecycleAction, ModelLifecycleField, ModelLifecycleHost, ModelLifecycleOperation,

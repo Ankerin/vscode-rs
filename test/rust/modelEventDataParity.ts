@@ -10,7 +10,8 @@ import { test } from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { setTimeout } from 'node:timers/promises';
 import { Range } from '../../src/vs/editor/common/core/range.js';
-import { IModelContentChangedEvent, InternalModelContentChangeEvent, ModelRawChange, ModelRawContentChangedEvent, ModelRawEOLChanged, ModelRawFlush, ModelRawLinesDeleted } from '../../src/vs/editor/common/textModelEvents.js';
+import { IModelContentChangedEvent, InternalModelContentChangeEvent, ModelRawChange, ModelRawContentChangedEvent, ModelRawEOLChanged, ModelRawFlush, ModelRawLineChanged, ModelRawLinesDeleted, ModelRawLinesInserted } from '../../src/vs/editor/common/textModelEvents.js';
+import { ApplyEditsResult } from '../../src/vs/editor/common/model.js';
 import { IRustModelEventDataModule, registerRustModelEventData, RustModelEventDataOperation, tryRustModelEventData } from '../../src/vs/editor/common/model/rustModelEventData.js';
 import { IRustTextBufferModule, registerRustTextBuffer } from '../../src/vs/editor/common/model/rustTextBuffer/rustTextBuffer.js';
 
@@ -125,8 +126,9 @@ test('Rust raw and internal event records retain original aliases, descriptors, 
 		const source = new ModelRawContentChangedEvent(changes, 1, false, false);
 		const data = content(1, 0);
 		const internal = new InternalModelContentChangeEvent(source, data);
-		assert.deepStrictEqual([rust.bracket_node_metadata_live_count(), source.changes === changes, internal.rawContentChangedEvent === source, internal.contentChangedEvent === data], [baseline + 2, true, true, true]);
+		assert.deepStrictEqual([rust.bracket_node_metadata_live_count(), source.changes === changes, internal.rawContentChangedEvent === source, internal.contentChangedEvent === data], [baseline + 3, true, true, true]);
 		Object.freeze(source); Object.freeze(internal);
+		Object.freeze(changes[0]);
 		assert.strictEqual(rust.bracket_node_metadata_live_count(), baseline);
 		return internal;
 	}, true);
@@ -170,4 +172,90 @@ test('Rust event data executes every operation and rejects stale bindings atomic
 	const registration = registerRustModelEventData(rust);
 	try { assert.throws(() => registerRustModelEventData(rust), /already registered/); }
 	finally { registration.dispose(); }
+});
+
+test('Rust raw change and edit result fields own native slots with original aliases and descriptors', () => {
+	const held = withRust(() => {
+		const baseline = rust.bracket_node_metadata_live_count();
+		const changes = [new ModelRawFlush(), new ModelRawLineChanged(1, 2), new ModelRawLinesDeleted(2, 3, 1), new ModelRawLinesInserted(3, 4, 2), new ModelRawEOLChanged()];
+		const reverse: [] = [];
+		const candidates = [2];
+		const result = new ApplyEditsResult(reverse, [], candidates);
+		assert.deepStrictEqual([rust.bracket_node_metadata_live_count(), result.reverseEdits === reverse, result.trimAutoWhitespaceLineNumbers === candidates], [baseline + 6, true, true]);
+		const snapshots = changes.map(value => ({ ...value }));
+		for (const value of [...changes, result]) { Object.freeze(value); }
+		assert.strictEqual(rust.bracket_node_metadata_live_count(), baseline);
+		return { changes, result, snapshots };
+	}, true);
+	assert.deepStrictEqual(held.changes.map(value => ({ ...value })), held.snapshots);
+	assert.deepStrictEqual(Object.getOwnPropertyDescriptor(held.result, 'reverseEdits'), { value: held.result.reverseEdits, writable: false, enumerable: true, configurable: false });
+	assert.strictEqual((held.changes[3] as ModelRawLinesInserted).toLineNumberPostEdit, 5);
+});
+
+test('Rust inserted line endpoints preserve seeded exceptional values, getter order, and coercions', () => {
+	const values = [NaN, Infinity, -Infinity, -0, 0, -2.5, 1, 3.25, '2', null, undefined, false, 2n, Symbol('line')];
+	let seed = 798;
+	const random = (limit: number) => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed % limit; };
+	const fixtures = Array.from({ length: 256 }, () => [values[random(values.length)], values[random(values.length)], values[random(values.length)]]);
+	const run = () => fixtures.map(([first, second, count]) => {
+		const trace: string[] = [];
+		const event = new ModelRawLinesInserted(1, 2, 3);
+		Object.defineProperty(event, 'fromLineNumber', { get: () => { trace.push('first'); return first; } });
+		Object.defineProperty(event, 'fromLineNumberPostEdit', { get: () => { trace.push('second'); return second; } });
+		Object.defineProperty(event, 'count', { get: () => { trace.push('count'); return count; } });
+		const read = (post: boolean) => { try { return post ? event.toLineNumberPostEdit : event.toLineNumber; } catch (error) { return error instanceof Error ? error.name : String(error); } };
+		return { first: read(false), second: read(true), trace };
+	});
+	assert.deepStrictEqual(withRust(run), run());
+	assert.deepStrictEqual(withRust(run, true), run());
+});
+
+test('Rust inserted endpoints retain getter and coercion failures without reading later state', () => {
+	const run = () => ['first', 'count', 'coercion'].map(stage => {
+		const trace: string[] = [];
+		const failure = {};
+		const event = new ModelRawLinesInserted(1, 2, 3);
+		const number = (name: string) => ({ [Symbol.toPrimitive]: () => { trace.push(name + ':coercion'); if (stage === 'coercion') { throw failure; } return 2; } });
+		Object.defineProperty(event, 'fromLineNumber', { get: () => { trace.push('first'); if (stage === 'first') { throw failure; } return number('first'); } });
+		Object.defineProperty(event, 'count', { get: () => { trace.push('count'); if (stage === 'count') { throw failure; } return number('count'); } });
+		let failed = false;
+		try { void event.toLineNumber; } catch (error) { failed = error === failure; }
+		return { trace, failed };
+	});
+	assert.deepStrictEqual(withRust(run), run());
+});
+
+function cyclicEditResult(): WeakRef<object>[] {
+	const changes: ModelRawChange[] = [];
+	const result = new ApplyEditsResult([], [], null);
+	const raw = new ModelRawLineChanged(1, 2);
+	Reflect.set(raw, 'lineNumber', result);
+	Reflect.set(result, 'changes', changes);
+	changes.push(raw);
+	return [new WeakRef(changes), new WeakRef(result), new WeakRef(raw)];
+}
+test('Rust raw change and edit result cycles stay collector visible', async () => {
+	const registration = registerRustTextBuffer(rust);
+	try {
+		for (let attempt = 0; attempt < 8; attempt++) { await setTimeout(0); globalThis.gc?.(); }
+		await setTimeout(0);
+		const baseline = rust.bracket_node_metadata_live_count();
+		const references = cyclicEditResult();
+		for (let attempt = 0; attempt < 64; attempt++) {
+			await setTimeout(0); globalThis.gc?.();
+			if (references.every(reference => reference.deref() === undefined) && rust.bracket_node_metadata_live_count() === baseline) { return; }
+		}
+		assert.deepStrictEqual([references.map(reference => reference.deref() === undefined), rust.bracket_node_metadata_live_count()], [[true, true, true], baseline]);
+	} finally { registration.dispose(); }
+});
+
+test('Rust inserted endpoints execute native control and reject the previous event data ABI', () => {
+	let calls = 0;
+	const module: IRustModelEventDataModule = { ...rust, inserted_model_line_end: host => { calls++; return rust.inserted_model_line_end(host); } };
+	withRust(() => {
+		const event = new ModelRawLinesInserted(2, 4, 3);
+		assert.deepStrictEqual([event.toLineNumber, event.toLineNumberPostEdit], [4, 6]);
+	}, false, module);
+	assert.strictEqual(calls, 2);
+	assert.throws(() => registerRustTextBuffer({ ...rust, model_event_data_abi_version: () => 1 }), /merge contract/);
 });

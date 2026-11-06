@@ -17,6 +17,17 @@ export type RustModelEventValue = RustModelEventArray | ModelRawContentChangedEv
 export type RustModelEventConcat = (incoming: RustModelEventArray) => RustModelEventArray;
 export type RustModelEventMerge = (first: RustModelEventValue, second: RustModelEventValue) => RustModelEventValue;
 
+/** Raw records share their original field shapes while owning their native slots. */
+export const enum RustRawModelChangeKind { TypeOnly, Line, Deleted, Inserted }
+
+/** Endpoint fields are observed before JavaScript addition/subtraction coercions. */
+export interface IRustInsertedModelLineEndHost {
+	start(): number;
+	count(): number;
+	add(start: number, count: number): number;
+	minusOne(value: number): number;
+}
+
 /** Original methods and aliases preserve callback lookup before argument property reads. */
 export interface IRustModelEventDataHost {
 	get(event: ModelRawContentChangedEvent | IModelContentChangedEvent, index: number): RustModelEventValue;
@@ -37,6 +48,7 @@ export interface IRustModelEventDataHost {
 /** Generated bindings retain existing event and boolean result shapes. */
 export interface IRustModelEventDataModule {
 	model_event_data_abi_version(): number;
+	inserted_model_line_end(host: IRustInsertedModelLineEndHost): number;
 	run_model_event_data(host: IRustModelEventDataHost, operation: RustModelEventDataOperation, first: RustModelEventValue, second: RustModelEventValue): ModelRawContentChangedEvent | IModelContentChangedEvent | InternalModelContentChangeEvent | boolean;
 }
 
@@ -44,7 +56,7 @@ let registeredModule: IRustModelEventDataModule | undefined;
 
 /** Rejects stale bindings before enabling event representation and merge control. */
 export function registerRustModelEventData(module: IRustModelEventDataModule): IDisposable {
-	if (typeof module.model_event_data_abi_version !== 'function' || module.model_event_data_abi_version() !== 1 || typeof module.run_model_event_data !== 'function') { throw new Error('The Rust model event data bindings do not match the merge contract'); }
+	if (typeof module.model_event_data_abi_version !== 'function' || module.model_event_data_abi_version() !== 2 || typeof module.run_model_event_data !== 'function' || typeof module.inserted_model_line_end !== 'function') { throw new Error('The Rust model event data bindings do not match the merge contract'); }
 	if (registeredModule) { throw new Error('A Rust model event data module is already registered'); }
 	registeredModule = module;
 	return toDisposable(() => { if (registeredModule === module) { registeredModule = undefined; } });
@@ -64,3 +76,18 @@ export function ownRustInternalModelEvent<T extends object>(event: T): T { retur
 
 /** Fresh product-owned content change objects retain their original plain-object descriptors. */
 export function ownRustModelContentData<T extends object>(event: T): T { return ownRustBracketNumericState(event, RustBracketNumericStateKind.ModelContentData); }
+
+/** Fresh raw change records retain original prototypes, descriptors, and collector-visible values. */
+export function ownRustRawModelChange<T extends object>(event: T, kind: RustRawModelChangeKind): T {
+	const kinds = [RustBracketNumericStateKind.ModelRawType, RustBracketNumericStateKind.ModelRawLine, RustBracketNumericStateKind.ModelRawDeleted, RustBracketNumericStateKind.ModelRawInserted];
+	return ownRustBracketNumericState(event, kinds[kind]);
+}
+
+/** Buffer application results retain caller-visible inverse-edit, change, and candidate arrays. */
+export function ownRustModelEditResult<T extends object>(result: T): T { return ownRustBracketNumericState(result, RustBracketNumericStateKind.ModelEditResult); }
+
+/** Distinguishes unavailable endpoint computation from any original numeric result. */
+export function tryRustInsertedModelLineEnd(start: () => number, count: () => number): { value: number } | undefined {
+	if (!registeredModule) { return undefined; }
+	return { value: registeredModule.inserted_model_line_end({ start, count, add: (start, count) => start + count, minusOne: value => value - 1 }) };
+}

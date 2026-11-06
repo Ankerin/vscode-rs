@@ -22,6 +22,7 @@ import { IBracketPairsTextModelPart } from './textModelBracketPairs.js';
 import { IModelContentChangedEvent, IModelDecorationsChangedEvent, IModelLanguageChangedEvent, IModelLanguageConfigurationChangedEvent, IModelOptionsChangedEvent, IModelTokensChangedEvent, LineInjectedText, ModelFontChangedEvent, ModelLineHeightChangedEvent } from './textModelEvents.js';
 import { IModelContentChange } from './model/mirrorTextModel.js';
 import { ownRustValidatedModelEdit } from './model/rustModelEditValidation.js';
+import { ownRustModelEditResult } from './model/rustModelEventData.js';
 import { IActiveIndentGuideInfo, IGuidesTextModelPart } from './textModelGuides.js';
 import { ITokenizationTextModelPart } from './tokenizationTextModelPart.js';
 import { UndoRedoGroup } from '../../platform/undoRedo/common/undoRedo.js';
@@ -1650,7 +1651,9 @@ export class ApplyEditsResult {
 		public readonly reverseEdits: IValidEditOperation[] | null,
 		public readonly changes: IInternalModelContentChange[],
 		public readonly trimAutoWhitespaceLineNumbers: number[] | null
-	) { }
+	) {
+		return ownRustModelEditResult(this);
+	}
 
 }
 
