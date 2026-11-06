@@ -20,6 +20,12 @@ pub struct WasmBracketTreeResult {
 	node: Option<JsValue>,
 }
 
+impl WasmBracketTreeResult {
+	pub(crate) fn new(node: JsValue) -> Self {
+		Self { node: Some(node) }
+	}
+}
+
 #[wasm_bindgen]
 impl WasmBracketTreeResult {
 	/// Releases the held reference when consumed; the adapter immediately frees the scoped result handle.

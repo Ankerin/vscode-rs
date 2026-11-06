@@ -24,6 +24,7 @@ import { IRustBracketEditsModule, registerRustBracketEdits } from '../bracketPai
 import { IRustBracketLengthsModule, registerRustBracketLengths } from '../bracketPairsTextModelPart/bracketPairsTree/rustBracketLengths.js';
 import { IRustSmallSetModule, registerRustSmallSet } from '../bracketPairsTextModelPart/bracketPairsTree/rustSmallImmutableSet.js';
 import { IRustBracketTreesModule, registerRustBracketTrees } from '../bracketPairsTextModelPart/bracketPairsTree/rustBracketTrees.js';
+import { IRustBracketNodeReaderModule, registerRustBracketNodeReader } from '../bracketPairsTextModelPart/bracketPairsTree/rustBracketNodeReader.js';
 
 /** The generated binding surface; UTF-16 arrays preserve JavaScript string semantics. */
 export interface IRustTextBuffer {
@@ -61,7 +62,7 @@ interface IRustTextSnapshot {
 	free(): void;
 }
 
-export interface IRustTextBufferModule extends IRustSequenceDiffModule, IRustTextChangeModule, IRustTokensModule, IRustCursorColumnsModule, IRustDecorationsModule, IRustTextShapeModule, IRustBracketEditsModule, IRustBracketLengthsModule, IRustSmallSetModule, IRustBracketTreesModule {
+export interface IRustTextBufferModule extends IRustSequenceDiffModule, IRustTextChangeModule, IRustTokensModule, IRustCursorColumnsModule, IRustDecorationsModule, IRustTextShapeModule, IRustBracketEditsModule, IRustBracketLengthsModule, IRustSmallSetModule, IRustBracketTreesModule, IRustBracketNodeReaderModule {
 	text_buffer_abi_version(): number;
 	WasmTextBuffer: {
 		new(units: Uint16Array): IRustTextBuffer;
@@ -371,6 +372,7 @@ export function registerRustTextBuffer(module: IRustTextBufferModule, initializa
 		registration.add(registerRustBracketLengths(module));
 		registration.add(registerRustSmallSet(module));
 		registration.add(registerRustBracketTrees(module));
+		registration.add(registerRustBracketNodeReader(module));
 	} catch (error) {
 		registration.dispose();
 		throw error;

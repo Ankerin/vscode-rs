@@ -8,6 +8,7 @@
 mod atomic_tab_move;
 mod bracket_edits;
 mod bracket_lengths;
+mod bracket_node_reader;
 mod bracket_trees;
 mod contiguous_tokens;
 mod cursor_columns;
@@ -36,6 +37,9 @@ mod word_part;
 pub use atomic_tab_move::{atomic_tab_position, whitespace_visible_column};
 pub use bracket_edits::combine_bracket_edits;
 pub use bracket_lengths::{bracket_length, bracket_length_parts};
+pub use bracket_node_reader::{
+	BracketNodeReaderHost, advance_bracket_node, read_longest_bracket_node,
+};
 pub use bracket_trees::{
 	BracketTreeGroup, BracketTreeHost, concat_bracket_trees, concat_bracket_trees_same_height,
 };

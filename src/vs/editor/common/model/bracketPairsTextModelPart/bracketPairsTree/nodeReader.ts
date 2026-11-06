@@ -5,6 +5,7 @@
 
 import { AstNode } from './ast.js';
 import { lengthAdd, lengthZero, Length, lengthLessThan } from './length.js';
+import { IRustBracketNodeReaderHost, tryAdvanceRustBracketNode, tryReadRustBracketNode } from './rustBracketNodeReader.js';
 
 /**
  * Allows to efficiently find a longest child at a given offset in a fixed node.
@@ -31,6 +32,8 @@ export class NodeReader {
 			throw new Error('Invalid offset');
 		}
 		this.lastOffset = offset;
+		const native = tryReadRustBracketNode(offset, () => NodeReader.createRustHost(this, predicate));
+		if (native !== undefined) { return native.node; }
 
 		// Find the longest node of all those that are closest to the current offset.
 		while (true) {
@@ -90,6 +93,7 @@ export class NodeReader {
 
 	// Navigates to the longest node that continues after the current node.
 	private nextNodeAfterCurrent(): void {
+		if (tryAdvanceRustBracketNode(() => NodeReader.createRustHost(this, () => false))) { return; }
 		while (true) {
 			const currentOffset = lastOrUndefined(this.offsets);
 			const currentNode = lastOrUndefined(this.nextNodes);
@@ -116,6 +120,29 @@ export class NodeReader {
 			// We fully consumed the parent.
 			// Current node is now parent, so call nextNodeAfterCurrent again
 		}
+	}
+
+	/** Host capabilities retain ordered state reads, virtual calls, and partial stack writes. */
+	private static createRustHost(reader: NodeReader, predicate: (node: AstNode) => boolean): IRustBracketNodeReaderHost {
+		return {
+			currentNode: () => lastOrUndefined(reader.nextNodes),
+			currentOffset: () => lastOrUndefined(reader.offsets),
+			truthy: node => !!node,
+			offsetBefore: (first, second) => lengthLessThan(first, second),
+			endBefore: (node, current, requested) => lengthAdd(current, node.length) <= requested,
+			predicate: node => predicate(node),
+			advance: () => reader.nextNodeAfterCurrent(),
+			incrementIndex: (index = -1) => ++index,
+			indexAtEnd: (node, index) => index >= node.childrenLength,
+			childExists: (node, index) => !!node.getChild(index),
+			missingIndex: index => index === -1,
+			descend: (node, offset, index) => { reader.nextNodes.push(node.getChild(index)!); reader.offsets.push(offset); reader.idxs.push(index); },
+			popCurrent: () => { reader.nextNodes.pop(); reader.offsets.pop(); },
+			noParents: () => reader.idxs.length === 0,
+			lastChildIndex: () => reader.idxs[reader.idxs.length - 1],
+			moveToChild: (parent, current, offset, index) => { reader.nextNodes.push(parent.getChild(index)!); reader.offsets.push(lengthAdd(offset, current.length)); reader.idxs[reader.idxs.length - 1] = index; },
+			popParent: () => { reader.idxs.pop(); }
+		};
 	}
 }
 
