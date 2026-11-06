@@ -23,7 +23,8 @@ const tests = [
 	'editStack.test.ts',
 	'textChange.test.ts',
 	'modelEditOperation.test.ts',
-	'modelDecorations.test.ts'
+	'modelDecorations.test.ts',
+	'intervalTree.test.ts'
 ];
 
 try {

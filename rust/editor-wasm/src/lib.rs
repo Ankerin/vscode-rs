@@ -15,6 +15,7 @@ mod arrays;
 mod contiguous_tokens_block;
 mod contiguous_tokens_store;
 mod cursor_columns;
+mod decorations;
 mod line_tokens;
 mod model_edits;
 mod sequence_diff;

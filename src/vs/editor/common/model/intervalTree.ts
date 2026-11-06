@@ -6,6 +6,7 @@
 import { Range } from '../core/range.js';
 import { TrackedRangeStickiness, TrackedRangeStickiness as ActualTrackedRangeStickiness } from '../model.js';
 import { ModelDecorationOptions } from './textModel.js';
+import { tryApplyRustDecorationEdit } from './rustDecorations.js';
 
 //
 // The red-black tree is based on the "Introduction to Algorithms" by Cormen, Leiserson and Rivest.
@@ -138,6 +139,8 @@ export function setNodeStickiness(node: IntervalNode, stickiness: ActualTrackedR
 	_setNodeStickiness(node, <number>stickiness);
 }
 
+const standardIntervalNodes = new WeakSet<IntervalNode>();
+
 export class IntervalNode {
 
 	/**
@@ -192,6 +195,7 @@ export class IntervalNode {
 		this.range = null;
 
 		setNodeIsVisited(this, false);
+		if (new.target === IntervalNode) { standardIntervalNodes.add(this); }
 	}
 
 	public reset(versionId: number, start: number, end: number, range: Range): void {
@@ -414,6 +418,7 @@ function adjustMarkerBeforeColumn(markerOffset: number, markerStickToPreviousCha
  * as when decorations were implemented using two markers.
  */
 export function nodeAcceptEdit(node: IntervalNode, start: number, end: number, textLength: number, forceMoveMarkers: boolean): void {
+	if (standardIntervalNodes.has(node) && tryApplyRustDecorationEdit(node, start, end, textLength, forceMoveMarkers)) { return; }
 	const nodeStickiness = getNodeStickiness(node);
 	const startStickToPreviousCharacter = (
 		nodeStickiness === TrackedRangeStickiness.AlwaysGrowsWhenTypingAtEdges

@@ -22,6 +22,8 @@ Unicode ABI 1 returns scalar code points or grapheme offsets without copying com
 
 Unicode ABI 2 computes a complete Backspace boundary through one scalar binding, without transferring an entire source line or creating native iterator state. Every preceding UTF-16 unit still uses a host read, and code-point method descriptors are checked before fusing the original algorithm. Shared model storage and coarser command/edit boundaries remain Phase 2 opportunities. No benchmark campaign or performance improvement claim accompanies this Phase 1 migration.
 
+Decorations ABI 1 performs endpoint computation in Rust while original interval nodes and tree state remain in JavaScript. Each affected node incurs descriptor preflight, a scalar-parameter binding, and a two-number result allocation/copyback. Whole-tree edit ownership and a coarser decoration transaction boundary remain Phase 2 opportunities. No performance gain is claimed, and no benchmark campaign accompanies this Phase 1 migration.
+
 ## Method
 
 Run `pnpm run build-rust-editor` followed by `pnpm run benchmark-rust-editor`. The benchmark alternates the original and Rust implementations in three fresh Node processes per fixture each. Both use the actual existing `PieceTreeTextBuffer` wrapper and its model construction path. Rust uses a release WebAssembly build; the reference uses the current TypeScript sources bundled with the same esbuild recipe. Eight construction/disposal iterations warm the adapter and allocator before timing. The runner verifies matching workload checksums within each fixture. Keep other builds and workload-heavy processes stopped during measurement.

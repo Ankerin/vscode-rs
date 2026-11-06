@@ -8,6 +8,7 @@
 mod atomic_tab_move;
 mod contiguous_tokens;
 mod cursor_columns;
+mod decorations;
 mod folding;
 mod guides;
 mod indentation;
@@ -34,6 +35,7 @@ pub use cursor_columns::{
 	CursorColumnOperation, cursor_column, grapheme_break_type, next_cursor_tab_stop,
 	previous_cursor_tab_stop, unicode_code_point, unicode_grapheme_offset,
 };
+pub use decorations::decoration_accept_edit;
 pub use folding::{IndentationFoldingRanges, compute_indentation_folding};
 pub use guides::{ActiveIndentGuide, compute_active_indent_guide, compute_indent_guides};
 pub use indentation::{GuessedIndentation, guess_indentation};
