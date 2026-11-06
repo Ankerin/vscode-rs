@@ -10,7 +10,7 @@ import { Position } from '../core/position.js';
 import { Range } from '../core/range.js';
 import { EndOfLinePreference, FindMatch, SearchData } from '../model.js';
 import { TextModel } from './textModel.js';
-import { IRustTextSearchHost, tryRunRustTextSearch } from './rustTextSearch.js';
+import { IRustTextSearchHost, tryRunRustTextSearch, tryRustWordBoundary } from './rustTextSearch.js';
 
 const LIMIT_FIND_COUNT = 999;
 
@@ -486,6 +486,15 @@ function rightIsWordBounday(wordSeparators: WordCharacterClassifier, text: strin
 }
 
 export function isValidMatch(wordSeparators: WordCharacterClassifier, text: string, textLength: number, matchStartIndex: number, matchLength: number): boolean {
+	const native = tryRustWordBoundary(textLength, matchStartIndex, matchLength, () => ({
+		add: (first, second) => first + second,
+		subtract: (first, second) => first - second,
+		equal: (first, second) => first === second,
+		positive: value => value > 0,
+		charCode: index => text.charCodeAt(index),
+		classify: value => wordSeparators.get(value)
+	}));
+	if (native !== undefined) { return native; }
 	return (
 		leftIsWordBounday(wordSeparators, text, textLength, matchStartIndex, matchLength)
 		&& rightIsWordBounday(wordSeparators, text, textLength, matchStartIndex, matchLength)

@@ -25,6 +25,16 @@ export interface IRustTextSearchHost {
 	resetRegex(): void;
 }
 
+/** Borrowed character/classifier operations preserve coercions and dynamic method receivers. */
+export interface IRustWordBoundaryHost {
+	add(first: number, second: number): number;
+	subtract(first: number, second: number): number;
+	equal(first: number, second: number): boolean;
+	positive(value: number): boolean;
+	charCode(index: number): number;
+	classify(value: number): number;
+}
+
 /** Scoped result references distinguish unavailable control from original null/undefined returns. */
 interface IRustTextSearchResult { take(): RegExpExecArray | null | undefined; free(): void }
 
@@ -32,13 +42,14 @@ interface IRustTextSearchResult { take(): RegExpExecArray | null | undefined; fr
 export interface IRustTextSearchModule {
 	text_search_abi_version(): number;
 	run_text_search(host: IRustTextSearchHost, reset: boolean): IRustTextSearchResult;
+	is_valid_text_search_match(host: IRustWordBoundaryHost, textLength: number, start: number, length: number): boolean;
 }
 
 let registeredModule: IRustTextSearchModule | undefined;
 
 /** Installs text-search control without changing existing Searcher classes or regex objects. */
 export function registerRustTextSearch(module: IRustTextSearchModule): IDisposable {
-	if (typeof module.text_search_abi_version !== 'function' || module.text_search_abi_version() !== 1 || typeof module.run_text_search !== 'function') { throw new Error('The Rust text search bindings do not match the searcher control contract'); }
+	if (typeof module.text_search_abi_version !== 'function' || module.text_search_abi_version() !== 2 || typeof module.run_text_search !== 'function' || typeof module.is_valid_text_search_match !== 'function') { throw new Error('The Rust text search bindings do not match the searcher control contract'); }
 	if (registeredModule) { throw new Error('A Rust text search module is already registered'); }
 	registeredModule = module;
 	return toDisposable(() => { if (registeredModule === module) { registeredModule = undefined; } });
@@ -50,4 +61,9 @@ export function tryRunRustTextSearch(reset: boolean, createHost: () => IRustText
 	const result = registeredModule.run_text_search(createHost(), reset);
 	if (!result || typeof result.take !== 'function' || typeof result.free !== 'function') { throw new Error('The Rust text search result does not match the searcher control contract'); }
 	try { return { match: result.take() }; } finally { result.free(); }
+}
+
+/** Uses native boundary control with the original borrowed text and classifier capabilities. */
+export function tryRustWordBoundary(textLength: number, start: number, length: number, createHost: () => IRustWordBoundaryHost): boolean | undefined {
+	return registeredModule?.is_valid_text_search_match(createHost(), textLength, start, length);
 }

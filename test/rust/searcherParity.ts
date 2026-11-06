@@ -8,8 +8,8 @@ import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { test } from 'node:test';
 import { pathToFileURL } from 'node:url';
-import { WordCharacterClassifier } from '../../src/vs/editor/common/core/wordCharacterClassifier.js';
-import { Searcher } from '../../src/vs/editor/common/model/textModelSearch.js';
+import { WordCharacterClass, WordCharacterClassifier } from '../../src/vs/editor/common/core/wordCharacterClassifier.js';
+import { Searcher, isValidMatch } from '../../src/vs/editor/common/model/textModelSearch.js';
 import { IRustTextSearchModule, registerRustTextSearch } from '../../src/vs/editor/common/model/rustTextSearch.js';
 import { IRustTextBufferModule, registerRustTextBuffer } from '../../src/vs/editor/common/model/rustTextBuffer/rustTextBuffer.js';
 import { RustBracketLengthOperation, tryRustBracketLength } from '../../src/vs/editor/common/model/bracketPairsTextModelPart/bracketPairsTree/rustBracketLengths.js';
@@ -159,4 +159,90 @@ test('Rust Searcher releases failed result consumption and rejects stale registr
 	assert.strictEqual(tryRustBracketLength(RustBracketLengthOperation.Pack, 1, 2), undefined);
 	const registration = registerRustTextBuffer(rust);
 	try { assert.throws(() => registerRustTextSearch(rust), /already registered/); } finally { registration.dispose(); }
+});
+
+test('Rust search word boundaries preserve UTF-16 edges, internal separators, and empty matches', () => {
+	const texts = ['', 'word', 'a-word-b', ' a ', '\rword\n', '\tword\t', '\uD83D\uDE00', '\uD800x\uDC00', 'a\r\nb'];
+	let calls = 0;
+	const module: IRustTextSearchModule = { ...rust, is_valid_text_search_match: (...args) => { calls++; return rust.is_valid_text_search_match(...args); } };
+	for (const text of texts) {
+		for (let start = -1; start <= text.length + 1; start++) {
+			for (let length = -1; length <= text.length + 1; length++) {
+				const run = () => isValidMatch(new WordCharacterClassifier('-_', []), text, text.length, start, length);
+				assert.strictEqual(withRust(run, module), run(), `${JSON.stringify(text)} at ${start} length ${length}`);
+			}
+		}
+	}
+	assert.ok(calls > 400, 'Word validation executes native boundary control');
+});
+
+test('Rust search word boundaries retain dynamic methods, receiver identity, and exact short circuits', () => {
+	for (const content of ['axb', 'a-b', '\rxb', 'ax\n', ' x ', 'a\r\nb']) {
+		for (const length of [0, 1, 2]) {
+			const run = () => {
+				const observations: string[] = [];
+				const text = {
+					get charCodeAt() {
+						observations.push('text:method');
+						return (index: number) => { observations.push(`text:unit:${index}`); return content.charCodeAt(index); };
+					}
+				};
+				const target = new WordCharacterClassifier('-', []);
+				const classifier = new Proxy(target, {
+					get: (target, key, receiver) => { observations.push(`classifier:${String(key)}`); return Reflect.get(target, key, receiver); }
+				});
+				const valid = isValidMatch(classifier, text as unknown as string, content.length, 1, length);
+				return { valid, observations };
+			};
+			assert.deepStrictEqual(withRust(run), run());
+		}
+	}
+});
+
+test('Rust search word boundaries preserve exceptional numeric domains and ECMAScript coercion', () => {
+	const values = [undefined, null, '1', 0n, Symbol('index'), Number.NaN, -0, -0.5, Number.POSITIVE_INFINITY];
+	for (const slot of [0, 1, 2]) {
+		for (const value of values) {
+			const run = () => {
+				const args = [3, 1, 1];
+				args[slot] = value as unknown as number;
+				try { return { valid: isValidMatch(new WordCharacterClassifier('-', []), 'a-b', args[0], args[1], args[2]) }; }
+				catch (error) { return { error: error instanceof Error ? error.name : 'non-error' }; }
+			};
+			assert.deepStrictEqual(withRust(run), run());
+		}
+	}
+	const run = () => {
+		const observations: string[] = [];
+		const start = { [Symbol.toPrimitive]: (hint: string) => { observations.push(`start:${hint}`); return 1; } };
+		const length = { [Symbol.toPrimitive]: (hint: string) => { observations.push(`length:${hint}`); return 1; } };
+		const classifier = new WordCharacterClassifier('-', []);
+		const valid = isValidMatch(classifier, 'a-b', 3, start as unknown as number, length as unknown as number);
+		return { valid, observations };
+	};
+	assert.deepStrictEqual(withRust(run), run());
+});
+
+test('Rust search word boundaries retain classifier failure identity and unusual classification values', () => {
+	const failure = new Error('Original word boundary failure');
+	for (const failingCall of [1, 2, 3, 4]) {
+		const run = () => {
+			const observations: number[] = [];
+			const classifier = new WordCharacterClassifier('-', []);
+			classifier.get = value => { observations.push(value); if (observations.length === failingCall) { throw failure; } return value === 45 ? WordCharacterClass.WordSeparator : WordCharacterClass.Regular; };
+			let caught = false;
+			let valid: boolean | undefined;
+			try { valid = isValidMatch(classifier, 'a-b', 3, 1, 1); } catch (error) { assert.strictEqual(error, failure); caught = true; }
+			return { valid, caught, observations };
+		};
+		assert.deepStrictEqual(withRust(run), run());
+	}
+	for (const value of [undefined, null, '0', 0n, {}, Number.NaN, -0, 2]) {
+		const run = () => {
+			const classifier = new WordCharacterClassifier('-', []);
+			classifier.get = () => value as WordCharacterClass;
+			return isValidMatch(classifier, 'axb', 3, 1, 1);
+		};
+		assert.strictEqual(withRust(run), run());
+	}
 });

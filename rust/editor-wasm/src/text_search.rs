@@ -127,6 +127,79 @@ impl vscode_editor_core::TextSearchHost for Host {
 	}
 }
 
+// Caught UTF-16/classifier capabilities preserve the original receiver and exception identity.
+#[wasm_bindgen]
+extern "C" {
+	pub type WordHost;
+	#[wasm_bindgen(method, catch, js_name = add)]
+	fn word_add(this: &WordHost, first: &JsValue, second: &JsValue) -> Result<JsValue, JsValue>;
+	#[wasm_bindgen(method, catch, js_name = subtract)]
+	fn word_subtract(
+		this: &WordHost,
+		first: &JsValue,
+		second: &JsValue,
+	) -> Result<JsValue, JsValue>;
+	#[wasm_bindgen(method, catch, js_name = equal)]
+	fn word_equal(this: &WordHost, first: &JsValue, second: &JsValue) -> Result<bool, JsValue>;
+	#[wasm_bindgen(method, catch, js_name = positive)]
+	fn word_positive(this: &WordHost, value: &JsValue) -> Result<bool, JsValue>;
+	#[wasm_bindgen(method, catch, js_name = charCode)]
+	fn char_code(this: &WordHost, index: &JsValue) -> Result<JsValue, JsValue>;
+	#[wasm_bindgen(method, catch, js_name = classify)]
+	fn classify(this: &WordHost, value: &JsValue) -> Result<JsValue, JsValue>;
+}
+
+struct BoundaryHost(WordHost);
+
+impl vscode_editor_core::WordBoundaryHost for BoundaryHost {
+	type Value = JsValue;
+	type Error = JsValue;
+	fn number(&self, value: f64) -> JsValue {
+		JsValue::from_f64(value)
+	}
+	fn add(&self, first: &JsValue, second: &JsValue) -> Result<JsValue, JsValue> {
+		if let (Some(first), Some(second)) = (first.as_f64(), second.as_f64()) {
+			return Ok(JsValue::from_f64(first + second));
+		}
+		self.0.word_add(first, second)
+	}
+	fn subtract(&self, first: &JsValue, second: &JsValue) -> Result<JsValue, JsValue> {
+		if let (Some(first), Some(second)) = (first.as_f64(), second.as_f64()) {
+			return Ok(JsValue::from_f64(first - second));
+		}
+		self.0.word_subtract(first, second)
+	}
+	fn equal(&self, first: &JsValue, second: &JsValue) -> Result<bool, JsValue> {
+		if let (Some(first), Some(second)) = (first.as_f64(), second.as_f64()) {
+			return Ok(first == second);
+		}
+		self.0.word_equal(first, second)
+	}
+	fn positive(&self, value: &JsValue) -> Result<bool, JsValue> {
+		if let Some(value) = value.as_f64() {
+			return Ok(value > 0.0);
+		}
+		self.0.word_positive(value)
+	}
+	fn char_code(&self, index: &JsValue) -> Result<JsValue, JsValue> {
+		self.0.char_code(index)
+	}
+	fn classify(&self, value: &JsValue) -> Result<JsValue, JsValue> {
+		self.0.classify(value)
+	}
+}
+
+/// Validates word boundaries without copying text or changing classifier observation order.
+#[wasm_bindgen]
+pub fn is_valid_text_search_match(
+	host: WordHost,
+	text_length: JsValue,
+	start: JsValue,
+	length: JsValue,
+) -> Result<bool, JsValue> {
+	vscode_editor_core::is_valid_word_match(&BoundaryHost(host), &text_length, &start, &length)
+}
+
 /// Owns one search operation's result until the compatibility facade consumes it.
 #[wasm_bindgen]
 pub struct WasmTextSearchResult {
@@ -143,7 +216,7 @@ impl WasmTextSearchResult {
 /// Versions the complete Searcher reset/next control separately from literal text storage search.
 #[wasm_bindgen]
 pub fn text_search_abi_version() -> u32 {
-	1
+	2
 }
 
 /// Executes once; caught host failures preserve their identity and preceding state changes.

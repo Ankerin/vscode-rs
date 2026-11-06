@@ -77,11 +77,190 @@ pub fn next_text_search_match<H: TextSearchHost>(host: &H) -> Result<H::Value, H
 	}
 }
 
+/// Borrowed UTF-16 and classifier capabilities retain dynamic observations and original failures.
+pub trait WordBoundaryHost {
+	type Value;
+	type Error;
+
+	fn number(&self, value: f64) -> Self::Value;
+	fn add(&self, first: &Self::Value, second: &Self::Value) -> Result<Self::Value, Self::Error>;
+	fn subtract(
+		&self,
+		first: &Self::Value,
+		second: &Self::Value,
+	) -> Result<Self::Value, Self::Error>;
+	fn equal(&self, first: &Self::Value, second: &Self::Value) -> Result<bool, Self::Error>;
+	fn positive(&self, value: &Self::Value) -> Result<bool, Self::Error>;
+	fn char_code(&self, index: &Self::Value) -> Result<Self::Value, Self::Error>;
+	fn classify(&self, value: &Self::Value) -> Result<Self::Value, Self::Error>;
+}
+
+fn left_is_word_boundary<H: WordBoundaryHost>(
+	host: &H,
+	start: &H::Value,
+	length: &H::Value,
+) -> Result<bool, H::Error> {
+	if host.equal(start, &host.number(0.0))? {
+		return Ok(true);
+	}
+	let before = host.char_code(&host.subtract(start, &host.number(1.0))?)?;
+	if !host.equal(&host.classify(&before)?, &host.number(0.0))?
+		|| host.equal(&before, &host.number(13.0))?
+		|| host.equal(&before, &host.number(10.0))?
+	{
+		return Ok(true);
+	}
+	if host.positive(length)? {
+		let first = host.char_code(start)?;
+		if !host.equal(&host.classify(&first)?, &host.number(0.0))? {
+			return Ok(true);
+		}
+	}
+	Ok(false)
+}
+
+fn right_is_word_boundary<H: WordBoundaryHost>(
+	host: &H,
+	text_length: &H::Value,
+	start: &H::Value,
+	length: &H::Value,
+) -> Result<bool, H::Error> {
+	if host.equal(&host.add(start, length)?, text_length)? {
+		return Ok(true);
+	}
+	let after = host.char_code(&host.add(start, length)?)?;
+	if !host.equal(&host.classify(&after)?, &host.number(0.0))?
+		|| host.equal(&after, &host.number(13.0))?
+		|| host.equal(&after, &host.number(10.0))?
+	{
+		return Ok(true);
+	}
+	if host.positive(length)? {
+		let end = host.add(start, length)?;
+		let last = host.char_code(&host.subtract(&end, &host.number(1.0))?)?;
+		if !host.equal(&host.classify(&last)?, &host.number(0.0))? {
+			return Ok(true);
+		}
+	}
+	Ok(false)
+}
+
+/// Checks both word edges in order, including line breaks and separators inside a match.
+pub fn is_valid_word_match<H: WordBoundaryHost>(
+	host: &H,
+	text_length: &H::Value,
+	start: &H::Value,
+	length: &H::Value,
+) -> Result<bool, H::Error> {
+	Ok(left_is_word_boundary(host, start, length)?
+		&& right_is_word_boundary(host, text_length, start, length)?)
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
 	use std::cell::{Cell, RefCell};
 	use std::collections::VecDeque;
+
+	struct Words<'a> {
+		text: &'a [u16],
+		reads: RefCell<Vec<(char, f64)>>,
+		fail: bool,
+	}
+	impl WordBoundaryHost for Words<'_> {
+		type Value = f64;
+		type Error = &'static str;
+		fn number(&self, value: f64) -> f64 {
+			value
+		}
+		fn add(&self, first: &f64, second: &f64) -> Result<f64, Self::Error> {
+			Ok(first + second)
+		}
+		fn subtract(&self, first: &f64, second: &f64) -> Result<f64, Self::Error> {
+			Ok(first - second)
+		}
+		fn equal(&self, first: &f64, second: &f64) -> Result<bool, Self::Error> {
+			Ok(first == second)
+		}
+		fn positive(&self, value: &f64) -> Result<bool, Self::Error> {
+			Ok(*value > 0.0)
+		}
+		fn char_code(&self, index: &f64) -> Result<f64, Self::Error> {
+			self.reads.borrow_mut().push(('c', *index));
+			Ok(if *index >= 0.0 {
+				self.text
+					.get(*index as usize)
+					.map_or(f64::NAN, |value| f64::from(*value))
+			} else {
+				f64::NAN
+			})
+		}
+		fn classify(&self, value: &f64) -> Result<f64, Self::Error> {
+			self.reads.borrow_mut().push(('w', *value));
+			if self.fail {
+				return Err("classification");
+			}
+			Ok(if *value == 32.0 || *value == 45.0 {
+				2.0
+			} else {
+				0.0
+			})
+		}
+	}
+
+	#[test]
+	fn word_edges_preserve_line_breaks_internal_separators_and_utf16_coordinates() {
+		let cases: &[(&[u16], f64, f64, bool)] = &[
+			(&[], 0.0, 0.0, true),
+			(&[120], 0.0, 1.0, true),
+			(&[120, 120, 120], 1.0, 1.0, false),
+			(&[32, 120, 45], 1.0, 1.0, true),
+			(&[13, 120, 10], 1.0, 1.0, true),
+			(&[120, 45, 120], 1.0, 1.0, true),
+			(&[120, 120], 1.0, 0.0, false),
+			(&[32, 32], 1.0, 0.0, true),
+			(&[32, 0xD83D, 0xDE00, 32], 1.0, 2.0, true),
+			(&[0xD83D, 0xDE00], 1.0, 1.0, false),
+		];
+		for (text, start, length, expected) in cases {
+			let host = Words {
+				text,
+				reads: RefCell::new(Vec::new()),
+				fail: false,
+			};
+			assert_eq!(
+				is_valid_word_match(&host, &(text.len() as f64), start, length),
+				Ok(*expected)
+			);
+		}
+	}
+
+	#[test]
+	fn word_edge_short_circuit_and_classifier_failure_preserve_observation_order() {
+		let host = Words {
+			text: &[120, 120, 120],
+			reads: RefCell::new(Vec::new()),
+			fail: false,
+		};
+		let accepted = is_valid_word_match(&host, &3.0, &1.0, &1.0);
+		assert_eq!(
+			(accepted, host.reads.into_inner()),
+			(
+				Ok(false),
+				vec![('c', 0.0), ('w', 120.0), ('c', 1.0), ('w', 120.0)]
+			)
+		);
+		let host = Words {
+			text: &[13, 120, 10],
+			reads: RefCell::new(Vec::new()),
+			fail: true,
+		};
+		let failed = is_valid_word_match(&host, &3.0, &1.0, &1.0);
+		assert_eq!(
+			(failed, host.reads.into_inner()),
+			(Err("classification"), vec![('c', 0.0), ('w', 13.0)])
+		);
+	}
 
 	#[derive(Debug, PartialEq)]
 	enum Value {
