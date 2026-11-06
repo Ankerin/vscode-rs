@@ -10,6 +10,7 @@ mod bracket_collection;
 mod bracket_edits;
 mod bracket_lengths;
 mod bracket_node_reader;
+mod bracket_pair_collection;
 mod bracket_parser;
 mod bracket_position_mapper;
 mod bracket_tokenizer;
@@ -46,6 +47,7 @@ pub use bracket_lengths::{bracket_length, bracket_length_parts};
 pub use bracket_node_reader::{
 	BracketNodeReaderHost, advance_bracket_node, read_longest_bracket_node,
 };
+pub use bracket_pair_collection::{BracketPairCollectionHost, collect_bracket_pairs};
 pub use bracket_parser::{
 	BracketParserHost, can_reuse_bracket_parser_node, parse_bracket_child, parse_bracket_document,
 	parse_bracket_list, read_bracket_parser_cache,

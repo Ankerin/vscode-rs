@@ -16,6 +16,7 @@ mod bracket_collection;
 mod bracket_edits;
 mod bracket_lengths;
 mod bracket_node_reader;
+mod bracket_pair_collection;
 mod bracket_parser;
 mod bracket_position_mapper;
 mod bracket_tokenizer;

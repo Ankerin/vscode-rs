@@ -24,6 +24,7 @@ import { CallbackIterable } from '../../../../../base/common/arrays.js';
 import { combineTextEditInfos } from './combineTextEditInfos.js';
 import { ClosingBracketKind, OpeningBracketKind } from '../../../languages/supports/languageBracketsConfiguration.js';
 import { IRustBracketCollectionHost, tryCollectRustBrackets } from './rustBracketCollection.js';
+import { IRustBracketPairCollectionHost, tryCollectRustBracketPairs } from './rustBracketPairCollection.js';
 
 export class BracketPairsTree extends Disposable {
 	private readonly didChangeEmitter;
@@ -468,6 +469,8 @@ function collectBracketPairs(
 	level: number,
 	levelPerBracketType: Map<string, number>
 ): boolean {
+	const native = tryCollectRustBracketPairs(node, nodeOffsetStart, nodeOffsetEnd, level, () => createRustBracketPairCollectionHost(startOffset, endOffset, context, levelPerBracketType));
+	if (native !== undefined) { return native.continued; }
 	if (level > 200) {
 		return true;
 	}
@@ -564,4 +567,45 @@ function collectBracketPairs(
 		}
 	}
 	return shouldContinue;
+}
+
+/** Delegates the original for-of protocol while Rust owns traversal and completion decisions. */
+function* iterateBracketChildren(node: AstNode): Generator<AstNode, void, void> {
+	for (const child of node.children) {
+		yield child;
+	}
+}
+
+/** Ordered capabilities preserve pair factories, context reads, and partially restored nesting. */
+function createRustBracketPairCollectionHost(startOffset: Length, endOffset: Length, context: CollectBracketPairsContext, levels: Map<string, number>): IRustBracketPairCollectionHost {
+	return {
+		truthy: value => !!value,
+		isPair: node => node.kind === AstNodeKind.Pair,
+		hasLevels: () => !!levels,
+		getLevel: node => levels.get((node as PairAstNode).openingBracket.text),
+		isUndefined: value => value === undefined,
+		increment: value => ++value,
+		setLevel: (node, value) => { levels.set((node as PairAstNode).openingBracket.text, value); },
+		restoreLevel: (node, value) => { levels?.set((node as PairAstNode).openingBracket.text, value); },
+		openingEnd: (node, start) => lengthAdd(start, (node as PairAstNode).openingBracket.length),
+		includeIndentation: () => !!context.includeMinIndentation,
+		indentation: (node, start) => (node as PairAstNode).computeMinIndentation(start, context.textModel),
+		emitPair: (node, start, end, opening, level, equalLevel, indentation) => context.push(new BracketPairWithMinIndentationInfo(
+			lengthsToRange(start, end),
+			lengthsToRange(start, opening),
+			(node as PairAstNode).closingBracket ? lengthsToRange(lengthAdd(opening, (node as PairAstNode).child?.length || lengthZero), end) : undefined,
+			level, equalLevel, node as PairAstNode, indentation
+		)),
+		hasChild: node => !!(node as PairAstNode).child,
+		child: node => (node as PairAstNode).child!,
+		end: (start, child) => lengthAdd(start, child.length),
+		inPairRange: (start, end) => lengthLessThanEqual(start, endOffset) && lengthGreaterThanEqual(end, startOffset),
+		inListRange: (start, end) => lengthLessThanEqual(start, endOffset) && lengthLessThanEqual(startOffset, end),
+		collect: (node, start, end, level) => collectBracketPairs(node, start, end, startOffset, endOffset, context, level, levels),
+		iterator: node => iterateBracketChildren(node),
+		next: iterator => iterator.next(),
+		done: step => !!step.done,
+		stepValue: step => step.value,
+		close: iterator => { iterator.return(undefined); }
+	};
 }
