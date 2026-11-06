@@ -11,6 +11,7 @@ import { test } from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { AstNode, ListAstNode, TextAstNode } from '../../src/vs/editor/common/model/bracketPairsTextModelPart/bracketPairsTree/ast.js';
 import { BeforeEditPositionMapper, TextEditInfo } from '../../src/vs/editor/common/model/bracketPairsTextModelPart/bracketPairsTree/beforeEditPositionMapper.js';
+import { BracketScalarValue } from '../../src/vs/editor/common/model/bracketPairsTextModelPart/bracketPairsTree/bracketNumericProperties.js';
 import { LanguageAgnosticBracketTokens } from '../../src/vs/editor/common/model/bracketPairsTextModelPart/bracketPairsTree/brackets.js';
 import { lengthOfString, toLength } from '../../src/vs/editor/common/model/bracketPairsTextModelPart/bracketPairsTree/length.js';
 import { NodeReader } from '../../src/vs/editor/common/model/bracketPairsTextModelPart/bracketPairsTree/nodeReader.js';
@@ -70,10 +71,78 @@ test('Rust owning bracket cursor state preserves edit mapping, cache readers, to
 			const lineReader = Object.getOwnPropertyDescriptor(tokenizer, 'reader')!.value as object;
 			const initial = parseDocument(new FastTokenizer(text, singleLanguage), [], undefined, true);
 			const updated = parseDocument(createTokenizer(text.slice(1)), [new TextEditInfo(toLength(0, 0), lengthOfString(text.slice(0, 1)), toLength(0, 0))], initial, false);
-			return { mapping, mapper: numericDescriptors(mapper, ['nextEditIdx', 'deltaOldToNewLineCount', 'deltaOldToNewColumnCount', 'deltaLineIdxInOld']), edits: edits.map(edit => numericDescriptors(edit, ['startOffset', 'endOffset', 'newLength'])), nodes, reader: numericDescriptors(reader, ['lastOffset']), fastTokens, fast: numericDescriptors(fast, ['_offset', 'idx', 'length']), tokens, tokenizer: numericDescriptors(tokenizer, ['textBufferLineCount', 'textBufferLastLineLength', '_offset']), lineReader: numericDescriptors(lineReader, ['textBufferLineCount', 'textBufferLastLineLength', 'lineIdx', 'lineCharOffset', 'lineTokenOffset']), initial: snapshot(initial), updated: snapshot(updated) };
+			return { mapping, mapper: numericDescriptors(mapper, ['nextEditIdx', 'deltaOldToNewLineCount', 'deltaOldToNewColumnCount', 'deltaLineIdxInOld']), edits: edits.map(edit => numericDescriptors(edit, ['startOffset', 'endOffset', 'newLength'])), nodes, reader: numericDescriptors(reader, ['lastOffset']), fastTokens, fast: numericDescriptors(fast, ['_offset', 'idx', 'length', 'text']), tokens, tokenizer: numericDescriptors(tokenizer, ['textBufferLineCount', 'textBufferLastLineLength', '_offset', 'didPeek', 'peeked']), lineReader: numericDescriptors(lineReader, ['textBufferLineCount', 'textBufferLastLineLength', 'lineIdx', 'lineCharOffset', 'lineTokenOffset', 'line', 'peekedToken']), regexp: numericDescriptors(singleLanguage, ['hasRegExp', '_regExpGlobal']), initial: snapshot(initial), updated: snapshot(updated) };
 		};
 		assert.deepStrictEqual(withRust(run), run(), `Owning bracket cursor trace ${trace}`);
 	}
+});
+
+test('Rust scalar ownership preserves UTF-16 strings, flags, nullish values, bigint, and host reference transitions', () => {
+	const symbol = Symbol('host scalar key');
+	const values = [false, true, '', 'borrowed\uD800\r\n\uDC00', undefined, null, 2n ** 80n, -0, Number.NaN, symbol, {}, () => 1];
+	const run = () => {
+		const node = ownRustBracketNodeMetadata({ _length: values[0], marker: 1, listHeight: null, cachedMinIndentation: undefined });
+		const states = values.map(value => {
+			Reflect.set(node, '_length', value);
+			const stored = Reflect.get(node, '_length');
+			return { identical: Object.is(stored, value), descriptors: Reflect.ownKeys(node).map(key => Object.getOwnPropertyDescriptor(node, key)) };
+		});
+		let reads = 0;
+		Object.defineProperty(node, '_length', { get: () => { reads++; return symbol; }, configurable: true });
+		const accessor = Object.getOwnPropertyDescriptor(node, '_length');
+		const value = Reflect.get(node, '_length');
+		Object.defineProperty(node, '_length', { value: undefined, writable: true, configurable: true });
+		Object.preventExtensions(node);
+		return { states, reads, accessor: { get: typeof accessor!.get, hasValue: Object.hasOwn(accessor!, 'value') }, value, final: Object.getOwnPropertyDescriptors(node), extensible: Object.isExtensible(node) };
+	};
+	assert.deepStrictEqual(withRust(run), run());
+	let reads = 0;
+	const source = Object.defineProperty({}, '_length', { get: () => { reads++; return undefined; }, configurable: true });
+	withRust(() => {
+		const node = ownRustBracketNodeMetadata(source);
+		assert.deepStrictEqual({ reads, accessor: typeof Object.getOwnPropertyDescriptor(node, '_length')!.get }, { reads: 0, accessor: 'function' });
+		Object.freeze(node);
+	});
+});
+
+test('Rust scalar records own supported payloads and reject references atomically in all seven slots', () => {
+	const before = rust.bracket_node_metadata_live_count();
+	const record = new rust.WasmBracketNodeMetadata();
+	try {
+		const values = [-0, true, 'line\uD800\r\n\uDC00', 2n ** 80n, null, undefined, Number.NaN];
+		values.forEach((value, index) => record.define(index, value, !!(index % 2), true));
+		for (const value of [{}, () => 1, Symbol('weak key')]) {
+			assert.throws(() => Reflect.apply(record.define, record, [0, value, true, true]), /Unsupported Rust bracket scalar/);
+		}
+		assert.throws(() => record.define(7, 1, true, true), /Invalid Rust bracket node/);
+		assert.deepStrictEqual(values.map((value, index) => ({ identical: Object.is(record.get(index), value), attributes: record.attributes(index), present: record.has(index) })), values.map((_value, index) => ({ identical: true, attributes: 2 | (index % 2), present: true })));
+		values.forEach((_value, index) => record.remove(index));
+		assert.deepStrictEqual(values.map((_value, index) => record.has(index)), values.map(() => false));
+	} finally { record.free(); }
+	assert.strictEqual(rust.bracket_node_metadata_live_count(), before);
+});
+
+test('Rust tokenizer constructors store flags, borrowed text, and nullable caches in actual native records', () => {
+	const writes: BracketScalarValue[] = [];
+	const module: IRustBracketNodeMetadataModule = {
+		...rust, WasmBracketNodeMetadata: class extends rust.WasmBracketNodeMetadata {
+			override define(index: number, value: BracketScalarValue, writable: boolean, enumerable: boolean): void {
+				writes.push(value);
+				super.define(index, value, writable, enumerable);
+			}
+		}
+	};
+	const text = 'prefix\uD800(x)\uDC00';
+	withRust(() => {
+		const provider = new LanguageAgnosticBracketTokens(new DenseKeyProvider(), language => new ResolvedLanguageConfiguration(language, { brackets: [['(', ')']] }));
+		const single = provider.getSingleLanguageBracketTokens('parity');
+		const fast = new FastTokenizer(text, single);
+		const tokens = LineTokens.createFromTextAndMetadata([{ text, metadata: LanguageId.PlainText | MetadataConsts.BALANCED_BRACKETS_MASK }], { encodeLanguageId: () => LanguageId.PlainText, decodeLanguageId: () => 'parity' });
+		const tokenizer = new TextBufferTokenizer({ getValue: () => text, getLineCount: () => 1, getLineLength: () => text.length, tokenization: { getLineTokens: () => tokens } }, provider);
+		while (tokenizer.peek()) { tokenizer.read(); }
+		parseDocument(fast, [], undefined, true);
+	}, module);
+	assert.deepStrictEqual({ text: writes.filter(value => value === text).length >= 2, false: writes.includes(false), true: writes.includes(true), null: writes.includes(null) }, { text: true, false: true, true: true, null: true });
 });
 
 test('Rust owning bracket metadata preserves seeded AST mutation, clones, shallow aliases, and descriptors', () => {
@@ -153,10 +222,14 @@ test('Rust numeric bracket records release unreachable and cyclic AST facades wi
 	// Cached immutable identifier sets retain their original permanent cache lifetime.
 	for (let attempt = 0; attempt < 5; attempt++) { global.gc(); await setTimeout(10); }
 	const retained = rust.bracket_node_metadata_live_count();
+	const symbols = new WeakMap<symbol, object>();
 	withRust(() => {
 		for (let index = 0; index < 256; index++) {
 			const node = ListAstNode.create23(new TextAstNode(toLength(0, 1)), new TextAstNode(toLength(0, 2)), null);
 			Object.defineProperty(node, '_item1', { value: node });
+			const symbol = Symbol('cyclic weak key');
+			const scalar = ownRustBracketNodeMetadata({ _length: symbol });
+			symbols.set(symbol, scalar);
 		}
 	});
 	for (let attempt = 0; attempt < 100 && rust.bracket_node_metadata_live_count() > retained; attempt++) {
@@ -164,6 +237,7 @@ test('Rust numeric bracket records release unreachable and cyclic AST facades wi
 		await setTimeout(10);
 	}
 	assert.strictEqual(rust.bracket_node_metadata_live_count(), retained);
+	assert.ok(symbols instanceof WeakMap);
 });
 
 test('Rust owning bracket metadata rejects stale registrations and frees failed record construction', () => {
@@ -182,4 +256,17 @@ test('Rust owning bracket metadata rejects stale registrations and frees failed 
 	};
 	withRust(() => assert.throws(() => new TextAstNode(toLength(0, 1)), error => error === failure), module);
 	assert.strictEqual(frees, 1);
+	let definitions = 0;
+	const source = { _length: 1, listHeight: 2, cachedMinIndentation: -1 };
+	const partial: IRustBracketNodeMetadataModule = {
+		...rust, WasmBracketNodeMetadata: class extends rust.WasmBracketNodeMetadata {
+			override define(index: number, value: BracketScalarValue, writable: boolean, enumerable: boolean): void {
+				if (++definitions === 2) { throw failure; }
+				super.define(index, value, writable, enumerable);
+			}
+			override free(): void { frees++; super.free(); }
+		}
+	};
+	withRust(() => assert.throws(() => ownRustBracketNodeMetadata(source), error => error === failure), partial);
+	assert.deepStrictEqual({ source, frees, definitions }, { source: { _length: 1, listHeight: 2, cachedMinIndentation: -1 }, frees: 2, definitions: 2 });
 });

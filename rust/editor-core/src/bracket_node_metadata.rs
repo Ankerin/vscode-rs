@@ -3,35 +3,40 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-//! Owning numeric AST metadata retains IEEE-754 values and original data-property attributes.
+//! Owning bracket metadata retains scalar values and original data-property attributes.
 
-/// A configurable numeric own property, including its writable/enumerable attributes.
+/// A configurable scalar own property, including its writable/enumerable attributes.
 #[derive(Clone, Copy, Debug)]
-pub struct BracketNodeNumber {
-	pub value: f64,
+pub struct BracketNodeProperty<V> {
+	pub value: V,
 	pub writable: bool,
 	pub enumerable: bool,
 }
 
+/// Numeric stack slots retain native IEEE-754 payloads.
+pub type BracketNodeNumber = BracketNodeProperty<f64>;
+
 /// AST metadata and bracket parser/tokenizer cursors have one owning record per facade.
-pub struct BracketNodeMetadata<const N: usize = 3> {
-	fields: [Option<BracketNodeNumber>; N],
+pub struct BracketNodeMetadata<const N: usize = 3, V = f64> {
+	fields: [Option<BracketNodeProperty<V>>; N],
 }
 
-impl<const N: usize> Default for BracketNodeMetadata<N> {
+impl<const N: usize, V> Default for BracketNodeMetadata<N, V> {
 	fn default() -> Self {
-		Self { fields: [None; N] }
+		Self {
+			fields: std::array::from_fn(|_| None),
+		}
 	}
 }
 
-impl<const N: usize> BracketNodeMetadata<N> {
+impl<const N: usize, V: Clone> BracketNodeMetadata<N, V> {
 	/// Returns a copied scalar without exposing or duplicating the owning record.
-	pub fn get(&self, index: usize) -> Option<BracketNodeNumber> {
-		self.fields.get(index).copied().flatten()
+	pub fn get(&self, index: usize) -> Option<BracketNodeProperty<V>> {
+		self.fields.get(index).cloned().flatten()
 	}
 
 	/// Defines a supported field atomically; unsupported indices leave the record unchanged.
-	pub fn define(&mut self, index: usize, field: BracketNodeNumber) -> bool {
+	pub fn define(&mut self, index: usize, field: BracketNodeProperty<V>) -> bool {
 		let Some(slot) = self.fields.get_mut(index) else {
 			return false;
 		};
@@ -50,6 +55,39 @@ impl<const N: usize> BracketNodeMetadata<N> {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn owned_payloads_keep_prior_values_after_replacement_and_release_removed_fields() {
+		let mut metadata = BracketNodeMetadata::<2, String>::default();
+		metadata.define(
+			0,
+			BracketNodeProperty {
+				value: "original".to_owned(),
+				writable: true,
+				enumerable: true,
+			},
+		);
+		let original = metadata.get(0).unwrap().value;
+		metadata.define(
+			0,
+			BracketNodeProperty {
+				value: "replacement".to_owned(),
+				writable: false,
+				enumerable: true,
+			},
+		);
+		let replacement = metadata.get(0).unwrap();
+		metadata.remove(0);
+		assert_eq!(
+			(
+				original,
+				replacement.value,
+				replacement.writable,
+				metadata.get(0).is_none()
+			),
+			("original".to_owned(), "replacement".to_owned(), false, true)
+		);
+	}
 
 	#[test]
 	fn cursor_records_keep_all_five_fields_independent_and_reject_extra_slots() {

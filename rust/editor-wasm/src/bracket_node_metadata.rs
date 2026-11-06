@@ -3,20 +3,52 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-//! Numeric AST and incremental parser fields live in Rust without retaining facade references.
+//! Bracket scalar fields live in Rust; borrowed host primitives cannot retain facade references.
 
 use std::cell::Cell;
-use vscode_editor_core::{BracketNodeMetadata, BracketNodeNumber};
+use vscode_editor_core::{BracketNodeMetadata, BracketNodeProperty};
 use wasm_bindgen::prelude::*;
 
 thread_local! {
 	static LIVE_RECORDS: Cell<u32> = const { Cell::new(0) };
 }
 
-/// Owns numeric fields for one bracket facade; generated finalization releases unreachable records.
+/// Owns scalar fields for one bracket facade; generated finalization releases unreachable records.
 #[wasm_bindgen]
 pub struct WasmBracketNodeMetadata {
-	metadata: BracketNodeMetadata<5>,
+	metadata: BracketNodeMetadata<7, ScalarValue>,
+}
+
+#[derive(Clone)]
+enum ScalarValue {
+	Number(f64),
+	Boolean(bool),
+	Primitive(JsValue),
+}
+
+impl ScalarValue {
+	fn from_js(value: JsValue) -> Result<Self, JsValue> {
+		if let Some(number) = value.as_f64() {
+			return Ok(Self::Number(number));
+		}
+		if let Some(boolean) = value.as_bool() {
+			return Ok(Self::Boolean(boolean));
+		}
+		if value.is_null() || value.is_undefined() || value.is_string() || value.is_bigint() {
+			return Ok(Self::Primitive(value));
+		}
+		Err(JsValue::from_str(
+			"Unsupported Rust bracket scalar property value",
+		))
+	}
+
+	fn into_js(self) -> JsValue {
+		match self {
+			Self::Number(value) => JsValue::from_f64(value),
+			Self::Boolean(value) => JsValue::from_bool(value),
+			Self::Primitive(value) => value,
+		}
+	}
 }
 
 #[wasm_bindgen]
@@ -33,10 +65,10 @@ impl WasmBracketNodeMetadata {
 		self.metadata.get(index as usize).is_some()
 	}
 
-	pub fn get(&self, index: u32) -> Result<f64, JsValue> {
+	pub fn get(&self, index: u32) -> Result<JsValue, JsValue> {
 		self.metadata
 			.get(index as usize)
-			.map(|field| field.value)
+			.map(|field| field.value.into_js())
 			.ok_or_else(|| JsValue::from_str("Missing Rust bracket node metadata field"))
 	}
 
@@ -50,14 +82,14 @@ impl WasmBracketNodeMetadata {
 	pub fn define(
 		&mut self,
 		index: u32,
-		value: f64,
+		value: JsValue,
 		writable: bool,
 		enumerable: bool,
 	) -> Result<(), JsValue> {
 		if !self.metadata.define(
 			index as usize,
-			BracketNodeNumber {
-				value,
+			BracketNodeProperty {
+				value: ScalarValue::from_js(value)?,
 				writable,
 				enumerable,
 			},
@@ -89,7 +121,7 @@ impl Drop for WasmBracketNodeMetadata {
 /// Versions the owning scalar metadata contract independently of AST traversal operations.
 #[wasm_bindgen]
 pub fn bracket_node_metadata_abi_version() -> u32 {
-	2
+	3
 }
 
 /// Exposes resource ownership to disposal tests without retaining a handle registry.

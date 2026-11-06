@@ -3,13 +3,21 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-/** Native scalar/array records expose numeric data and the original property attributes. */
+/** Primitive values cannot introduce a native ownership cycle through a host facade. */
+export type BracketScalarValue = number | boolean | string | bigint | null | undefined;
+
+/** Native scalar/array records expose primitive data and the original property attributes. */
 export interface IBracketNumberProperties {
-	get(index: number): number;
+	get(index: number): BracketScalarValue;
 	attributes(index: number): number;
 }
 
-/** Reconstructs one configurable numeric descriptor without retaining a host backing value. */
+/** Symbols remain on the host because they can be weak collection keys, just like objects. */
+export function isBracketScalarValue(value: unknown): value is BracketScalarValue {
+	return value === null || (typeof value !== 'object' && typeof value !== 'function' && typeof value !== 'symbol');
+}
+
+/** Reconstructs one configurable scalar descriptor without retaining a host backing value. */
 export function bracketNumberDescriptor(record: IBracketNumberProperties, index: number): PropertyDescriptor {
 	const attributes = record.attributes(index);
 	return { value: record.get(index), writable: !!(attributes & 1), enumerable: !!(attributes & 2), configurable: true };

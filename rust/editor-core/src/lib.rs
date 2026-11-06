@@ -65,7 +65,7 @@ pub use bracket_lifecycle::{
 	handle_bracket_change, initialize_bracket_tree, queue_bracket_edits,
 };
 pub use bracket_mutation::{BracketMutationHost, mutate_bracket_list};
-pub use bracket_node_metadata::{BracketNodeMetadata, BracketNodeNumber};
+pub use bracket_node_metadata::{BracketNodeMetadata, BracketNodeNumber, BracketNodeProperty};
 pub use bracket_node_reader::{
 	BracketNodeReaderHost, advance_bracket_node, read_longest_bracket_node,
 };

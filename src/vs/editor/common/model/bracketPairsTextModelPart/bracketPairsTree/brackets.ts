@@ -9,6 +9,7 @@ import { BracketAstNode } from './ast.js';
 import { toLength } from './length.js';
 import { DenseKeyProvider, identityKeyProvider, SmallImmutableSet } from './smallImmutableSet.js';
 import { OpeningBracketId, Token, TokenKind } from './tokenizer.js';
+import { ownRustBracketNumericState, RustBracketNumericStateKind } from './rustBracketNodeMetadata.js';
 
 export class BracketTokens {
 	static createFromLanguage(configuration: ResolvedLanguageConfiguration, denseKeyProvider: DenseKeyProvider<string>): BracketTokens {
@@ -54,7 +55,9 @@ export class BracketTokens {
 
 	constructor(
 		private readonly map: Map<string, Token>
-	) { }
+	) {
+		return ownRustBracketNumericState(this, RustBracketNumericStateKind.BracketTokens);
+	}
 
 	getRegExpStr(): string | null {
 		if (this.isEmpty) {
