@@ -23,6 +23,7 @@ mod contiguous_tokens_block;
 mod contiguous_tokens_store;
 mod cursor_columns;
 mod decorations;
+mod fast_bracket_tokenizer;
 mod line_tokens;
 mod model_edits;
 mod sequence_diff;

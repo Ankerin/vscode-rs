@@ -11,6 +11,7 @@ import { BracketTokens, LanguageAgnosticBracketTokens } from './brackets.js';
 import { Length, lengthAdd, lengthDiff, lengthGetColumnCountIfZeroLineCount, lengthToObj, lengthZero, toLength } from './length.js';
 import { SmallImmutableSet } from './smallImmutableSet.js';
 import { IRustBracketTokenizerHost, IRustPeekableBracketTokenizerHost, tryReadRustBracketToken, tryReadRustPeekableBracketToken, trySetRustBracketTokenPosition, trySkipRustBracketTokens } from './rustBracketTokenizer.js';
+import { IRustFastBracketTokenizerHost, tryBuildRustFastBracketTokens } from './rustFastBracketTokenizer.js';
 
 export interface Tokenizer {
 	readonly offset: Length;
@@ -360,6 +361,8 @@ export class FastTokenizer implements Tokenizer {
 		const regexp = regExpStr ? new RegExp(regExpStr + '|\n', 'gi') : null;
 
 		const tokens: Token[] = [];
+		const native = tryBuildRustFastBracketTokens(() => FastTokenizer.createRustHost(text, brackets, regexp, tokens));
+		if (native !== undefined) { this.length = native.length; this.tokens = tokens; return; }
 
 		let match: RegExpExecArray | null;
 		let curLineCount = 0;
@@ -463,5 +466,33 @@ export class FastTokenizer implements Tokenizer {
 
 	getText(): string {
 		return this.text;
+	}
+
+	/** Static capabilities retain original cache aliases, regular expressions, and inline factories. */
+	private static createRustHost(text: string, brackets: BracketTokens, regexp: RegExp | null, tokens: Token[]): IRustFastBracketTokenizerHost {
+		return {
+			add: (first, second) => first + second,
+			subtract: (first, second) => first - second,
+			equal: (first, second) => first === second,
+			cache: () => [],
+			populate: (cache, line, column) => { cache.push(new Token(toLength(line, column), TokenKind.Text, -1, SmallImmutableSet.getEmpty(), new TextAstNode(toLength(line, column)))); },
+			hasRegexp: () => !!regexp,
+			resetRegexp: () => { regexp!.lastIndex = 0; },
+			nextMatch: () => regexp!.exec(text),
+			matchIsNull: matched => matched === null,
+			matchIndex: matched => matched.index,
+			matchValue: matched => matched[0],
+			lineBreak: value => value === '\n',
+			afterBreak: index => index + 1,
+			shortCache: (cache, column) => column < cache.length,
+			cachedToken: (cache, column) => cache[column],
+			textToken: (line, column) => { const length = toLength(line, column); return new Token(length, TokenKind.Text, -1, SmallImmutableSet.getEmpty(), new TextAstNode(length)); },
+			pushToken: token => { tokens.push(token); },
+			pushBracket: value => { tokens.push(brackets.getToken(value)!); },
+			valueLength: value => value.length,
+			textLength: () => text.length,
+			length: (line, column) => toLength(line, column),
+			pushText: length => { tokens.push(new Token(length, TokenKind.Text, -1, SmallImmutableSet.getEmpty(), new TextAstNode(length))); }
+		};
 	}
 }

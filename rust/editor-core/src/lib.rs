@@ -17,6 +17,7 @@ mod contiguous_tokens;
 mod cursor_columns;
 mod decorations;
 mod ecmascript;
+mod fast_bracket_tokenizer;
 mod folding;
 mod guides;
 mod indentation;
@@ -67,6 +68,7 @@ pub use cursor_columns::{
 	previous_cursor_tab_stop, unicode_code_point, unicode_grapheme_offset,
 };
 pub use decorations::decoration_accept_edit;
+pub use fast_bracket_tokenizer::{FastBracketTokenizerHost, build_fast_bracket_tokens};
 pub use folding::{IndentationFoldingRanges, compute_indentation_folding};
 pub use guides::{ActiveIndentGuide, compute_active_indent_guide, compute_indent_guides};
 pub use indentation::{GuessedIndentation, guess_indentation};

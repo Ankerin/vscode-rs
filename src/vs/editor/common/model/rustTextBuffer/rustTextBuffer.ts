@@ -28,6 +28,7 @@ import { IRustBracketNodeReaderModule, registerRustBracketNodeReader } from '../
 import { IRustBracketPositionMapperModule, registerRustBracketPositionMapper } from '../bracketPairsTextModelPart/bracketPairsTree/rustBracketPositionMapper.js';
 import { IRustBracketParserModule, registerRustBracketParser } from '../bracketPairsTextModelPart/bracketPairsTree/rustBracketParser.js';
 import { IRustBracketTokenizerModule, registerRustBracketTokenizer } from '../bracketPairsTextModelPart/bracketPairsTree/rustBracketTokenizer.js';
+import { IRustFastBracketTokenizerModule, registerRustFastBracketTokenizer } from '../bracketPairsTextModelPart/bracketPairsTree/rustFastBracketTokenizer.js';
 
 /** The generated binding surface; UTF-16 arrays preserve JavaScript string semantics. */
 export interface IRustTextBuffer {
@@ -65,7 +66,7 @@ interface IRustTextSnapshot {
 	free(): void;
 }
 
-export interface IRustTextBufferModule extends IRustSequenceDiffModule, IRustTextChangeModule, IRustTokensModule, IRustCursorColumnsModule, IRustDecorationsModule, IRustTextShapeModule, IRustBracketEditsModule, IRustBracketLengthsModule, IRustSmallSetModule, IRustBracketTreesModule, IRustBracketNodeReaderModule, IRustBracketPositionMapperModule, IRustBracketParserModule, IRustBracketTokenizerModule {
+export interface IRustTextBufferModule extends IRustSequenceDiffModule, IRustTextChangeModule, IRustTokensModule, IRustCursorColumnsModule, IRustDecorationsModule, IRustTextShapeModule, IRustBracketEditsModule, IRustBracketLengthsModule, IRustSmallSetModule, IRustBracketTreesModule, IRustBracketNodeReaderModule, IRustBracketPositionMapperModule, IRustBracketParserModule, IRustBracketTokenizerModule, IRustFastBracketTokenizerModule {
 	text_buffer_abi_version(): number;
 	WasmTextBuffer: {
 		new(units: Uint16Array): IRustTextBuffer;
@@ -379,6 +380,7 @@ export function registerRustTextBuffer(module: IRustTextBufferModule, initializa
 		registration.add(registerRustBracketPositionMapper(module));
 		registration.add(registerRustBracketParser(module));
 		registration.add(registerRustBracketTokenizer(module));
+		registration.add(registerRustFastBracketTokenizer(module));
 	} catch (error) {
 		registration.dispose();
 		throw error;
