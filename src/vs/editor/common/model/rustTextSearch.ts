@@ -154,6 +154,26 @@ export interface IRustSearchCollectionHost {
 }
 
 /** Generated text-search control participates in the core's atomic registration lifetime. */
+export interface IRustRegexSourceHost {
+	sourceTruthy(): boolean;
+	length(): number;
+	below(index: number, length: number): boolean;
+	atEnd(index: number, length: number): boolean;
+	charCode(index: number): number;
+}
+
+/** Array-like capture reads retain original slot values and the original FindMatch range. */
+export interface IRustFindMatchHost {
+	captures(): boolean;
+	createValues(): string[];
+	length(): number;
+	below(index: number, length: number): boolean;
+	read(index: number): string;
+	write(values: string[], index: number, value: string): void;
+	make(values: string[] | null): FindMatch;
+}
+
+/** Generated text-search control participates in the core's atomic registration lifetime. */
 export interface IRustTextSearchModule {
 	text_search_abi_version(): number;
 	run_text_search(host: IRustTextSearchHost, reset: boolean): IRustTextSearchResult;
@@ -164,13 +184,15 @@ export interface IRustTextSearchModule {
 	text_search_multiline_range(host: IRustMultilineMatchHost, delta: number, index: number): Range;
 	run_text_search_navigation(host: IRustSearchNavigationHost, operation: RustSearchNavigationOperation): FindMatch | null;
 	collect_text_search_range(host: IRustSearchCollectionHost, operation: RustSearchCollectionOperation, limit: number): FindMatch[];
+	is_text_search_multiline_source(host: IRustRegexSourceHost): boolean;
+	create_text_search_match(host: IRustFindMatchHost): FindMatch;
 }
 
 let registeredModule: IRustTextSearchModule | undefined;
 
 /** Installs text-search control without changing existing Searcher classes or regex objects. */
 export function registerRustTextSearch(module: IRustTextSearchModule): IDisposable {
-	if (typeof module.text_search_abi_version !== 'function' || module.text_search_abi_version() !== 6 || typeof module.run_text_search !== 'function' || typeof module.is_valid_text_search_match !== 'function' || typeof module.collect_text_search_matches !== 'function' || typeof module.scan_text_search_line_feeds !== 'function' || typeof module.count_text_search_line_feeds !== 'function' || typeof module.text_search_multiline_range !== 'function' || typeof module.run_text_search_navigation !== 'function' || typeof module.collect_text_search_range !== 'function') { throw new Error('The Rust text search bindings do not match the searcher control contract'); }
+	if (typeof module.text_search_abi_version !== 'function' || module.text_search_abi_version() !== 7 || typeof module.run_text_search !== 'function' || typeof module.is_valid_text_search_match !== 'function' || typeof module.collect_text_search_matches !== 'function' || typeof module.scan_text_search_line_feeds !== 'function' || typeof module.count_text_search_line_feeds !== 'function' || typeof module.text_search_multiline_range !== 'function' || typeof module.run_text_search_navigation !== 'function' || typeof module.collect_text_search_range !== 'function' || typeof module.is_text_search_multiline_source !== 'function' || typeof module.create_text_search_match !== 'function') { throw new Error('The Rust text search bindings do not match the searcher control contract'); }
 	if (registeredModule) { throw new Error('A Rust text search module is already registered'); }
 	registeredModule = module;
 	return toDisposable(() => { if (registeredModule === module) { registeredModule = undefined; } });
@@ -227,4 +249,14 @@ export function tryRustSearchNavigation(operation: RustSearchNavigationOperation
 /** Collects a model range without replacing the original result array or overridable methods. */
 export function tryRustSearchCollection(operation: RustSearchCollectionOperation, limit: number, createHost: () => IRustSearchCollectionHost): FindMatch[] | undefined {
 	return registeredModule?.collect_text_search_range(createHost(), operation, limit);
+}
+
+/** Scans borrowed search syntax with original strict character and numeric-domain behavior. */
+export function tryRustRegexSource(createHost: () => IRustRegexSourceHost): boolean | undefined {
+	return registeredModule?.is_text_search_multiline_source(createHost());
+}
+
+/** Copies array-like capture slots through their original providers and preserves range identity. */
+export function tryRustFindMatch(createHost: () => IRustFindMatchHost): FindMatch | undefined {
+	return registeredModule?.create_text_search_match(createHost());
 }

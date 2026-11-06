@@ -391,7 +391,7 @@ impl WasmTextSearchResult {
 /// Versions the complete Searcher reset/next control separately from literal text storage search.
 #[wasm_bindgen]
 pub fn text_search_abi_version() -> u32 {
-	6
+	7
 }
 
 /// Executes once; caught host failures preserve their identity and preceding state changes.

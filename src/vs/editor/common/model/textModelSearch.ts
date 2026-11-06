@@ -10,7 +10,7 @@ import { Position } from '../core/position.js';
 import { Range } from '../core/range.js';
 import { EndOfLinePreference, FindMatch, SearchData } from '../model.js';
 import { TextModel } from './textModel.js';
-import { IRustTextSearchHost, IRustSearchNavigationHost, IRustSearchCollectionHost, RustSearchNavigationOperation, RustSearchCollectionOperation, createRustSearchOffsets, tryRunRustTextSearch, tryRustWordBoundary, tryRustLineMatches, tryRustLineFeedScan, tryRustLineFeedCount, tryRustMultilineMatchRange, tryRustSearchNavigation, tryRustSearchCollection } from './rustTextSearch.js';
+import { IRustTextSearchHost, IRustSearchNavigationHost, IRustSearchCollectionHost, RustSearchNavigationOperation, RustSearchCollectionOperation, createRustSearchOffsets, tryRunRustTextSearch, tryRustWordBoundary, tryRustLineMatches, tryRustLineFeedScan, tryRustLineFeedCount, tryRustMultilineMatchRange, tryRustSearchNavigation, tryRustSearchCollection, tryRustRegexSource, tryRustFindMatch } from './rustTextSearch.js';
 
 const LIMIT_FIND_COUNT = 999;
 
@@ -68,6 +68,14 @@ export class SearchParams {
 }
 
 export function isMultilineRegexSource(searchString: string): boolean {
+	const native = tryRustRegexSource(() => ({
+		sourceTruthy: () => !!searchString,
+		length: () => searchString.length,
+		below: (index, length) => index < length,
+		atEnd: (index, length) => index >= length,
+		charCode: index => searchString.charCodeAt(index)
+	}));
+	if (native !== undefined) { return native; }
 	if (!searchString || searchString.length === 0) {
 		return false;
 	}
@@ -100,6 +108,16 @@ export function isMultilineRegexSource(searchString: string): boolean {
 }
 
 export function createFindMatch(range: Range, rawMatches: RegExpExecArray, captureMatches: boolean): FindMatch {
+	const native = tryRustFindMatch(() => ({
+		captures: () => !!captureMatches,
+		createValues: () => [],
+		length: () => rawMatches.length,
+		below: (index, length) => index < length,
+		read: index => rawMatches[index],
+		write: (values, index, value) => { values[index] = value; },
+		make: values => new FindMatch(range, values)
+	}));
+	if (native !== undefined) { return native; }
 	if (!captureMatches) {
 		return new FindMatch(range, null);
 	}

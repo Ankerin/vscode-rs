@@ -44,6 +44,7 @@ mod text_search;
 mod text_search_collection;
 mod text_search_navigation;
 mod text_search_offsets;
+mod text_search_request;
 mod text_shape;
 mod text_transfer;
 mod token_array;

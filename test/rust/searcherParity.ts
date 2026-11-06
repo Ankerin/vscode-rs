@@ -9,7 +9,7 @@ import { resolve } from 'node:path';
 import { test } from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { WordCharacterClass, WordCharacterClassifier } from '../../src/vs/editor/common/core/wordCharacterClassifier.js';
-import { SearchParams, Searcher, TextModelSearch, isValidMatch } from '../../src/vs/editor/common/model/textModelSearch.js';
+import { SearchParams, Searcher, TextModelSearch, createFindMatch, isMultilineRegexSource, isValidMatch } from '../../src/vs/editor/common/model/textModelSearch.js';
 import { DefaultEndOfLine, FindMatch, SearchData } from '../../src/vs/editor/common/model.js';
 import { TextModel } from '../../src/vs/editor/common/model/textModel.js';
 import { Position } from '../../src/vs/editor/common/core/position.js';
@@ -717,6 +717,90 @@ test('Rust multiline range collection preserves post-write limit coercion and sc
 			assert.throws(() => Reflect.apply(TextModelSearch.findMatches, owner, [model, new SearchParams('\\n', true, true, null), model.getFullModelRange(), true, dynamicLimit]), error => error === failure);
 			return observations;
 		} finally { target.dispose(); }
+	};
+	assert.deepStrictEqual(withRust(run), run());
+});
+
+test('Rust search source classification preserves seeded escapes, LF, and borrowed UTF-16 syntax', () => {
+	let seed = 937;
+	let calls = 0;
+	const module: IRustTextSearchModule = { ...rust, is_text_search_multiline_source: host => { calls++; return rust.is_text_search_multiline_source(host); } };
+	const alphabet = ['\\', 'n', 'r', 'W', 'w', '[', ']', '\n', '\r', 'x', '\uD800', '\uD83D\uDE00'];
+	for (let trace = 0; trace < 1024; trace++) {
+		const random = (limit: number) => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed % limit; };
+		const source = Array.from({ length: random(40) }, () => alphabet[random(alphabet.length)]).join('');
+		assert.strictEqual(withRust(() => isMultilineRegexSource(source), module), isMultilineRegexSource(source), JSON.stringify(source));
+	}
+	assert.strictEqual(calls, 1024, 'Source classification executes Rust');
+});
+
+test('Rust search source classification retains dynamic lengths, strict character values, and original failures', () => {
+	const failure = new Error('Original search source character failure');
+	for (const length of [0, 2, '2', null, undefined, Number.NaN]) {
+		for (const character of [110, '110', 110n, Symbol('code')]) {
+			const run = () => {
+				const observations: string[] = [];
+				const source = {
+					get length() { observations.push('length'); return length; },
+					get charCodeAt() { observations.push('method'); return (index: number) => { observations.push(`code:${index}`); return index === 0 ? 92 : character; }; }
+				};
+				const multiline = isMultilineRegexSource(source as unknown as string);
+				return { multiline, observations };
+			};
+			assert.deepStrictEqual(withRust(run), run());
+		}
+	}
+	const run = () => {
+		const observations: string[] = [];
+		const source = { get length() { observations.push('length'); return 2; }, charCodeAt: (index: number) => { observations.push(`code:${index}`); if (index === 1) { throw failure; } return 92; } };
+		assert.throws(() => isMultilineRegexSource(source as unknown as string), error => error === failure);
+		return observations;
+	};
+	assert.deepStrictEqual(withRust(run), run());
+});
+
+test('Rust FindMatch creation preserves capture holes, raw slot identity, range identity, and no-capture shortcuts', () => {
+	const first = { marker: 'original capture identity' };
+	let calls = 0;
+	const module: IRustTextSearchModule = { ...rust, create_text_search_match: host => { calls++; return rust.create_text_search_match(host); } };
+	for (const captures of [false, true]) {
+		const run = () => {
+			const observations: string[] = [];
+			const raw = ['x', first, undefined, '\uD800'];
+			Reflect.deleteProperty(raw, '2');
+			const match = new Proxy(raw, { get: (target, key, receiver) => { observations.push(String(key)); return Reflect.get(target, key, receiver); } });
+			const range = new Range(2, 3, 2, 4);
+			const result = createFindMatch(range, match as unknown as RegExpExecArray, captures);
+			return { result, observations, rangeIdentity: result.range === range, slotIdentity: result.matches?.[1] === first as unknown as string };
+		};
+		assert.deepStrictEqual(withRust(run, module), run());
+	}
+	assert.strictEqual(calls, 2, 'FindMatch creation executes Rust');
+});
+
+test('Rust FindMatch creation retains array-like length coercion, slot failures, and original exception identity', () => {
+	const failure = new Error('Original capture slot failure');
+	for (const length of [undefined, null, '2', 1n, Number.NaN, Symbol('length')]) {
+		for (const captures of [false, true]) {
+			const run = () => {
+				const observations: string[] = [];
+				const source = { length, 0: 'a', 1: 'b' };
+				const match = new Proxy(source, { get: (target, key, receiver) => { observations.push(String(key)); return Reflect.get(target, key, receiver); } });
+				let result: FindMatch | undefined;
+				let error: string | undefined;
+				try { result = createFindMatch(new Range(1, 1, 1, 2), match as unknown as RegExpExecArray, captures); }
+				catch (failure) { error = failure instanceof Error ? failure.name : 'non-error'; }
+				return { result, error, observations };
+			};
+			assert.deepStrictEqual(withRust(run), run());
+		}
+	}
+	const run = () => {
+		const observations: string[] = [];
+		const length = { [Symbol.toPrimitive]: (hint: string) => { observations.push(`length:${hint}`); return 2; } };
+		const source = { length, 0: 'a', get 1() { observations.push('slot:1'); throw failure; } };
+		assert.throws(() => createFindMatch(new Range(1, 1, 1, 2), source as unknown as RegExpExecArray, true), error => error === failure);
+		return observations;
 	};
 	assert.deepStrictEqual(withRust(run), run());
 });

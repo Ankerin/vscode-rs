@@ -45,6 +45,7 @@ mod text_search;
 mod text_search_collection;
 mod text_search_navigation;
 mod text_search_offsets;
+mod text_search_request;
 mod token_array;
 mod tokens;
 mod tree;
@@ -147,6 +148,9 @@ pub use text_search_navigation::{
 pub use text_search_offsets::{
 	LineFeedQueryHost, LineFeedScanHost, MultilineMatchHost, multiline_match_range,
 	scan_search_line_feeds, search_line_feeds_before,
+};
+pub use text_search_request::{
+	FindMatchHost, RegexSourceHost, create_search_find_match, is_multiline_search_source,
 };
 pub use token_array::{create_line_token_array, line_token_array, slice_token_array};
 pub use tokens::{TokensError, merge_semantic_tokens};
