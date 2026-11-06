@@ -13,6 +13,7 @@ mod bracket_indentation;
 mod bracket_lengths;
 mod bracket_lifecycle;
 mod bracket_mutation;
+mod bracket_node_metadata;
 mod bracket_node_reader;
 mod bracket_pair_collection;
 mod bracket_parser;
@@ -63,6 +64,7 @@ pub use bracket_lifecycle::{
 	handle_bracket_change, initialize_bracket_tree, queue_bracket_edits,
 };
 pub use bracket_mutation::{BracketMutationHost, mutate_bracket_list};
+pub use bracket_node_metadata::{BracketNodeMetadata, BracketNodeNumber};
 pub use bracket_node_reader::{
 	BracketNodeReaderHost, advance_bracket_node, read_longest_bracket_node,
 };

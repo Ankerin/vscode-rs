@@ -14,6 +14,7 @@ import { IRustBracketIndentationHost, RustBracketIndentationOperation, tryComput
 import { IRustBracketAstHost, RustBracketAstOperation, tryRunRustBracketAst } from './rustBracketAst.js';
 import { IRustBracketMutationHost, RustBracketMutationOperation, tryMutateRustBracketList } from './rustBracketMutation.js';
 import { IRustBracketTransformHost, RustBracketTransformOperation, tryTransformRustBracketAst } from './rustBracketTransform.js';
+import { ownRustBracketNodeMetadata } from './rustBracketNodeMetadata.js';
 
 export const enum AstNodeKind {
 	Text = 0,
@@ -65,6 +66,7 @@ abstract class BaseAstNode {
 
 	public constructor(length: Length) {
 		this._length = length;
+		return ownRustBracketNodeMetadata(this);
 	}
 
 	/**
