@@ -34,6 +34,7 @@ mod indentation;
 mod line_tokens;
 mod model_edits;
 mod model_query;
+mod model_snapshot;
 mod model_validation;
 mod normalize_indentation;
 mod search;
@@ -123,6 +124,7 @@ pub use model_edits::{
 pub use model_query::{
 	ModelQueryHost, ModelQueryMethod, ModelQueryOperation, bound_model_offset, query_model,
 };
+pub use model_snapshot::{ModelSnapshotHost, read_model_snapshot};
 pub use model_validation::{
 	ModelComparison, ModelCoordinate, ModelValidationHost, clamp_model_position,
 	is_valid_model_position, is_valid_model_range, validate_model_position, validate_model_range,

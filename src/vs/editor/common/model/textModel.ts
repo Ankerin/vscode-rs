@@ -52,6 +52,7 @@ import { PieceTreeTextBufferBuilder } from './pieceTreeTextBuffer/pieceTreeTextB
 import { SearchParams, TextModelSearch } from './textModelSearch.js';
 import { IRustModelValidationHost, RustModelValidationOperation, compareRustModelValues, readRustModelCoordinate, tryRustModelValidation } from './rustModelValidation.js';
 import { IRustModelQueryHost, RustModelQueryMethod, RustModelQueryOperation, RustModelQueryValue, rustModelQueryMethodNames, tryRustModelQuery } from './rustModelQuery.js';
+import { ownRustModelSnapshot, tryRustModelSnapshot } from './rustModelSnapshot.js';
 import { AttachedViews } from './tokens/abstractSyntaxTokenBackend.js';
 import { TokenizationFontDecorationProvider } from './tokens/tokenizationFontDecorationsProvider.js';
 import { LineFontChangingDecoration, LineHeightChangingDecoration } from './decorationProvider.js';
@@ -136,9 +137,22 @@ class TextModelSnapshot implements model.ITextSnapshot {
 	constructor(source: model.ITextSnapshot) {
 		this._source = source;
 		this._eos = false;
+		return ownRustModelSnapshot(this);
 	}
 
 	public read(): string | null {
+		const rust = tryRustModelSnapshot(() => ({
+			eos: () => this._eos,
+			createResult: () => [],
+			read: () => this._source.read(),
+			setEos: () => { this._eos = true; },
+			length: value => value.length,
+			compare: compareRustModelValues,
+			add: (first, second) => first + second,
+			write: (result, index, value) => { result[index] = value; },
+			join: result => result.join('')
+		}));
+		if (rust) { return rust.value; }
 		if (this._eos) {
 			return null;
 		}
