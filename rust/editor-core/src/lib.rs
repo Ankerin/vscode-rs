@@ -7,6 +7,7 @@
 
 mod atomic_tab_move;
 mod bracket_edits;
+mod bracket_lengths;
 mod contiguous_tokens;
 mod cursor_columns;
 mod decorations;
@@ -31,6 +32,7 @@ mod word_part;
 
 pub use atomic_tab_move::{atomic_tab_position, whitespace_visible_column};
 pub use bracket_edits::combine_bracket_edits;
+pub use bracket_lengths::{bracket_length, bracket_length_parts};
 pub use contiguous_tokens::{
 	ContiguousTokensUpdate, append_contiguous_tokens, delete_contiguous_tokens,
 	insert_contiguous_tokens,

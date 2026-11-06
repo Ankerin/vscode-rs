@@ -5,9 +5,8 @@
 
 //! Composition of queued bracket-tree edits preserves the original packed two-dimensional lengths.
 
+use crate::bracket_lengths::{length_add, length_diff};
 use std::collections::VecDeque;
-
-const FACTOR: f64 = 67_108_864.0;
 
 #[derive(Clone, Copy)]
 struct Mapping {
@@ -122,32 +121,10 @@ fn push_edit(result: &mut Vec<[f64; 4]>, start: f64, end: f64, length: f64) -> O
 	Some(())
 }
 
-fn length_add(first: f64, second: f64) -> f64 {
-	let result = first + second;
-	if second >= FACTOR {
-		result - first % FACTOR
-	} else {
-		result
-	}
-}
-
-fn length_diff(first: f64, second: f64) -> f64 {
-	if second - first <= 0.0 {
-		return 0.0;
-	}
-	let first_line = (first / FACTOR).floor();
-	let second_line = (second / FACTOR).floor();
-	let second_column = second - second_line * FACTOR;
-	if first_line == second_line {
-		second_column - (first - first_line * FACTOR)
-	} else {
-		(second_line - first_line) * FACTOR + second_column
-	}
-}
-
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::bracket_lengths::FACTOR;
 
 	#[test]
 	fn composition_keeps_modified_splits_adjacent_joins_and_multiline_lengths() {

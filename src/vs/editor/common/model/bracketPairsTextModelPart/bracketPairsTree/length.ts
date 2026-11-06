@@ -7,11 +7,14 @@ import { splitLines } from '../../../../../base/common/strings.js';
 import { Position } from '../../../core/position.js';
 import { Range } from '../../../core/range.js';
 import { TextLength } from '../../../core/text/textLength.js';
+import { RustBracketLengthOperation, tryRustBracketLength, tryRustBracketLengthParts, tryRustBracketTextLength } from './rustBracketLengths.js';
 
 /**
  * The end must be greater than or equal to the start.
 */
 export function lengthDiff(startLineCount: number, startColumnCount: number, endLineCount: number, endColumnCount: number): Length {
+	const native = tryRustBracketLength(RustBracketLengthOperation.Difference, startLineCount, startColumnCount, endLineCount, endColumnCount);
+	if (native !== undefined) { return native as unknown as Length; }
 	return (startLineCount !== endLineCount)
 		? toLength(endLineCount - startLineCount, endColumnCount)
 		: toLength(0, endColumnCount - startColumnCount);
@@ -27,6 +30,8 @@ export type Length = { _brand: 'Length' };
 export const lengthZero = 0 as any as Length;
 
 export function lengthIsZero(length: Length): boolean {
+	const native = tryRustBracketLength(RustBracketLengthOperation.IsZero, length, 0);
+	if (native !== undefined) { return native !== 0; }
 	// eslint-disable-next-line local/code-no-any-casts, @typescript-eslint/no-explicit-any
 	return length as any as number === 0;
 }
@@ -42,6 +47,8 @@ const factor = 1000000;
 // */
 
 export function toLength(lineCount: number, columnCount: number): Length {
+	const native = tryRustBracketLength(RustBracketLengthOperation.Pack, lineCount, columnCount);
+	if (native !== undefined) { return native as unknown as Length; }
 	// llllllllllllllllllllllllllcccccccccccccccccccccccccc (52 bits)
 	//       line count (26 bits)    column count (26 bits)
 
@@ -53,6 +60,8 @@ export function toLength(lineCount: number, columnCount: number): Length {
 }
 
 export function lengthToObj(length: Length): TextLength {
+	const native = tryRustBracketLengthParts(length);
+	if (native !== undefined) { return new TextLength(native[0], native[1]); }
 	// eslint-disable-next-line local/code-no-any-casts, @typescript-eslint/no-explicit-any
 	const l = length as any as number;
 	const lineCount = Math.floor(l / factor);
@@ -61,6 +70,8 @@ export function lengthToObj(length: Length): TextLength {
 }
 
 export function lengthGetLineCount(length: Length): number {
+	const native = tryRustBracketLength(RustBracketLengthOperation.LineCount, length, 0);
+	if (native !== undefined) { return native; }
 	// eslint-disable-next-line local/code-no-any-casts, @typescript-eslint/no-explicit-any
 	return Math.floor(length as any as number / factor);
 }
@@ -79,6 +90,8 @@ export function lengthGetColumnCountIfZeroLineCount(length: Length): number {
 export function lengthAdd(length1: Length, length2: Length): Length;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function lengthAdd(l1: any, l2: any): Length {
+	const native = tryRustBracketLength(RustBracketLengthOperation.Add, l1, l2);
+	if (native !== undefined) { return native as unknown as Length; }
 	let r = l1 + l2;
 	if (l2 >= factor) { r = r - (l1 % factor); }
 	return r;
@@ -89,6 +102,8 @@ export function sumLengths<T>(items: readonly T[], lengthFn: (item: T) => Length
 }
 
 export function lengthEquals(length1: Length, length2: Length): boolean {
+	const native = tryRustBracketLength(RustBracketLengthOperation.Equals, length1, length2);
+	if (native !== undefined) { return native !== 0; }
 	return length1 === length2;
 }
 
@@ -96,6 +111,8 @@ export function lengthEquals(length1: Length, length2: Length): boolean {
  * Returns a non negative length `result` such that `lengthAdd(length1, result) = length2`, or zero if such length does not exist.
  */
 export function lengthDiffNonNegative(length1: Length, length2: Length): Length {
+	const native = tryRustBracketLength(RustBracketLengthOperation.NonNegativeDifference, length1, length2);
+	if (native !== undefined) { return native as unknown as Length; }
 	// eslint-disable-next-line local/code-no-any-casts, @typescript-eslint/no-explicit-any
 	const l1 = length1 as any as number;
 	// eslint-disable-next-line local/code-no-any-casts, @typescript-eslint/no-explicit-any
@@ -122,22 +139,30 @@ export function lengthDiffNonNegative(length1: Length, length2: Length): Length 
 }
 
 export function lengthLessThan(length1: Length, length2: Length): boolean {
+	const native = tryRustBracketLength(RustBracketLengthOperation.LessThan, length1, length2);
+	if (native !== undefined) { return native !== 0; }
 	// First, compare line counts, then column counts.
 	// eslint-disable-next-line local/code-no-any-casts, @typescript-eslint/no-explicit-any
 	return (length1 as any as number) < (length2 as any as number);
 }
 
 export function lengthLessThanEqual(length1: Length, length2: Length): boolean {
+	const native = tryRustBracketLength(RustBracketLengthOperation.LessThanEqual, length1, length2);
+	if (native !== undefined) { return native !== 0; }
 	// eslint-disable-next-line local/code-no-any-casts, @typescript-eslint/no-explicit-any
 	return (length1 as any as number) <= (length2 as any as number);
 }
 
 export function lengthGreaterThanEqual(length1: Length, length2: Length): boolean {
+	const native = tryRustBracketLength(RustBracketLengthOperation.GreaterThanEqual, length1, length2);
+	if (native !== undefined) { return native !== 0; }
 	// eslint-disable-next-line local/code-no-any-casts, @typescript-eslint/no-explicit-any
 	return (length1 as any as number) >= (length2 as any as number);
 }
 
 export function lengthToPosition(length: Length): Position {
+	const native = tryRustBracketLengthParts(length);
+	if (native !== undefined) { return new Position(native[0] + 1, native[1] + 1); }
 	// eslint-disable-next-line local/code-no-any-casts, @typescript-eslint/no-explicit-any
 	const l = length as any as number;
 	const lineCount = Math.floor(l / factor);
@@ -150,6 +175,12 @@ export function positionToLength(position: Position): Length {
 }
 
 export function lengthsToRange(lengthStart: Length, lengthEnd: Length): Range {
+	// Mixed/coercing inputs retain the original order of both coordinate decompositions.
+	if (typeof lengthStart === 'number' && typeof lengthEnd === 'number') {
+		const start = tryRustBracketLengthParts(lengthStart);
+		const end = tryRustBracketLengthParts(lengthEnd);
+		if (start !== undefined && end !== undefined) { return new Range(start[0] + 1, start[1] + 1, end[0] + 1, end[1] + 1); }
+	}
 	// eslint-disable-next-line local/code-no-any-casts, @typescript-eslint/no-explicit-any
 	const l = lengthStart as any as number;
 	const lineCount = Math.floor(l / factor);
@@ -172,6 +203,8 @@ export function lengthOfRange(range: Range): TextLength {
 }
 
 export function lengthCompare(length1: Length, length2: Length): number {
+	const native = tryRustBracketLength(RustBracketLengthOperation.Compare, length1, length2);
+	if (native !== undefined) { return native; }
 	// eslint-disable-next-line local/code-no-any-casts, @typescript-eslint/no-explicit-any
 	const l1 = length1 as any as number;
 	// eslint-disable-next-line local/code-no-any-casts, @typescript-eslint/no-explicit-any
@@ -180,11 +213,15 @@ export function lengthCompare(length1: Length, length2: Length): number {
 }
 
 export function lengthOfString(str: string): Length {
+	const native = tryRustBracketTextLength(str);
+	if (native !== undefined) { return toLength(native[0], native[1]); }
 	const lines = splitLines(str);
 	return toLength(lines.length - 1, lines[lines.length - 1].length);
 }
 
 export function lengthOfStringObj(str: string): TextLength {
+	const native = tryRustBracketTextLength(str);
+	if (native !== undefined) { return new TextLength(native[0], native[1]); }
 	const lines = splitLines(str);
 	return new TextLength(lines.length - 1, lines[lines.length - 1].length);
 }
@@ -198,5 +235,7 @@ export function lengthHash(length: Length): number {
 }
 
 export function lengthMax(length1: Length, length2: Length): Length {
+	const native = tryRustBracketLength(RustBracketLengthOperation.Max, length1, length2);
+	if (native !== undefined) { return native as unknown as Length; }
 	return length1 > length2 ? length1 : length2;
 }

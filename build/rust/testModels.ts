@@ -57,6 +57,7 @@ const testArgs = [
 	'--run', 'src/vs/editor/test/common/controller/cursorAtomicMoveOperations.test.ts',
 	'--run', 'src/vs/base/test/common/strings.test.ts',
 	'--run', 'src/vs/editor/test/common/model/bracketPairColorizer/combineTextEditInfos.test.ts',
+	'--run', 'src/vs/editor/test/common/model/bracketPairColorizer/beforeEditPositionMapper.test.ts',
 	'--run', 'src/vs/editor/test/common/model/bracketPairColorizer/getBracketPairsInRange.test.ts'
 ];
 for (const engine of ['existing', 'rust']) {
