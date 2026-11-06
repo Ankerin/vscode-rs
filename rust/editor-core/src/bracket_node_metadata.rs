@@ -13,13 +13,18 @@ pub struct BracketNodeNumber {
 	pub enumerable: bool,
 }
 
-/// Length, list height, and cached indentation have one owning record per AST facade.
-#[derive(Default)]
-pub struct BracketNodeMetadata {
-	fields: [Option<BracketNodeNumber>; 3],
+/// AST metadata and bracket parser/tokenizer cursors have one owning record per facade.
+pub struct BracketNodeMetadata<const N: usize = 3> {
+	fields: [Option<BracketNodeNumber>; N],
 }
 
-impl BracketNodeMetadata {
+impl<const N: usize> Default for BracketNodeMetadata<N> {
+	fn default() -> Self {
+		Self { fields: [None; N] }
+	}
+}
+
+impl<const N: usize> BracketNodeMetadata<N> {
 	/// Returns a copied scalar without exposing or duplicating the owning record.
 	pub fn get(&self, index: usize) -> Option<BracketNodeNumber> {
 		self.fields.get(index).copied().flatten()
@@ -47,8 +52,49 @@ mod tests {
 	use super::*;
 
 	#[test]
+	fn cursor_records_keep_all_five_fields_independent_and_reject_extra_slots() {
+		let mut metadata = BracketNodeMetadata::<5>::default();
+		for index in 0..5 {
+			metadata.define(
+				index,
+				BracketNodeNumber {
+					value: index as f64 - 1.0,
+					writable: index != 2,
+					enumerable: index != 3,
+				},
+			);
+		}
+		assert!(!metadata.define(
+			5,
+			BracketNodeNumber {
+				value: 99.0,
+				writable: true,
+				enumerable: true
+			}
+		));
+		metadata.remove(1);
+		let values: Vec<_> = (0..5)
+			.map(|index| {
+				metadata
+					.get(index)
+					.map(|field| (field.value, field.writable, field.enumerable))
+			})
+			.collect();
+		assert_eq!(
+			values,
+			vec![
+				Some((-1.0, true, true)),
+				None,
+				Some((1.0, false, true)),
+				Some((2.0, true, false)),
+				Some((3.0, true, true))
+			]
+		);
+	}
+
+	#[test]
 	fn metadata_preserves_number_bits_attributes_and_atomic_invalid_definitions() {
-		let mut metadata = BracketNodeMetadata::default();
+		let mut metadata = BracketNodeMetadata::<3>::default();
 		for value in [
 			-0.0,
 			f64::INFINITY,

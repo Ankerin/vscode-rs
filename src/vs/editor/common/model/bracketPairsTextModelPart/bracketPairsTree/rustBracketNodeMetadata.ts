@@ -25,9 +25,32 @@ export interface IRustBracketNodeMetadataModule {
 let registeredModule: IRustBracketNodeMetadataModule | undefined;
 const fieldNames = ['_length', 'listHeight', 'cachedMinIndentation'] as const;
 
+/** Numeric state schemas preserve each subsystem's existing field names and source shape. */
+export const enum RustBracketNumericStateKind {
+	PositionMapper,
+	NodeReader,
+	EditInfo,
+	Parser,
+	TextBufferTokenizer,
+	NonPeekableTokenizer,
+	FastTokenizer,
+	Token
+}
+
+const stateFieldNames: readonly (readonly string[])[] = [
+	['nextEditIdx', 'deltaOldToNewLineCount', 'deltaOldToNewColumnCount', 'deltaLineIdxInOld'],
+	['lastOffset'],
+	['startOffset', 'endOffset', 'newLength'],
+	['_itemsConstructed', '_itemsFromCache'],
+	['textBufferLineCount', 'textBufferLastLineLength', '_offset'],
+	['textBufferLineCount', 'textBufferLastLineLength', 'lineIdx', 'lineCharOffset', 'lineTokenOffset'],
+	['_offset', 'idx', 'length'],
+	['length', 'kind', 'bracketId']
+];
+
 /** Installs ownership for subsequently constructed AST nodes; existing nodes retain their owners. */
 export function registerRustBracketNodeMetadata(module: IRustBracketNodeMetadataModule): IDisposable {
-	if (typeof module.bracket_node_metadata_abi_version !== 'function' || module.bracket_node_metadata_abi_version() !== 1 || typeof module.bracket_node_metadata_live_count !== 'function' || typeof module.WasmBracketNodeMetadata !== 'function') {
+	if (typeof module.bracket_node_metadata_abi_version !== 'function' || module.bracket_node_metadata_abi_version() !== 2 || typeof module.bracket_node_metadata_live_count !== 'function' || typeof module.WasmBracketNodeMetadata !== 'function') {
 		throw new Error('The Rust bracket node metadata bindings do not match the owning AST contract');
 	}
 	if (registeredModule) {
@@ -43,6 +66,16 @@ export function registerRustBracketNodeMetadata(module: IRustBracketNodeMetadata
 
 /** Transfers configurable numeric data properties while preserving the original descriptor protocol. */
 export function ownRustBracketNodeMetadata<T extends object>(node: T): T {
+	return ownRustBracketNumbers(node, fieldNames);
+}
+
+/** Transfers live parser/tokenizer counters and coordinates through the same property contract. */
+export function ownRustBracketNumericState<T extends object>(state: T, kind: RustBracketNumericStateKind): T {
+	return ownRustBracketNumbers(state, stateFieldNames[kind]);
+}
+
+/** Shares descriptor compatibility while each subsystem retains its own native scalar record. */
+function ownRustBracketNumbers<T extends object>(node: T, fieldNames: readonly string[]): T {
 	if (!registeredModule) {
 		return node;
 	}

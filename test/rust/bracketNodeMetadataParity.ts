@@ -10,10 +10,19 @@ import { setTimeout } from 'node:timers/promises';
 import { test } from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { AstNode, ListAstNode, TextAstNode } from '../../src/vs/editor/common/model/bracketPairsTextModelPart/bracketPairsTree/ast.js';
-import { toLength } from '../../src/vs/editor/common/model/bracketPairsTextModelPart/bracketPairsTree/length.js';
+import { BeforeEditPositionMapper, TextEditInfo } from '../../src/vs/editor/common/model/bracketPairsTextModelPart/bracketPairsTree/beforeEditPositionMapper.js';
+import { LanguageAgnosticBracketTokens } from '../../src/vs/editor/common/model/bracketPairsTextModelPart/bracketPairsTree/brackets.js';
+import { lengthOfString, toLength } from '../../src/vs/editor/common/model/bracketPairsTextModelPart/bracketPairsTree/length.js';
+import { NodeReader } from '../../src/vs/editor/common/model/bracketPairsTextModelPart/bracketPairsTree/nodeReader.js';
+import { parseDocument } from '../../src/vs/editor/common/model/bracketPairsTextModelPart/bracketPairsTree/parser.js';
 import { IRustBracketNodeMetadataModule, ownRustBracketNodeMetadata, registerRustBracketNodeMetadata } from '../../src/vs/editor/common/model/bracketPairsTextModelPart/bracketPairsTree/rustBracketNodeMetadata.js';
 import { IRustTextBufferModule, registerRustTextBuffer } from '../../src/vs/editor/common/model/rustTextBuffer/rustTextBuffer.js';
 import { RustBracketLengthOperation, tryRustBracketLength } from '../../src/vs/editor/common/model/bracketPairsTextModelPart/bracketPairsTree/rustBracketLengths.js';
+import { DenseKeyProvider } from '../../src/vs/editor/common/model/bracketPairsTextModelPart/bracketPairsTree/smallImmutableSet.js';
+import { FastTokenizer, TextBufferTokenizer, Token } from '../../src/vs/editor/common/model/bracketPairsTextModelPart/bracketPairsTree/tokenizer.js';
+import { LanguageId, MetadataConsts } from '../../src/vs/editor/common/encodedTokenAttributes.js';
+import { ResolvedLanguageConfiguration } from '../../src/vs/editor/common/languages/languageConfigurationRegistry.js';
+import { LineTokens } from '../../src/vs/editor/common/tokens/lineTokens.js';
 
 interface IRustModule extends IRustTextBufferModule { default(options: { module_or_path: Uint8Array }): Promise<object> }
 
@@ -29,6 +38,43 @@ function withRust<T>(compute: () => T, module: IRustBracketNodeMetadataModule = 
 function snapshot(node: AstNode): object {
 	return { type: node.constructor.name, length: node.length, height: node.listHeight, keys: Reflect.ownKeys(node), metadata: ['_length', 'listHeight', 'cachedMinIndentation'].map(key => Object.getOwnPropertyDescriptor(node, key)), children: node.children.map(child => snapshot(child)) };
 }
+
+test('Rust owning bracket cursor state preserves edit mapping, cache readers, tokens, and incremental parsing', () => {
+	const numericDescriptors = (object: object, keys: readonly string[]) => keys.map(key => Object.getOwnPropertyDescriptor(object, key));
+	const tokenSnapshot = (token: Token | null) => token ? { kind: token.kind, length: token.length, id: token.bracketId, descriptors: numericDescriptors(token, ['length', 'kind', 'bracketId']) } : null;
+	let seed = 1451;
+	const random = (limit: number) => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed % limit; };
+	for (let trace = 0; trace < 64; trace++) {
+		const alphabet = ['(', ')', '[', ']', '{', '}', 'text', ' ', '\n', '\t', '😀'];
+		const text = Array.from({ length: 32 }, () => alphabet[random(alphabet.length)]).join('');
+		const run = () => {
+			const edits = [new TextEditInfo(toLength(0, 1), toLength(0, 3), toLength(1, 2)), new TextEditInfo(toLength(2, 1), toLength(2, 2), toLength(0, 4))];
+			const mapper = new BeforeEditPositionMapper(edits);
+			const mapping = Array.from({ length: 20 }, (_, offset) => ({ offset: mapper.getOffsetBeforeChange(toLength(Math.floor(offset / 5), offset % 5)), distance: mapper.getDistanceToNextChange(toLength(Math.floor(offset / 5), offset % 5)) }));
+			const tree = ListAstNode.create23(new TextAstNode(toLength(0, 2)), new TextAstNode(toLength(0, 3)), new TextAstNode(toLength(0, 5)));
+			const reader = new NodeReader(tree);
+			const nodes = Array.from({ length: 11 }, (_, offset) => { const node = reader.readLongestNodeAt(toLength(0, offset), () => true); return node ? snapshot(node) : null; });
+			const brackets = new LanguageAgnosticBracketTokens(new DenseKeyProvider(), language => new ResolvedLanguageConfiguration(language, { brackets: [['(', ')'], ['[', ']'], ['{', '}']] }));
+			const singleLanguage = brackets.getSingleLanguageBracketTokens('parity');
+			const fast = new FastTokenizer(text, singleLanguage);
+			const fastTokens: (object | null)[] = [];
+			let token: Token | null;
+			while ((token = fast.read()) !== null) { fastTokens.push(tokenSnapshot(token)); }
+			const createTokenizer = (value: string) => {
+				const lineTokens = value.split('\n').map(text => LineTokens.createFromTextAndMetadata([{ text, metadata: LanguageId.PlainText | MetadataConsts.BALANCED_BRACKETS_MASK }], { encodeLanguageId: () => LanguageId.PlainText, decodeLanguageId: () => 'parity' }));
+				return new TextBufferTokenizer({ getValue: () => value, getLineCount: () => lineTokens.length, getLineLength: line => lineTokens[line - 1].getLineContent().length, tokenization: { getLineTokens: line => lineTokens[line - 1] } }, brackets);
+			};
+			const tokenizer = createTokenizer(text);
+			const tokens: object[] = [];
+			while (tokenizer.peek()) { tokens.push({ peek: tokenSnapshot(tokenizer.peek()), read: tokenSnapshot(tokenizer.read()), offset: tokenizer.offset }); }
+			const lineReader = Object.getOwnPropertyDescriptor(tokenizer, 'reader')!.value as object;
+			const initial = parseDocument(new FastTokenizer(text, singleLanguage), [], undefined, true);
+			const updated = parseDocument(createTokenizer(text.slice(1)), [new TextEditInfo(toLength(0, 0), lengthOfString(text.slice(0, 1)), toLength(0, 0))], initial, false);
+			return { mapping, mapper: numericDescriptors(mapper, ['nextEditIdx', 'deltaOldToNewLineCount', 'deltaOldToNewColumnCount', 'deltaLineIdxInOld']), edits: edits.map(edit => numericDescriptors(edit, ['startOffset', 'endOffset', 'newLength'])), nodes, reader: numericDescriptors(reader, ['lastOffset']), fastTokens, fast: numericDescriptors(fast, ['_offset', 'idx', 'length']), tokens, tokenizer: numericDescriptors(tokenizer, ['textBufferLineCount', 'textBufferLastLineLength', '_offset']), lineReader: numericDescriptors(lineReader, ['textBufferLineCount', 'textBufferLastLineLength', 'lineIdx', 'lineCharOffset', 'lineTokenOffset']), initial: snapshot(initial), updated: snapshot(updated) };
+		};
+		assert.deepStrictEqual(withRust(run), run(), `Owning bracket cursor trace ${trace}`);
+	}
+});
 
 test('Rust owning bracket metadata preserves seeded AST mutation, clones, shallow aliases, and descriptors', () => {
 	let seed = 1423;

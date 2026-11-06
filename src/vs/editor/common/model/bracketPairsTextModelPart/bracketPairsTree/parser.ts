@@ -11,6 +11,7 @@ import { concat23Trees, concat23TreesOfSameHeight } from './concat23Trees.js';
 import { NodeReader } from './nodeReader.js';
 import { OpeningBracketId, Tokenizer, TokenKind } from './tokenizer.js';
 import { IRustBracketParserHost, RustBracketParserOperation, tryCanReuseRustBracketNode, tryParseRustBrackets } from './rustBracketParser.js';
+import { ownRustBracketNumericState, RustBracketNumericStateKind } from './rustBracketNodeMetadata.js';
 
 /**
  * Non incrementally built ASTs are immutable.
@@ -55,6 +56,7 @@ class Parser {
 
 		this.oldNodeReader = oldNode ? new NodeReader(oldNode) : undefined;
 		this.positionMapper = new BeforeEditPositionMapper(edits);
+		return ownRustBracketNumericState(this, RustBracketNumericStateKind.Parser);
 	}
 
 	parseDocument(): AstNode {

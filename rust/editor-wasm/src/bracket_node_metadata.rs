@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-//! Numeric AST fields live in Rust without retaining facade references or a second graph.
+//! Numeric AST and incremental parser fields live in Rust without retaining facade references.
 
 use std::cell::Cell;
 use vscode_editor_core::{BracketNodeMetadata, BracketNodeNumber};
@@ -13,10 +13,10 @@ thread_local! {
 	static LIVE_RECORDS: Cell<u32> = const { Cell::new(0) };
 }
 
-/// Owns numeric fields for one AST facade; generated finalization releases unreachable records.
+/// Owns numeric fields for one bracket facade; generated finalization releases unreachable records.
 #[wasm_bindgen]
 pub struct WasmBracketNodeMetadata {
-	metadata: BracketNodeMetadata,
+	metadata: BracketNodeMetadata<5>,
 }
 
 #[wasm_bindgen]
@@ -89,7 +89,7 @@ impl Drop for WasmBracketNodeMetadata {
 /// Versions the owning scalar metadata contract independently of AST traversal operations.
 #[wasm_bindgen]
 pub fn bracket_node_metadata_abi_version() -> u32 {
-	1
+	2
 }
 
 /// Exposes resource ownership to disposal tests without retaining a handle registry.

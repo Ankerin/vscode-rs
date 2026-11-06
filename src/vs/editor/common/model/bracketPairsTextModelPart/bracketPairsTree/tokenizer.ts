@@ -12,6 +12,7 @@ import { Length, lengthAdd, lengthDiff, lengthGetColumnCountIfZeroLineCount, len
 import { SmallImmutableSet } from './smallImmutableSet.js';
 import { IRustBracketTokenizerHost, IRustPeekableBracketTokenizerHost, tryReadRustBracketToken, tryReadRustPeekableBracketToken, trySetRustBracketTokenPosition, trySkipRustBracketTokens } from './rustBracketTokenizer.js';
 import { IRustFastBracketTokenizerHost, tryBuildRustFastBracketTokens } from './rustFastBracketTokenizer.js';
+import { ownRustBracketNumericState, RustBracketNumericStateKind } from './rustBracketNodeMetadata.js';
 
 export interface Tokenizer {
 	readonly offset: Length;
@@ -49,7 +50,9 @@ export class Token {
 		 */
 		readonly bracketIds: SmallImmutableSet<OpeningBracketId>,
 		readonly astNode: BracketAstNode | TextAstNode | undefined,
-	) { }
+	) {
+		return ownRustBracketNumericState(this, RustBracketNumericStateKind.Token);
+	}
 }
 
 export interface ITokenizerSource {
@@ -78,6 +81,7 @@ export class TextBufferTokenizer implements Tokenizer {
 		this.peeked = null;
 		this.textBufferLineCount = textModel.getLineCount();
 		this.textBufferLastLineLength = textModel.getLineLength(this.textBufferLineCount);
+		return ownRustBracketNumericState(this, RustBracketNumericStateKind.TextBufferTokenizer);
 	}
 
 	private _offset: Length;
@@ -157,6 +161,7 @@ class NonPeekableTextBufferTokenizer {
 	constructor(private readonly textModel: ITokenizerSource, private readonly bracketTokens: LanguageAgnosticBracketTokens) {
 		this.textBufferLineCount = textModel.getLineCount();
 		this.textBufferLastLineLength = textModel.getLineLength(this.textBufferLineCount);
+		return ownRustBracketNumericState(this, RustBracketNumericStateKind.NonPeekableTokenizer);
 	}
 
 	private lineIdx = 0;
@@ -362,7 +367,11 @@ export class FastTokenizer implements Tokenizer {
 
 		const tokens: Token[] = [];
 		const native = tryBuildRustFastBracketTokens(() => FastTokenizer.createRustHost(text, brackets, regexp, tokens));
-		if (native !== undefined) { this.length = native.length; this.tokens = tokens; return; }
+		if (native !== undefined) {
+			this.length = native.length;
+			this.tokens = tokens;
+			return ownRustBracketNumericState(this, RustBracketNumericStateKind.FastTokenizer);
+		}
 
 		let match: RegExpExecArray | null;
 		let curLineCount = 0;
@@ -444,6 +453,7 @@ export class FastTokenizer implements Tokenizer {
 
 		this.length = toLength(curLineCount, offset - lastLineBreakOffset);
 		this.tokens = tokens;
+		return ownRustBracketNumericState(this, RustBracketNumericStateKind.FastTokenizer);
 	}
 
 	get offset(): Length {

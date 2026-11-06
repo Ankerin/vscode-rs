@@ -8,6 +8,7 @@ import { Length, lengthAdd, lengthDiffNonNegative, lengthLessThanEqual, lengthOf
 import { TextLength } from '../../../core/text/textLength.js';
 import { IModelContentChange } from '../../mirrorTextModel.js';
 import { IRustBracketPositionMapperHost, tryAdjustRustBracketPosition, tryRustBracketChangeDistance, tryTranslateRustBracketPosition } from './rustBracketPositionMapper.js';
+import { ownRustBracketNumericState, RustBracketNumericStateKind } from './rustBracketNodeMetadata.js';
 
 export class TextEditInfo {
 	public static fromModelContentChanges(changes: IModelContentChange[]): TextEditInfo[] {
@@ -28,6 +29,7 @@ export class TextEditInfo {
 		public readonly endOffset: Length,
 		public readonly newLength: Length
 	) {
+		return ownRustBracketNumericState(this, RustBracketNumericStateKind.EditInfo);
 	}
 
 	toString(): string {
@@ -49,6 +51,7 @@ export class BeforeEditPositionMapper {
 		edits: readonly TextEditInfo[],
 	) {
 		this.edits = edits.map(edit => TextEditInfoCache.from(edit));
+		return ownRustBracketNumericState(this, RustBracketNumericStateKind.PositionMapper);
 	}
 
 	/**
