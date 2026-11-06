@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-//! Bracket scalar fields live in Rust; borrowed host primitives cannot retain facade references.
+//! Bracket fields live in Rust; host reference anchors remain visible to the JavaScript collector.
 
 use std::cell::Cell;
 use vscode_editor_core::{BracketNodeMetadata, BracketNodeProperty};
@@ -13,10 +13,10 @@ thread_local! {
 	static LIVE_RECORDS: Cell<u32> = const { Cell::new(0) };
 }
 
-/// Owns scalar fields for one bracket facade; generated finalization releases unreachable records.
+/// Owns fields for one bracket facade; generated finalization releases unreachable records.
 #[wasm_bindgen]
 pub struct WasmBracketNodeMetadata {
-	metadata: BracketNodeMetadata<7, ScalarValue>,
+	metadata: BracketNodeMetadata<ScalarValue>,
 }
 
 #[derive(Clone)]
@@ -24,6 +24,7 @@ enum ScalarValue {
 	Number(f64),
 	Boolean(bool),
 	Primitive(JsValue),
+	Reference(u32),
 }
 
 impl ScalarValue {
@@ -47,6 +48,7 @@ impl ScalarValue {
 			Self::Number(value) => JsValue::from_f64(value),
 			Self::Boolean(value) => JsValue::from_bool(value),
 			Self::Primitive(value) => value,
+			Self::Reference(value) => JsValue::from(value),
 		}
 	}
 }
@@ -54,11 +56,14 @@ impl ScalarValue {
 #[wasm_bindgen]
 impl WasmBracketNodeMetadata {
 	#[wasm_bindgen(constructor)]
-	pub fn new() -> Self {
-		LIVE_RECORDS.with(|count| count.set(count.get() + 1));
-		Self {
-			metadata: BracketNodeMetadata::default(),
+	pub fn new(field_count: u32) -> Result<Self, JsValue> {
+		if field_count > 16 {
+			return Err(JsValue::from_str("Invalid Rust bracket field schema"));
 		}
+		LIVE_RECORDS.with(|count| count.set(count.get() + 1));
+		Ok(Self {
+			metadata: BracketNodeMetadata::new(field_count as usize),
+		})
 	}
 
 	pub fn has(&self, index: u32) -> bool {
@@ -101,14 +106,42 @@ impl WasmBracketNodeMetadata {
 		Ok(())
 	}
 
+	/// The host anchor table resolves reference handles without native JavaScript graph roots.
+	pub fn reference(&self, index: u32) -> Option<u32> {
+		self.metadata.get(index as usize).and_then(|field| {
+			if let ScalarValue::Reference(reference) = field.value {
+				Some(reference)
+			} else {
+				None
+			}
+		})
+	}
+
+	/// Stores a reference handle and its property attributes atomically.
+	pub fn define_reference(
+		&mut self,
+		index: u32,
+		reference: u32,
+		writable: bool,
+		enumerable: bool,
+	) -> Result<(), JsValue> {
+		if !self.metadata.define(
+			index as usize,
+			BracketNodeProperty {
+				value: ScalarValue::Reference(reference),
+				writable,
+				enumerable,
+			},
+		) {
+			return Err(JsValue::from_str(
+				"Invalid Rust bracket node metadata field",
+			));
+		}
+		Ok(())
+	}
+
 	pub fn remove(&mut self, index: u32) {
 		self.metadata.remove(index as usize);
-	}
-}
-
-impl Default for WasmBracketNodeMetadata {
-	fn default() -> Self {
-		Self::new()
 	}
 }
 
@@ -121,7 +154,7 @@ impl Drop for WasmBracketNodeMetadata {
 /// Versions the owning scalar metadata contract independently of AST traversal operations.
 #[wasm_bindgen]
 pub fn bracket_node_metadata_abi_version() -> u32 {
-	3
+	4
 }
 
 /// Exposes resource ownership to disposal tests without retaining a handle registry.

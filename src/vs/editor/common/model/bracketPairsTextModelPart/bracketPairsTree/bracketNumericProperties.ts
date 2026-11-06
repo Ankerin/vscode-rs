@@ -6,9 +6,12 @@
 /** Primitive values cannot introduce a native ownership cycle through a host facade. */
 export type BracketScalarValue = number | boolean | string | bigint | null | undefined;
 
+/** Object/function/symbol values use host anchors addressed by native property handles. */
+export type BracketPropertyValue = BracketScalarValue | object | symbol;
+
 /** Native scalar/array records expose primitive data and the original property attributes. */
 export interface IBracketNumberProperties {
-	get(index: number): BracketScalarValue;
+	get(index: number): BracketPropertyValue;
 	attributes(index: number): number;
 }
 

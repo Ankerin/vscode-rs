@@ -177,5 +177,6 @@ class TextEditInfoCache {
 		this.endOffsetBeforeObj = lengthToObj(endOffset);
 		this.endOffsetAfterObj = lengthToObj(lengthAdd(startOffset, textLength));
 		this.offsetObj = lengthToObj(startOffset);
+		return ownRustBracketNumericState(this, RustBracketNumericStateKind.EditCache);
 	}
 }

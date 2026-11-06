@@ -17,19 +17,22 @@ pub struct BracketNodeProperty<V> {
 pub type BracketNodeNumber = BracketNodeProperty<f64>;
 
 /// AST metadata and bracket parser/tokenizer cursors have one owning record per facade.
-pub struct BracketNodeMetadata<const N: usize = 3, V = f64> {
-	fields: [Option<BracketNodeProperty<V>>; N],
+pub struct BracketNodeMetadata<V = f64> {
+	field_count: usize,
+	fields: Vec<Option<BracketNodeProperty<V>>>,
 }
 
-impl<const N: usize, V> Default for BracketNodeMetadata<N, V> {
-	fn default() -> Self {
+impl<V> BracketNodeMetadata<V> {
+	/// Bounds the schema while allocating slots only as the owning facade defines fields.
+	pub fn new(field_count: usize) -> Self {
 		Self {
-			fields: std::array::from_fn(|_| None),
+			field_count,
+			fields: Vec::new(),
 		}
 	}
 }
 
-impl<const N: usize, V: Clone> BracketNodeMetadata<N, V> {
+impl<V: Clone> BracketNodeMetadata<V> {
 	/// Returns a copied scalar without exposing or duplicating the owning record.
 	pub fn get(&self, index: usize) -> Option<BracketNodeProperty<V>> {
 		self.fields.get(index).cloned().flatten()
@@ -37,10 +40,13 @@ impl<const N: usize, V: Clone> BracketNodeMetadata<N, V> {
 
 	/// Defines a supported field atomically; unsupported indices leave the record unchanged.
 	pub fn define(&mut self, index: usize, field: BracketNodeProperty<V>) -> bool {
-		let Some(slot) = self.fields.get_mut(index) else {
+		if index >= self.field_count {
 			return false;
-		};
-		*slot = Some(field);
+		}
+		if index >= self.fields.len() {
+			self.fields.resize_with(index + 1, || None);
+		}
+		self.fields[index] = Some(field);
 		true
 	}
 
@@ -58,7 +64,7 @@ mod tests {
 
 	#[test]
 	fn owned_payloads_keep_prior_values_after_replacement_and_release_removed_fields() {
-		let mut metadata = BracketNodeMetadata::<2, String>::default();
+		let mut metadata = BracketNodeMetadata::<String>::new(2);
 		metadata.define(
 			0,
 			BracketNodeProperty {
@@ -91,7 +97,7 @@ mod tests {
 
 	#[test]
 	fn cursor_records_keep_all_five_fields_independent_and_reject_extra_slots() {
-		let mut metadata = BracketNodeMetadata::<5>::default();
+		let mut metadata = BracketNodeMetadata::new(5);
 		for index in 0..5 {
 			metadata.define(
 				index,
@@ -132,7 +138,7 @@ mod tests {
 
 	#[test]
 	fn metadata_preserves_number_bits_attributes_and_atomic_invalid_definitions() {
-		let mut metadata = BracketNodeMetadata::<3>::default();
+		let mut metadata = BracketNodeMetadata::new(3);
 		for value in [
 			-0.0,
 			f64::INFINITY,

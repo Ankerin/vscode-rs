@@ -4,14 +4,16 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { IDisposable, toDisposable } from '../../../../../base/common/lifecycle.js';
-import { BracketScalarValue, bracketNumberDescriptor, isBracketScalarValue, mergeBracketNumberDescriptor } from './bracketNumericProperties.js';
+import { BracketPropertyValue, BracketScalarValue, bracketNumberDescriptor, isBracketScalarValue, mergeBracketNumberDescriptor } from './bracketNumericProperties.js';
 
-/** Native scalar fields exclude values that can retain facade/child references. */
+/** Native properties retain primitive payloads or handles into a collector-visible host anchor table. */
 interface IRustBracketNodeMetadata {
 	has(index: number): boolean;
 	get(index: number): BracketScalarValue;
 	attributes(index: number): number;
 	define(index: number, value: BracketScalarValue, writable: boolean, enumerable: boolean): void;
+	reference(index: number): number | undefined;
+	define_reference(index: number, reference: number, writable: boolean, enumerable: boolean): void;
 	remove(index: number): void;
 	free(): void;
 }
@@ -20,11 +22,11 @@ interface IRustBracketNodeMetadata {
 export interface IRustBracketNodeMetadataModule {
 	bracket_node_metadata_abi_version(): number;
 	bracket_node_metadata_live_count(): number;
-	WasmBracketNodeMetadata: { new(): IRustBracketNodeMetadata };
+	WasmBracketNodeMetadata: { new(fieldCount: number): IRustBracketNodeMetadata };
 }
 
 let registeredModule: IRustBracketNodeMetadataModule | undefined;
-const fieldNames = ['_length', 'listHeight', 'cachedMinIndentation'] as const;
+const fieldNames = ['_length', 'listHeight', 'cachedMinIndentation', 'openingBracket', 'child', 'closingBracket', 'missingOpeningBracketIds', '_missingOpeningBracketIds', '_item1', '_item2', '_item3', 'bracketInfo', 'bracketIds', '_children'] as const;
 
 /** Scalar state schemas preserve each subsystem's existing field names and source shape. */
 export const enum RustBracketNumericStateKind {
@@ -37,25 +39,27 @@ export const enum RustBracketNumericStateKind {
 	FastTokenizer,
 	Token,
 	SmallSet,
-	BracketTokens
+	BracketTokens,
+	EditCache
 }
 
 const stateFieldNames: readonly (readonly string[])[] = [
-	['nextEditIdx', 'deltaOldToNewLineCount', 'deltaOldToNewColumnCount', 'deltaLineIdxInOld'],
-	['lastOffset'],
+	['nextEditIdx', 'deltaOldToNewLineCount', 'deltaOldToNewColumnCount', 'deltaLineIdxInOld', 'edits'],
+	['lastOffset', 'nextNodes', 'offsets', 'idxs'],
 	['startOffset', 'endOffset', 'newLength'],
-	['_itemsConstructed', '_itemsFromCache', 'createImmutableLists'],
-	['textBufferLineCount', 'textBufferLastLineLength', '_offset', 'didPeek', 'peeked'],
-	['textBufferLineCount', 'textBufferLastLineLength', 'lineIdx', 'lineCharOffset', 'lineTokenOffset', 'line', 'peekedToken'],
-	['_offset', 'idx', 'length', 'text'],
-	['length', 'kind', 'bracketId'],
-	['items'],
-	['hasRegExp', '_regExpGlobal']
+	['_itemsConstructed', '_itemsFromCache', 'createImmutableLists', 'tokenizer', 'oldNodeReader', 'positionMapper'],
+	['textBufferLineCount', 'textBufferLastLineLength', '_offset', 'didPeek', 'peeked', 'textModel', 'bracketTokens', 'reader'],
+	['textBufferLineCount', 'textBufferLastLineLength', 'lineIdx', 'lineCharOffset', 'lineTokenOffset', 'line', 'peekedToken', 'textModel', 'bracketTokens', 'lineTokens'],
+	['_offset', 'idx', 'length', 'text', 'tokens'],
+	['length', 'kind', 'bracketId', 'bracketIds', 'astNode'],
+	['items', 'additionalItems'],
+	['hasRegExp', '_regExpGlobal', 'map'],
+	['endOffsetBeforeObj', 'endOffsetAfterObj', 'offsetObj']
 ];
 
 /** Installs ownership for subsequently constructed AST nodes; existing nodes retain their owners. */
 export function registerRustBracketNodeMetadata(module: IRustBracketNodeMetadataModule): IDisposable {
-	if (typeof module.bracket_node_metadata_abi_version !== 'function' || module.bracket_node_metadata_abi_version() !== 3 || typeof module.bracket_node_metadata_live_count !== 'function' || typeof module.WasmBracketNodeMetadata !== 'function') {
+	if (typeof module.bracket_node_metadata_abi_version !== 'function' || module.bracket_node_metadata_abi_version() !== 4 || typeof module.bracket_node_metadata_live_count !== 'function' || typeof module.WasmBracketNodeMetadata !== 'function') {
 		throw new Error('The Rust bracket node metadata bindings do not match the owning AST contract');
 	}
 	if (registeredModule) {
@@ -69,12 +73,12 @@ export function registerRustBracketNodeMetadata(module: IRustBracketNodeMetadata
 	});
 }
 
-/** Transfers configurable scalar data properties while preserving the original descriptor protocol. */
+/** Transfers configurable AST data properties while preserving the original descriptor protocol. */
 export function ownRustBracketNodeMetadata<T extends object>(node: T): T {
 	return ownRustBracketNumbers(node, fieldNames);
 }
 
-/** Transfers live parser/tokenizer coordinates, flags, and borrowed text through the same contract. */
+/** Transfers live parser/tokenizer state and reference handles through the same property contract. */
 export function ownRustBracketNumericState<T extends object>(state: T, kind: RustBracketNumericStateKind): T {
 	return ownRustBracketNumbers(state, stateFieldNames[kind]);
 }
@@ -85,18 +89,34 @@ function ownRustBracketNumbers<T extends object>(node: T, fieldNames: readonly s
 		return node;
 	}
 	const order = Reflect.ownKeys(node);
-	let record: IRustBracketNodeMetadata | undefined = new registeredModule.WasmBracketNodeMetadata();
-	if (typeof record.has !== 'function' || typeof record.get !== 'function' || typeof record.attributes !== 'function' || typeof record.define !== 'function' || typeof record.remove !== 'function' || typeof record.free !== 'function') {
+	let record: IRustBracketNodeMetadata | undefined = new registeredModule.WasmBracketNodeMetadata(fieldNames.length);
+	if (typeof record.has !== 'function' || typeof record.get !== 'function' || typeof record.attributes !== 'function' || typeof record.define !== 'function' || typeof record.reference !== 'function' || typeof record.define_reference !== 'function' || typeof record.remove !== 'function' || typeof record.free !== 'function') {
 		record.free?.();
 		throw new Error('The Rust bracket node metadata record does not match the owning AST contract');
 	}
+	// Strong host anchors are visible to the collector, including cycles back to the owning facade.
+	const references = new Map<number, object | symbol>();
+	const valueOf = (index: number): BracketPropertyValue => {
+		const reference = record!.reference(index);
+		return reference === undefined ? record!.get(index) : references.get(reference);
+	};
+	const properties = { get: valueOf, attributes: (index: number) => record!.attributes(index) };
+	const define = (index: number, descriptor: PropertyDescriptor) => {
+		if (isBracketScalarValue(descriptor.value)) {
+			record!.define(index, descriptor.value, !!descriptor.writable, !!descriptor.enumerable);
+			references.delete(index);
+		} else {
+			record!.define_reference(index, index, !!descriptor.writable, !!descriptor.enumerable);
+			references.set(index, descriptor.value as object | symbol);
+		}
+	};
 	const indexOf = (key: string | symbol) => typeof key === 'string' ? fieldNames.findIndex(name => name === key) : -1;
 	const descriptorOf = (key: string | symbol): PropertyDescriptor | undefined => {
 		const index = indexOf(key);
 		if (!record || index < 0 || !record.has(index)) {
 			return Reflect.getOwnPropertyDescriptor(node, key);
 		}
-		return bracketNumberDescriptor(record, index);
+		return bracketNumberDescriptor(properties, index);
 	};
 	const transferred: { key: string; descriptor: PropertyDescriptor }[] = [];
 	let deleted = 0;
@@ -104,8 +124,8 @@ function ownRustBracketNumbers<T extends object>(node: T, fieldNames: readonly s
 		for (let index = 0; index < fieldNames.length; index++) {
 			const key = fieldNames[index];
 			const descriptor = Reflect.getOwnPropertyDescriptor(node, key);
-			if (descriptor?.configurable && Object.hasOwn(descriptor, 'value') && isBracketScalarValue(descriptor.value)) {
-				record.define(index, descriptor.value, !!descriptor.writable, !!descriptor.enumerable);
+			if (descriptor?.configurable && Object.hasOwn(descriptor, 'value')) {
+				define(index, descriptor);
 				transferred.push({ key, descriptor });
 			}
 		}
@@ -125,7 +145,7 @@ function ownRustBracketNumbers<T extends object>(node: T, fieldNames: readonly s
 	return new Proxy(node, {
 		get: (target, key, receiver) => {
 			const index = indexOf(key);
-			return record && index >= 0 && record.has(index) ? record.get(index) : Reflect.get(target, key, receiver);
+			return record && index >= 0 && record.has(index) ? valueOf(index) : Reflect.get(target, key, receiver);
 		},
 		has: (target, key) => {
 			const index = indexOf(key);
@@ -143,14 +163,15 @@ function ownRustBracketNumbers<T extends object>(node: T, fieldNames: readonly s
 				if (!next) {
 					return false;
 				}
-				if (next.configurable && Object.hasOwn(next, 'value') && isBracketScalarValue(next.value)) {
-					record.define(index, next.value, !!next.writable, !!next.enumerable);
+				if (next.configurable && Object.hasOwn(next, 'value')) {
+					define(index, next);
 					Reflect.deleteProperty(target, key);
 				} else {
 					if (!Reflect.defineProperty(target, key, next)) {
 						return false;
 					}
 					record.remove(index);
+					references.delete(index);
 				}
 			} else if (!Reflect.defineProperty(target, key, descriptor)) {
 				return false;
@@ -174,6 +195,7 @@ function ownRustBracketNumbers<T extends object>(node: T, fieldNames: readonly s
 			const index = indexOf(key);
 			if (record && index >= 0 && record.has(index)) {
 				record.remove(index);
+				references.delete(index);
 			} else if (!Reflect.deleteProperty(target, key)) {
 				return false;
 			}
@@ -198,6 +220,7 @@ function ownRustBracketNumbers<T extends object>(node: T, fieldNames: readonly s
 				}
 				record.free();
 				record = undefined;
+				references.clear();
 			}
 			return Reflect.preventExtensions(target);
 		}

@@ -107,7 +107,7 @@ test('Rust scalar ownership preserves UTF-16 strings, flags, nullish values, big
 
 test('Rust scalar records own supported payloads and reject references atomically in all seven slots', () => {
 	const before = rust.bracket_node_metadata_live_count();
-	const record = new rust.WasmBracketNodeMetadata();
+	const record = new rust.WasmBracketNodeMetadata(7);
 	try {
 		const values = [-0, true, 'line\uD800\r\n\uDC00', 2n ** 80n, null, undefined, Number.NaN];
 		values.forEach((value, index) => record.define(index, value, !!(index % 2), true));
@@ -120,6 +120,75 @@ test('Rust scalar records own supported payloads and reject references atomicall
 		assert.deepStrictEqual(values.map((_value, index) => record.has(index)), values.map(() => false));
 	} finally { record.free(); }
 	assert.strictEqual(rust.bracket_node_metadata_live_count(), before);
+});
+
+test('Rust reference slots own live AST fields through collector-visible anchors and release frozen records', () => {
+	let record: InstanceType<IRustBracketNodeMetadataModule['WasmBracketNodeMetadata']> | undefined;
+	const module: IRustBracketNodeMetadataModule = {
+		...rust, WasmBracketNodeMetadata: class extends rust.WasmBracketNodeMetadata {
+			constructor(fieldCount: number) { super(fieldCount); record = this; }
+		}
+	};
+	const child = { marker: 'child' };
+	const callback = () => child;
+	const symbol = Symbol('reference anchor');
+	const array = [child];
+	const target = { _length: 1, child, bracketInfo: symbol, _children: array, closingBracket: callback };
+	const before = rust.bracket_node_metadata_live_count();
+	const facade = withRust(() => ownRustBracketNodeMetadata(target), module);
+	assert.deepStrictEqual({ targetKeys: Reflect.ownKeys(target), references: [4, 5, 11, 13].map(index => record!.reference(index)), identities: [facade.child === child, facade.bracketInfo === symbol, facade._children === array, facade.closingBracket === callback] }, { targetKeys: [], references: [4, 5, 11, 13], identities: [true, true, true, true] });
+	const states = [null, child, undefined, symbol, callback, array].map(value => {
+		Object.defineProperty(facade, 'child', { value });
+		return { identical: Object.is(Reflect.get(facade, 'child'), value), reference: record!.reference(4), value: record!.get(4), targetHasChild: Object.hasOwn(target, 'child') };
+	});
+	assert.deepStrictEqual(states, [
+		{ identical: true, reference: undefined, value: null, targetHasChild: false },
+		{ identical: true, reference: 4, value: 4, targetHasChild: false },
+		{ identical: true, reference: undefined, value: undefined, targetHasChild: false },
+		{ identical: true, reference: 4, value: 4, targetHasChild: false },
+		{ identical: true, reference: 4, value: 4, targetHasChild: false },
+		{ identical: true, reference: 4, value: 4, targetHasChild: false }
+	]);
+	Object.freeze(facade);
+	assert.deepStrictEqual({ nativeCount: rust.bracket_node_metadata_live_count(), frozen: Object.isFrozen(facade), aliases: [Object.is(facade.child, array), facade._children === array, facade.bracketInfo === symbol, facade.closingBracket === callback] }, { nativeCount: before, frozen: true, aliases: [true, true, true, true] });
+});
+
+test('Rust reference definitions validate schema bounds and preserve prior handles on failures', () => {
+	const before = rust.bracket_node_metadata_live_count();
+	assert.throws(() => new rust.WasmBracketNodeMetadata(17), /Invalid Rust bracket field schema/);
+	const record = new rust.WasmBracketNodeMetadata(2);
+	try {
+		record.define_reference(0, 123, false, true);
+		assert.throws(() => record.define_reference(2, 999, true, true), /Invalid Rust bracket node/);
+		assert.deepStrictEqual({ reference: record.reference(0), value: record.get(0), attributes: record.attributes(0), missing: record.has(1), outside: record.reference(2) }, { reference: 123, value: 123, attributes: 2, missing: false, outside: undefined });
+		record.define(0, false, true, false);
+		assert.deepStrictEqual({ reference: record.reference(0), value: record.get(0), attributes: record.attributes(0) }, { reference: undefined, value: false, attributes: 1 });
+		record.remove(0);
+		assert.strictEqual(record.has(0), false);
+	} finally { record.free(); }
+	assert.strictEqual(rust.bracket_node_metadata_live_count(), before);
+});
+
+test('Rust reference replacement and deletion release former children while their parent remains live', async () => {
+	assert.ok(global.gc, 'The compatibility runner exposes garbage collection');
+	const parent = withRust(() => ownRustBracketNodeMetadata({ child: null }));
+	const children: WeakRef<object>[] = [];
+	withRust(() => {
+		for (let index = 0; index < 256; index++) {
+			const child = new TextAstNode(toLength(0, index));
+			children.push(new WeakRef(child));
+			Object.defineProperty(parent, 'child', { value: child, writable: true, enumerable: true, configurable: true });
+			if (index % 2) { Reflect.deleteProperty(parent, 'child'); }
+		}
+	});
+	Object.defineProperty(parent, 'child', { value: null, writable: true, enumerable: true, configurable: true });
+	for (let attempt = 0; attempt < 100; attempt++) {
+		await setTimeout(10);
+		global.gc();
+		if (children.every(child => child.deref() === undefined)) { break; }
+	}
+	assert.deepStrictEqual({ retained: children.filter(child => child.deref()).length, child: parent.child }, { retained: 0, child: null });
+	Object.freeze(parent);
 });
 
 test('Rust tokenizer constructors store flags, borrowed text, and nullable caches in actual native records', () => {
