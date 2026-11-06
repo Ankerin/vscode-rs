@@ -7,6 +7,7 @@ import { Range } from '../../../core/range.js';
 import { Length, lengthAdd, lengthDiffNonNegative, lengthLessThanEqual, lengthOfString, lengthToObj, positionToLength, toLength } from './length.js';
 import { TextLength } from '../../../core/text/textLength.js';
 import { IModelContentChange } from '../../mirrorTextModel.js';
+import { IRustBracketPositionMapperHost, tryAdjustRustBracketPosition, tryRustBracketChangeDistance, tryTranslateRustBracketPosition } from './rustBracketPositionMapper.js';
 
 export class TextEditInfo {
 	public static fromModelContentChanges(changes: IModelContentChange[]): TextEditInfo[] {
@@ -64,6 +65,8 @@ export class BeforeEditPositionMapper {
 	*/
 	getDistanceToNextChange(offset: Length): Length | null {
 		this.adjustNextEdit(offset);
+		const native = tryRustBracketChangeDistance(offset, () => BeforeEditPositionMapper.createRustHost(this));
+		if (native !== undefined) { return native.distance; }
 
 		const nextEdit = this.edits[this.nextEditIdx];
 		const nextChangeOffset = nextEdit ? this.translateOldToCur(nextEdit.offsetObj) : null;
@@ -75,6 +78,8 @@ export class BeforeEditPositionMapper {
 	}
 
 	private translateOldToCur(oldOffsetObj: TextLength): Length {
+		const native = tryTranslateRustBracketPosition(oldOffsetObj, false, () => BeforeEditPositionMapper.createRustHost(this));
+		if (native !== undefined) { return native.offset; }
 		if (oldOffsetObj.lineCount === this.deltaLineIdxInOld) {
 			return toLength(oldOffsetObj.lineCount + this.deltaOldToNewLineCount, oldOffsetObj.columnCount + this.deltaOldToNewColumnCount);
 		} else {
@@ -83,6 +88,8 @@ export class BeforeEditPositionMapper {
 	}
 
 	private translateCurToOld(newOffset: Length): Length {
+		const native = tryTranslateRustBracketPosition(newOffset, true, () => BeforeEditPositionMapper.createRustHost(this));
+		if (native !== undefined) { return native.offset; }
 		const offsetObj = lengthToObj(newOffset);
 		if (offsetObj.lineCount - this.deltaOldToNewLineCount === this.deltaLineIdxInOld) {
 			return toLength(offsetObj.lineCount - this.deltaOldToNewLineCount, offsetObj.columnCount - this.deltaOldToNewColumnCount);
@@ -92,6 +99,7 @@ export class BeforeEditPositionMapper {
 	}
 
 	private adjustNextEdit(offset: Length) {
+		if (tryAdjustRustBracketPosition(offset, () => BeforeEditPositionMapper.createRustHost(this))) { return; }
 		while (this.nextEditIdx < this.edits.length) {
 			const nextEdit = this.edits[this.nextEditIdx];
 
@@ -119,6 +127,33 @@ export class BeforeEditPositionMapper {
 				break;
 			}
 		}
+	}
+
+	/** Static capabilities preserve the receiver's original field and private-method observations. */
+	private static createRustHost(mapper: BeforeEditPositionMapper): IRustBracketPositionMapperHost {
+		return {
+			add: (first, second) => first + second,
+			subtract: (first, second) => first - second,
+			equal: (first, second) => first === second,
+			component: (coordinate, column) => column ? coordinate.columnCount : coordinate.lineCount,
+			delta: field => field === 0 ? mapper.deltaOldToNewLineCount : field === 1 ? mapper.deltaOldToNewColumnCount : mapper.deltaLineIdxInOld,
+			setDelta: (field, value) => {
+				if (field === 0) { mapper.deltaOldToNewLineCount = value; }
+				else if (field === 1) { mapper.deltaOldToNewColumnCount = value; }
+				else { mapper.deltaLineIdxInOld = value; }
+			},
+			pack: (line, column) => toLength(line, column),
+			parts: offset => lengthToObj(offset),
+			hasNextEdit: () => mapper.nextEditIdx < mapper.edits.length,
+			nextEdit: () => mapper.edits[mapper.nextEditIdx],
+			editExists: edit => !!edit,
+			editCoordinate: (edit, field) => field === 0 ? edit.offsetObj : field === 1 ? edit.endOffsetBeforeObj : edit.endOffsetAfterObj,
+			translateEdit: (edit, field) => mapper.translateOldToCur(field === 0 ? edit.offsetObj : field === 1 ? edit.endOffsetBeforeObj : edit.endOffsetAfterObj),
+			incrementEdit: () => { mapper.nextEditIdx++; },
+			lessEqual: (first, second) => lengthLessThanEqual(first, second),
+			isNull: offset => offset === null,
+			distance: (first, second) => lengthDiffNonNegative(first, second)
+		};
 	}
 }
 
