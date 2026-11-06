@@ -11,6 +11,7 @@ mod bracket_lengths;
 mod contiguous_tokens;
 mod cursor_columns;
 mod decorations;
+mod ecmascript;
 mod folding;
 mod guides;
 mod indentation;
@@ -19,6 +20,7 @@ mod model_edits;
 mod normalize_indentation;
 mod search;
 mod sequence_diff;
+mod small_immutable_set;
 mod sparse_tokens;
 mod text_buffer;
 mod text_change;
@@ -62,6 +64,7 @@ pub use sequence_diff::{
 	dynamic_programming_diff, myers_diff, optimize_sequence_diffs, refine_character_diff,
 	refine_line_diff,
 };
+pub use small_immutable_set::{small_set_add, small_set_merge, small_set_query};
 pub use sparse_tokens::{
 	SparseTokenEdit, SparseTokensUpdate, edit_sparse_tokens, find_sparse_line_tokens,
 	remove_sparse_tokens, split_sparse_tokens,

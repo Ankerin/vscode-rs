@@ -3,7 +3,10 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { canTrackRustSmallSetSlice, trackRustSmallSet, trackRustSmallSetItems, tryAddRustSmallSet, tryMergeRustSmallSet, tryQueryRustSmallSet } from './rustSmallImmutableSet.js';
+
 const emptyArr: number[] = [];
+trackRustSmallSetItems(emptyArr);
 
 /**
  * Represents an immutable set that works best for a small number of elements (less than 32).
@@ -37,10 +40,20 @@ export class SmallImmutableSet<T> {
 		private readonly items: number,
 		private readonly additionalItems: readonly number[]
 	) {
+		if (new.target === SmallImmutableSet) { trackRustSmallSet(this); }
 	}
 
 	public add(value: T, keyProvider: IDenseKeyProvider<T>): SmallImmutableSet<T> {
 		const key = keyProvider.getKey(value);
+		const native = tryAddRustSmallSet(this, key);
+		if (native !== undefined) {
+			if (native[1] === 1) { return this; }
+			if (native[2] === 1) { return SmallImmutableSet.create(native[0], this.additionalItems); }
+			const newItems: number[] = [];
+			for (let index = 3; index < native.length; index++) { newItems.push(native[index]); }
+			trackRustSmallSetItems(newItems);
+			return SmallImmutableSet.create(native[0], newItems);
+		}
 		let idx = key >> 5; // divided by 32
 		if (idx === 0) {
 			// fast path
@@ -52,17 +65,22 @@ export class SmallImmutableSet<T> {
 		}
 		idx--;
 
-		const newItems = this.additionalItems.slice(0);
+		const additionalItems = this.additionalItems;
+		const standardSlice = canTrackRustSmallSetSlice(additionalItems);
+		const newItems = additionalItems.slice(0);
 		while (newItems.length < idx) {
 			newItems.push(0);
 		}
 		newItems[idx] |= 1 << (key & 31);
+		if (standardSlice) { trackRustSmallSetItems(newItems); }
 
 		return SmallImmutableSet.create(this.items, newItems);
 	}
 
 	public has(value: T, keyProvider: IDenseKeyProvider<T>): boolean {
 		const key = keyProvider.getKey(value);
+		const native = tryQueryRustSmallSet(this, undefined, key, 0);
+		if (native !== undefined) { return native; }
 		let idx = key >> 5; // divided by 32
 		if (idx === 0) {
 			// fast path
@@ -74,6 +92,19 @@ export class SmallImmutableSet<T> {
 	}
 
 	public merge(other: SmallImmutableSet<T>): SmallImmutableSet<T> {
+		const native = tryMergeRustSmallSet(this, other);
+		if (native !== undefined) {
+			const merged = native[0];
+			if (this.additionalItems === emptyArr && other.additionalItems === emptyArr) {
+				if (merged === this.items) { return this; }
+				if (merged === other.items) { return other; }
+				return SmallImmutableSet.create(merged, emptyArr);
+			}
+			const newItems: number[] = [];
+			for (let index = 1; index < native.length; index++) { newItems.push(native[index]); }
+			trackRustSmallSetItems(newItems);
+			return SmallImmutableSet.create(merged, newItems);
+		}
 		const merged = this.items | other.items;
 
 		if (this.additionalItems === emptyArr && other.additionalItems === emptyArr) {
@@ -95,10 +126,13 @@ export class SmallImmutableSet<T> {
 			newItems.push(item1 | item2);
 		}
 
+		trackRustSmallSetItems(newItems);
 		return SmallImmutableSet.create(merged, newItems);
 	}
 
 	public intersects(other: SmallImmutableSet<T>): boolean {
+		const native = tryQueryRustSmallSet(this, other, 0, 1);
+		if (native !== undefined) { return native; }
 		if ((this.items & other.items) !== 0) {
 			return true;
 		}
@@ -113,6 +147,8 @@ export class SmallImmutableSet<T> {
 	}
 
 	public equals(other: SmallImmutableSet<T>): boolean {
+		const native = tryQueryRustSmallSet(this, other, 0, 2);
+		if (native !== undefined) { return native; }
 		if (this.items !== other.items) {
 			return false;
 		}

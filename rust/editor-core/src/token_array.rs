@@ -8,6 +8,8 @@
 const MAX_TOKENS: usize = 262_144;
 const MAX_TEXT: f64 = (4 * 1024 * 1024) as f64;
 
+use crate::ecmascript::to_uint32;
+
 /// Returns lengths/metadata or substring endpoints/metadata for every original line token.
 pub fn line_token_array(tokens: &[u32], text_length: usize, text: bool) -> Option<Vec<f64>> {
 	let (records, tail) = tokens.as_chunks::<2>();
@@ -75,11 +77,7 @@ pub fn create_line_token_array(parameters: &[[f64; 2]]) -> Option<Vec<u32>> {
 		if offset > MAX_TEXT {
 			return None;
 		}
-		let metadata = if metadata.is_finite() {
-			metadata.trunc().rem_euclid(4_294_967_296.0) as u32
-		} else {
-			0
-		};
+		let metadata = to_uint32(metadata);
 		result.extend_from_slice(&[offset as u32, metadata]);
 	}
 	Some(result)

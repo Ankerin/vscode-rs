@@ -58,6 +58,11 @@ const testArgs = [
 	'--run', 'src/vs/base/test/common/strings.test.ts',
 	'--run', 'src/vs/editor/test/common/model/bracketPairColorizer/combineTextEditInfos.test.ts',
 	'--run', 'src/vs/editor/test/common/model/bracketPairColorizer/beforeEditPositionMapper.test.ts',
+	'--run', 'src/vs/editor/test/common/model/bracketPairColorizer/length.test.ts',
+	'--run', 'src/vs/editor/test/common/model/bracketPairColorizer/smallImmutableSet.test.ts',
+	'--run', 'src/vs/editor/test/common/model/bracketPairColorizer/tokenizer.test.ts',
+	'--run', 'src/vs/editor/test/common/model/bracketPairColorizer/brackets.test.ts',
+	'--run', 'src/vs/editor/test/common/model/bracketPairColorizer/concat23Trees.test.ts',
 	'--run', 'src/vs/editor/test/common/model/bracketPairColorizer/getBracketPairsInRange.test.ts'
 ];
 for (const engine of ['existing', 'rust']) {

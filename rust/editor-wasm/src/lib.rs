@@ -21,6 +21,7 @@ mod decorations;
 mod line_tokens;
 mod model_edits;
 mod sequence_diff;
+mod small_immutable_set;
 mod sparse_tokens_store;
 mod text_change;
 mod text_shape;
