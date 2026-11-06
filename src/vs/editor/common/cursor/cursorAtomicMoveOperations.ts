@@ -5,6 +5,7 @@
 
 import { CharCode } from '../../../base/common/charCode.js';
 import { CursorColumns } from '../core/cursorColumns.js';
+import { tryComputeRustAtomicPosition, tryComputeRustWhitespaceColumn } from '../core/rustCursorColumns.js';
 
 export const enum Direction {
 	Left,
@@ -20,6 +21,8 @@ export class AtomicTabMoveOperations {
 	 * **Note** `position` and the return value are 0-based.
 	 */
 	public static whitespaceVisibleColumn(lineContent: string, position: number, tabSize: number): [number, number, number] {
+		const native = standardAtomicMethods(false) ? tryComputeRustWhitespaceColumn(lineContent, position, tabSize) : undefined;
+		if (native !== undefined) { return native; }
 		const lineLength = lineContent.length;
 		let visibleColumn = 0;
 		let prevTabStopPosition = -1;
@@ -61,6 +64,8 @@ export class AtomicTabMoveOperations {
 	 * **Note**: `position` and the return value are 0-based.
 	 */
 	public static atomicPosition(lineContent: string, position: number, tabSize: number, direction: Direction): number {
+		const native = standardAtomicMethods(true) ? tryComputeRustAtomicPosition(lineContent, position, tabSize, direction) : undefined;
+		if (native !== undefined) { return native; }
 		const lineLength = lineContent.length;
 
 		// Get the 0-based visible column corresponding to the position, or return
@@ -157,4 +162,18 @@ export class AtomicTabMoveOperations {
 		}
 		return -1;
 	}
+}
+
+const atomicMethods = [
+	{ target: CursorColumns, name: 'nextRenderTabStop' },
+	{ target: AtomicTabMoveOperations, name: 'whitespaceVisibleColumn' }
+].map(({ target, name }) => ({ target, name, descriptor: Object.getOwnPropertyDescriptor(target, name) }));
+
+/** Preserves the original base-class callbacks, including detached calls and subclass receivers. */
+function standardAtomicMethods(includeWhitespace: boolean): boolean {
+	return atomicMethods.every(({ target, name, descriptor }, index) => {
+		if (index === 1 && !includeWhitespace) { return true; }
+		const current = Object.getOwnPropertyDescriptor(target, name);
+		return current?.value === descriptor?.value && current?.get === descriptor?.get;
+	});
 }

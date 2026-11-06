@@ -12,6 +12,7 @@ import { getGraphemeBreakType } from '../../src/vs/base/common/strings.js';
 import { CursorColumns } from '../../src/vs/editor/common/core/cursorColumns.js';
 import { IRustCursorColumnsModule, registerRustCursorColumns, tryComputeRustCursorColumn } from '../../src/vs/editor/common/core/rustCursorColumns.js';
 import { IRustTextBufferModule, registerRustTextBuffer } from '../../src/vs/editor/common/model/rustTextBuffer/rustTextBuffer.js';
+import { AtomicTabMoveOperations, Direction } from '../../src/vs/editor/common/cursor/cursorAtomicMoveOperations.js';
 
 interface IRustModule extends IRustTextBufferModule {
 	default(options: { module_or_path: Uint8Array }): Promise<object>;
@@ -80,4 +81,61 @@ test('Rust cursor columns retain subclass callbacks, detached static calls, over
 	const registration = registerRustTextBuffer(rust);
 	try { assert.throws(() => registerRustCursorColumns(rust), /already registered/); } finally { registration.dispose(); }
 	assert.strictEqual(tryComputeRustCursorColumn('a', 2, 4, 0), undefined);
+});
+
+test('Rust atomic tabs preserve full indentation, strict positions, midpoint ties, and exceptional numeric directions', () => {
+	let seed = 911;
+	let whitespaceCalls = 0;
+	let positionCalls = 0;
+	const random = (limit: number) => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed % limit; };
+	const sizes = [1, 2, 4, 8, 0, -0, 1.5, -2, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.MAX_VALUE, Number.MIN_VALUE];
+	const directions: Direction[] = [Direction.Left, Direction.Right, Direction.Nearest, -1, 3, 0.5, Number.NaN, Number.POSITIVE_INFINITY];
+	const module: IRustCursorColumnsModule = {
+		...rust,
+		cursor_whitespace_column: (text, position, size) => { whitespaceCalls++; return rust.cursor_whitespace_column(text, position, size); },
+		cursor_atomic_position: (text, position, size, direction) => { positionCalls++; return rust.cursor_atomic_position(text, position, size, direction); }
+	};
+	for (let trace = 0; trace < 2048; trace++) {
+		const text = Array.from({ length: random(48) }, () => random(4) === 0 ? '\t' : ' ').join('') + ['', 'text', '\uD800\uDC00', '\r\n', '\u00A0'][trace % 5];
+		const positions = [-3, -0, 0, 0.5, 1, random(text.length + 5), text.length, text.length + 1, Number.NaN, Number.POSITIVE_INFINITY];
+		const size = sizes[trace % sizes.length];
+		const run = () => positions.map(position => ({
+			whitespace: AtomicTabMoveOperations.whitespaceVisibleColumn(text, position, size),
+			positions: directions.map(direction => AtomicTabMoveOperations.atomicPosition(text, position, size, direction))
+		}));
+		assert.deepStrictEqual(withRust(run, module), run(), `Atomic tab trace ${trace}`);
+	}
+	assert.deepStrictEqual([whitespaceCalls, positionCalls], [20480, 163840], 'Both public atomic-tab entry points use the native implementations');
+});
+
+test('Rust atomic tabs preserve base-class callbacks, string accessors, subclass and detached calls, and fallback domains', () => {
+	class CustomAtomicTabs extends AtomicTabMoveOperations { }
+	Object.defineProperty(CustomAtomicTabs, 'whitespaceVisibleColumn', { value: () => { throw new Error('Subclass callback must not be called'); } });
+	const detached = AtomicTabMoveOperations.atomicPosition;
+	const run = () => [CustomAtomicTabs.atomicPosition('    x', 2, 4, Direction.Left), detached('    x', 2, 4, Direction.Nearest)];
+	assert.deepStrictEqual(withRust(run), run());
+	const failure = new Error('Original atomic tab callback failure');
+	const tabStop = Object.getOwnPropertyDescriptor(CursorColumns, 'nextRenderTabStop')!;
+	Object.defineProperty(CursorColumns, 'nextRenderTabStop', { configurable: true, get: () => { throw failure; } });
+	try {
+		assert.throws(() => withRust(() => AtomicTabMoveOperations.whitespaceVisibleColumn('\tx', 1, 4)), error => error === failure);
+		assert.throws(() => withRust(() => AtomicTabMoveOperations.atomicPosition('    x', 1, 4, Direction.Right)), error => error === failure);
+	} finally { Object.defineProperty(CursorColumns, 'nextRenderTabStop', tabStop); }
+	const whitespace = Object.getOwnPropertyDescriptor(AtomicTabMoveOperations, 'whitespaceVisibleColumn')!;
+	Object.defineProperty(AtomicTabMoveOperations, 'whitespaceVisibleColumn', { configurable: true, get: () => { throw failure; } });
+	try { assert.throws(() => withRust(() => AtomicTabMoveOperations.atomicPosition('', 0, 4, Direction.Left)), error => error === failure); }
+	finally { Object.defineProperty(AtomicTabMoveOperations, 'whitespaceVisibleColumn', whitespace); }
+	const character = Object.getOwnPropertyDescriptor(String.prototype, 'charCodeAt')!;
+	Object.defineProperty(String.prototype, 'charCodeAt', { configurable: true, get: () => { throw failure; } });
+	try {
+		assert.throws(() => withRust(() => AtomicTabMoveOperations.whitespaceVisibleColumn('    x', 1, 4)), error => error === failure);
+		assert.deepStrictEqual(withRust(() => AtomicTabMoveOperations.whitespaceVisibleColumn('text', 0, 4)), [-1, -1, 0]);
+	} finally { Object.defineProperty(String.prototype, 'charCodeAt', character); }
+	const boxed = Object('    x') as never;
+	assert.strictEqual(withRust(() => AtomicTabMoveOperations.atomicPosition(boxed, 2, 4, Direction.Left)), 0);
+	assert.strictEqual(rust.cursor_atomic_position('a'.repeat(4 * 1024 * 1024 + 1), 0, 4, 1), undefined);
+	assert.throws(() => withRust(() => AtomicTabMoveOperations.whitespaceVisibleColumn('', 0, 4), { ...rust, cursor_whitespace_column: () => new Float64Array(2) }), /whitespace column result/);
+	assert.throws(() => withRust(() => AtomicTabMoveOperations.atomicPosition('', 0, 4, Direction.Left), { ...rust, cursor_atomic_position: () => 'invalid' as never }), /atomic position result/);
+	assert.throws(() => registerRustTextBuffer({ ...rust, cursor_atomic_position: undefined as never }), /column contract/);
+	assert.strictEqual(withRust(() => AtomicTabMoveOperations.atomicPosition('    x', '2' as never, 4, Direction.Left)), -1);
 });

@@ -19,7 +19,7 @@ extern "C" {
 /// Versions cursor arithmetic and the repository's exact grapheme and width contracts.
 #[wasm_bindgen]
 pub fn cursor_columns_abi_version() -> u32 {
-	1
+	2
 }
 
 /// Traverses only requested units without transferring or retaining a second full line.
@@ -61,6 +61,54 @@ pub fn cursor_tab_stop(column: f64, size: f64, previous: bool) -> f64 {
 	} else {
 		vscode_editor_core::next_cursor_tab_stop(column, size)
 	}
+}
+
+/// Returns the three original indentation coordinates using borrowed host units.
+#[wasm_bindgen]
+pub fn cursor_whitespace_column(
+	text: JsString,
+	position: f64,
+	tab_size: f64,
+) -> Result<Option<Vec<f64>>, JsValue> {
+	if text.length() > 4 * 1024 * 1024 {
+		return Ok(None);
+	}
+	let result = vscode_editor_core::whitespace_visible_column(
+		text.length() as usize,
+		position,
+		tab_size,
+		|offset| {
+			text.unchecked_ref::<Text>()
+				.character(offset as u32)
+				.map(|value| value as u16)
+		},
+	)?;
+	Ok(Some(result.to_vec()))
+}
+
+/// Traverses initial indentation and rejects partial stops before returning an atomic position.
+#[wasm_bindgen]
+pub fn cursor_atomic_position(
+	text: JsString,
+	position: f64,
+	tab_size: f64,
+	direction: f64,
+) -> Result<Option<f64>, JsValue> {
+	if text.length() > 4 * 1024 * 1024 {
+		return Ok(None);
+	}
+	let result = vscode_editor_core::atomic_tab_position(
+		text.length() as usize,
+		position,
+		tab_size,
+		direction,
+		|offset| {
+			text.unchecked_ref::<Text>()
+				.character(offset as u32)
+				.map(|value| value as u16)
+		},
+	)?;
+	Ok(Some(result))
 }
 
 /// Exposes the exact classification contract for exhaustive differential validation.

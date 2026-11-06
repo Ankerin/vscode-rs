@@ -1,6 +1,6 @@
 # Rust Editor
 
-This workspace starts the Rust migration of Code OSS. The full editor has not been rewritten. The current implementation replaces text storage, buffer edit transactions, indentation queries/folding/guides, cursor columns, token adjustment and syntax line-state ownership, the advanced document diff pipeline, and open undo batch storage when explicitly enabled; the existing workbench, editor rendering, higher-level model validation/versioning, undo service, extension host, and desktop shell remain in place.
+This workspace starts the Rust migration of Code OSS. The full editor has not been rewritten. The current implementation replaces text storage, buffer edit transactions, indentation queries/folding/guides, cursor columns and atomic-tab movement, token adjustment and syntax line-state ownership, the advanced document diff pipeline, and open undo batch storage when explicitly enabled; the existing workbench, editor rendering, higher-level model validation/versioning, undo service, extension host, and desktop shell remain in place.
 
 See [Architecture](ARCHITECTURE.md) for the complete target, subsystem boundaries, migration order, and acceptance gates. See [Contributing](CONTRIBUTING.md) for formatting, validation, and compatibility requirements.
 
@@ -15,7 +15,7 @@ See [Architecture](ARCHITECTURE.md) for the complete target, subsystem boundarie
 | `../src/vs/editor/common/services/textModelSync/` | Rust-backed editor worker mirror storage and lifecycle | Implemented; follows the renderer's opt-in initialization |
 | `../src/vs/editor/common/diff/defaultLinesDiffComputer/` | Complete native advanced diff with display ranges, moves, and raw edits | Implemented; follows the core registration |
 | `../src/vs/editor/common/core/rustTextChanges.ts` | Native composition and owning storage for open undo batches | Implemented; follows the core registration |
-| `../src/vs/editor/common/core/rustCursorColumns.ts` | Native visible/status-bar columns, UTF-16/grapheme traversal, and tab stops | Implemented; follows the core registration |
+| `../src/vs/editor/common/core/rustCursorColumns.ts` | Native visible/status-bar columns, UTF-16/grapheme traversal, tab stops, and atomic indentation movement | Implemented; follows the core registration |
 | `../src/vs/editor/common/tokens/rustTokens.ts` | Native metadata composition, sparse/contiguous editing, and syntax store creation | Implemented; follows the core registration |
 | `../build/rust/` | Binding generation and compatibility test runner | Implemented |
 | `../test/rust/` | Tests against the existing buffer and text model | Implemented |
@@ -154,6 +154,8 @@ Token callback traversal checks compare 512 live-array traces for both sequence 
 Sparse line-selection checks compare 1,024 seeded record streams before/after external mutation and removal. They retain duplicate boundaries, incomplete ordering, inactive record suffixes, original byte offsets, held view mutation, zero-active-count reads, provider subarray failures, detached sources, malformed encodings, and unsupported numeric states. Native dispatch is verified through public SparseMultilineTokens queries. Tokens ABI 11 passes 94 differential tests, 60 native tests, 499 canonical tests per implementation, and the Chromium worker bootstrap test. Persistent piece ownership, diagnostic traversal, tokenizers, and rendering remain separate work.
 
 Cursor column checks compare every Unicode code point with the original grapheme classifier and 2,048 seeded UTF-16 texts across visible/status-bar/inverse queries, verifying 51,200 actual native dispatches. They retain surrogate-interior prefixes, combining/spacing marks, Hangul, regional indicators, ZWJ sequences, approximate width rules, midpoint preference, fractions, negative sizes, NaN/infinities, signed zero, subclass callbacks, detached calls, and atomic registration rollback. Native tests verify short traversal over a million-unit source and reader failure propagation without unrelated reads. Cursor-columns ABI 1 passes 98 differential tests, 62 native tests, 508 canonical tests per implementation, and the Chromium worker bootstrap test. Existing CursorColumns and atomic-tab unit suites are included in the canonical selector. General grapheme iterators, other cursor movement/state, view coordinates, and rendering remain separate work.
+
+Atomic-tab checks compare 2,048 seeded indentation streams across ten positions, thirteen tab-size domains, and eight directions, verifying 20,480 native whitespace queries and 163,840 native movements. They retain strict position equality, complete-stop validation, partial-indentation fallback, midpoint ties, line-end checks, exceptional numbers, signed zero, invalid-direction behavior, base-class overrides, string accessors, subclass and detached calls, and registration rollback. Cursor-columns ABI 2 passes 100 differential tests, 64 native tests, 508 canonical tests per implementation, and the Chromium worker bootstrap test. General grapheme iterators, other cursor movement/state, view coordinates, and rendering remain separate work.
 
 ## Benchmark
 
