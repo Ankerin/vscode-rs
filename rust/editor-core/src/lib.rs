@@ -131,8 +131,8 @@ pub use text_buffer::{BufferError, Position, TextBuffer, TextEdit, TextSnapshot}
 pub use text_change::{CompressedTextChange, TextChange, UndoChangeBatch, compress_text_changes};
 pub use text_chunk::{TextChunk, TextChunkIter};
 pub use text_search::{
-	TextSearchHost, WordBoundaryHost, is_valid_word_match, next_text_search_match,
-	reset_text_search,
+	LineMatchHost, TextSearchHost, WordBoundaryHost, collect_line_matches, is_valid_word_match,
+	next_text_search_match, reset_text_search,
 };
 pub use token_array::{create_line_token_array, line_token_array, slice_token_array};
 pub use tokens::{TokensError, merge_semantic_tokens};

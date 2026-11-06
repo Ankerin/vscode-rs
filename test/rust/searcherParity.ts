@@ -9,7 +9,8 @@ import { resolve } from 'node:path';
 import { test } from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { WordCharacterClass, WordCharacterClassifier } from '../../src/vs/editor/common/core/wordCharacterClassifier.js';
-import { Searcher, isValidMatch } from '../../src/vs/editor/common/model/textModelSearch.js';
+import { Searcher, TextModelSearch, isValidMatch } from '../../src/vs/editor/common/model/textModelSearch.js';
+import { FindMatch, SearchData } from '../../src/vs/editor/common/model.js';
 import { IRustTextSearchModule, registerRustTextSearch } from '../../src/vs/editor/common/model/rustTextSearch.js';
 import { IRustTextBufferModule, registerRustTextBuffer } from '../../src/vs/editor/common/model/rustTextBuffer/rustTextBuffer.js';
 import { RustBracketLengthOperation, tryRustBracketLength } from '../../src/vs/editor/common/model/bracketPairsTextModelPart/bracketPairsTree/rustBracketLengths.js';
@@ -27,6 +28,11 @@ function withRust<T>(compute: () => T, module: IRustTextSearchModule = rust): T 
 function state(searcher: Searcher, regex: RegExp): object {
 	return { start: Object.getOwnPropertyDescriptor(searcher, '_prevMatchStartIndex')!.value, length: Object.getOwnPropertyDescriptor(searcher, '_prevMatchLength')!.value, lastIndex: regex.lastIndex };
 }
+
+// Exercise the integrated private collection boundary independently of model validation.
+const lineSearch = TextModelSearch as unknown as {
+	_findMatchesInLine(searchData: SearchData, text: string, lineNumber: number, delta: number, count: number, result: FindMatch[], captures: boolean, limit: number): number;
+};
 
 test('Rust Searcher preserves seeded regex captures, Unicode zero-width matches, word filtering, and resets', () => {
 	const patterns = ['(?:)', '^|$', '\\b', '(?=x)', '.', '(?<word>\\w*)', 'x+', '(?:😀|\\uD800)', '[\\r\\n]+', '(?<=x)y'];
@@ -244,5 +250,112 @@ test('Rust search word boundaries retain classifier failure identity and unusual
 			return isValidMatch(classifier, 'axb', 3, 1, 1);
 		};
 		assert.strictEqual(withRust(run), run());
+	}
+});
+
+test('Rust line search collection preserves literal/regex results, captures, limits, and existing array entries', () => {
+	let calls = 0;
+	const module: IRustTextSearchModule = { ...rust, collect_text_search_matches: (...args) => { calls++; return rust.collect_text_search_matches(...args); } };
+	for (const text of ['', 'x', 'x x x', 'axb x ax', '\uD83D\uDE00x\uD800', '\rx\nx']) {
+		for (const pattern of ['x', '(?:)', '(?<word>x*)', '\\b', '.', '(?=x)']) {
+			for (const captures of [false, true]) {
+				for (const literal of [false, true]) {
+					for (const limit of [0, 1, 2, 20]) {
+						const run = () => {
+							const regex = new RegExp(pattern, 'gu');
+							const data = new SearchData(regex, new WordCharacterClassifier('-', []), literal ? 'x' : null);
+							const result: FindMatch[] = [];
+							const count = lineSearch._findMatchesInLine(data, text, 3, 7, 2, result, captures, limit);
+							return { count, result, lastIndex: regex.lastIndex };
+						};
+						assert.deepStrictEqual(withRust(run, module), run());
+					}
+				}
+			}
+		}
+	}
+	assert.strictEqual(calls, 576, 'Line collection enters the native implementation');
+});
+
+test('Rust line search collection retains live source/data/result proxies and regex capture observations', () => {
+	for (const literal of [true, false]) {
+		const run = () => {
+			const observations: string[] = [];
+			const content = 'x x';
+			const text = {
+				get length() { observations.push('text:length'); return content.length; },
+				get indexOf() { observations.push('text:indexOf'); return (search: string, index: number) => { observations.push(`find:${search}:${index}`); return content.indexOf(search, index); }; },
+				[Symbol.toPrimitive]: () => { observations.push('text:primitive'); return content; }
+			};
+			const regex = /(?<word>x)/g;
+			regex.exec = text => {
+				observations.push('regex:exec');
+				const match = RegExp.prototype.exec.call(regex, text);
+				return match ? new Proxy(match, { get: (target, key, receiver) => { observations.push(`match:${String(key)}`); return Reflect.get(target, key, receiver); } }) : null;
+			};
+			const data = new Proxy(new SearchData(regex, null, literal ? 'x' : null), {
+				get: (target, key, receiver) => { observations.push(`data:${String(key)}`); return Reflect.get(target, key, receiver); }
+			});
+			const result = new Proxy<FindMatch[]>([], { set: (target, key, value, receiver) => { observations.push(`result:${String(key)}`); return Reflect.set(target, key, value, receiver); } });
+			const count = lineSearch._findMatchesInLine(data, text as unknown as string, 4, 2, 0, result, !literal, 10);
+			return { count, result, observations };
+		};
+		assert.deepStrictEqual(withRust(run), run());
+	}
+});
+
+test('Rust line search collection preserves numeric coercions, exceptional operands, and postfix result indices', () => {
+	const values = [undefined, null, '1', 0n, Number.NaN, -0, -0.5, Number.POSITIVE_INFINITY, Symbol('operand')];
+	for (const literal of [true, false]) {
+		for (const slot of [0, 1, 2]) {
+			for (const value of values) {
+				const run = () => {
+					const args = [0, 0, 10];
+					args[slot] = value as unknown as number;
+					const result: FindMatch[] = [];
+					const regex = /x/g;
+					let count: number | undefined;
+					let error: string | undefined;
+					try { count = lineSearch._findMatchesInLine(new SearchData(regex, null, literal ? 'x' : null), 'x x', 1, args[0], args[1], result, false, args[2]); }
+					catch (failure) { error = failure instanceof Error ? failure.name : 'non-error'; }
+					return { count, entries: Object.entries(result), keys: Object.keys(result), lastIndex: regex.lastIndex, error };
+				};
+				assert.deepStrictEqual(withRust(run), run());
+			}
+		}
+	}
+	const run = () => {
+		const observations: string[] = [];
+		const operand = (name: string, value: number) => {
+			const dynamic = { [Symbol.toPrimitive]: (hint: string) => { observations.push(`${name}:${hint}`); return value; } };
+			return dynamic as unknown as number;
+		};
+		const result: FindMatch[] = [];
+		const count = lineSearch._findMatchesInLine(new SearchData(/x/g, null, 'x'), 'x x', 1, operand('delta', 2), operand('count', 0), result, false, operand('limit', 1));
+		return { count, result, observations };
+	};
+	assert.deepStrictEqual(withRust(run), run());
+});
+
+test('Rust line search collection preserves failure identities and partially written aliased results', () => {
+	const failure = new Error('Original line search failure');
+	for (const literal of [true, false]) {
+		for (const mode of ['write', 'limit', 'exec', 'frozen']) {
+			const run = () => {
+				const regex = /x/g;
+				let calls = 0;
+				if (mode === 'exec') { regex.exec = text => { if (++calls === 2) { throw failure; } return RegExp.prototype.exec.call(regex, text); }; }
+				const target: FindMatch[] = [];
+				const result = mode === 'write' ? new Proxy(target, { set: (target, key, value, receiver) => { if (key === '1') { throw failure; } return Reflect.set(target, key, value, receiver); } }) : target;
+				if (mode === 'frozen') { Object.freeze(target); }
+				const dynamicLimit = { [Symbol.toPrimitive]: () => { throw failure; } };
+				const limit = mode === 'limit' ? dynamicLimit as unknown as number : 10;
+				let caught: string | undefined;
+				try { lineSearch._findMatchesInLine(new SearchData(regex, null, literal ? 'x' : null), 'x x', 1, 0, 0, result, false, limit); }
+				catch (error) { if (mode === 'frozen') { assert.ok(error instanceof TypeError); caught = 'TypeError'; } else { assert.strictEqual(error, failure); caught = 'original'; } }
+				return { result, calls, lastIndex: regex.lastIndex, caught };
+			};
+			assert.deepStrictEqual(withRust(run), run());
+		}
 	}
 });

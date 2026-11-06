@@ -156,6 +156,110 @@ pub fn is_valid_word_match<H: WordBoundaryHost>(
 		&& right_is_word_boundary(host, text_length, start, length)?)
 }
 
+/// Live line-search capabilities preserve aliased result arrays and original regex/factory calls.
+pub trait LineMatchHost {
+	type Value;
+	type Error;
+
+	fn number(&self, value: f64) -> Self::Value;
+	fn add(&self, first: &Self::Value, second: &Self::Value) -> Result<Self::Value, Self::Error>;
+	fn negate(&self, value: &Self::Value) -> Result<Self::Value, Self::Error>;
+	fn increment(&self, value: &Self::Value) -> Result<(Self::Value, Self::Value), Self::Error>;
+	fn equal(&self, first: &Self::Value, second: &Self::Value) -> Result<bool, Self::Error>;
+	fn at_least(&self, first: &Self::Value, second: &Self::Value) -> Result<bool, Self::Error>;
+	fn truthy(&self, value: &Self::Value) -> bool;
+	fn word_separators(&self) -> Result<Self::Value, Self::Error>;
+	fn capture_matches(&self) -> bool;
+	fn simple_search(&self) -> Result<Self::Value, Self::Error>;
+	fn search_length(&self, value: &Self::Value) -> Result<Self::Value, Self::Error>;
+	fn text_length(&self) -> Result<Self::Value, Self::Error>;
+	fn index_of(
+		&self,
+		search: &Self::Value,
+		index: &Self::Value,
+	) -> Result<Self::Value, Self::Error>;
+	fn valid_match(
+		&self,
+		words: &Self::Value,
+		text_length: &Self::Value,
+		start: &Self::Value,
+		length: &Self::Value,
+	) -> Result<bool, Self::Error>;
+	fn write_literal(
+		&self,
+		index: &Self::Value,
+		start: &Self::Value,
+		end: &Self::Value,
+	) -> Result<(), Self::Error>;
+	fn create_searcher(&self) -> Result<Self::Value, Self::Error>;
+	fn reset(&self, searcher: &Self::Value) -> Result<(), Self::Error>;
+	fn next(&self, searcher: &Self::Value) -> Result<Self::Value, Self::Error>;
+	fn match_start(&self, matched: &Self::Value) -> Result<Self::Value, Self::Error>;
+	fn match_length(&self, matched: &Self::Value) -> Result<Self::Value, Self::Error>;
+	fn write_regex(
+		&self,
+		index: &Self::Value,
+		start: &Self::Value,
+		end: &Self::Value,
+		matched: &Self::Value,
+	) -> Result<(), Self::Error>;
+}
+
+/// Collects one line's matches, enforcing limits only after each accepted result as before.
+pub fn collect_line_matches<H: LineMatchHost>(
+	host: &H,
+	mut count: H::Value,
+	delta: &H::Value,
+	limit: &H::Value,
+) -> Result<H::Value, H::Error> {
+	let words = host.word_separators()?;
+	if !host.capture_matches() && host.truthy(&host.simple_search()?) {
+		let search = host.simple_search()?;
+		let length = host.search_length(&search)?;
+		let text_length = host.text_length()?;
+		let mut last = host.negate(&length)?;
+		loop {
+			last = host.index_of(&search, &host.add(&last, &length)?)?;
+			if host.equal(&last, &host.number(-1.0))? {
+				return Ok(count);
+			}
+			if !host.truthy(&words) || host.valid_match(&words, &text_length, &last, &length)? {
+				let (index, next) = host.increment(&count)?;
+				count = next;
+				let start = host.add(&host.add(&last, &host.number(1.0))?, delta)?;
+				let end = host.add(
+					&host.add(&host.add(&last, &host.number(1.0))?, &length)?,
+					delta,
+				)?;
+				host.write_literal(&index, &start, &end)?;
+				if host.at_least(&count, limit)? {
+					return Ok(count);
+				}
+			}
+		}
+	}
+	let searcher = host.create_searcher()?;
+	host.reset(&searcher)?;
+	loop {
+		let matched = host.next(&searcher)?;
+		if !host.truthy(&matched) {
+			return Ok(count);
+		}
+		let (index, next) = host.increment(&count)?;
+		count = next;
+		let start = host.add(
+			&host.add(&host.match_start(&matched)?, &host.number(1.0))?,
+			delta,
+		)?;
+		let end_base = host.add(&host.match_start(&matched)?, &host.number(1.0))?;
+		let end = host.add(&host.add(&end_base, &host.match_length(&matched)?)?, delta)?;
+		host.write_regex(&index, &start, &end, &matched)?;
+		if host.at_least(&count, limit)? {
+			return Ok(count);
+		}
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -386,6 +490,199 @@ mod tests {
 			writes: RefCell::new(Vec::new()),
 			words: false,
 			fail_length: false,
+		}
+	}
+
+	struct LineCollection {
+		host: Host,
+		literal: bool,
+		captures: bool,
+		writes: RefCell<Vec<(f64, f64, f64)>>,
+		fail_write: bool,
+	}
+	impl LineMatchHost for LineCollection {
+		type Value = Value;
+		type Error = &'static str;
+		fn number(&self, value: f64) -> Value {
+			Value::Number(value)
+		}
+		fn add(&self, first: &Value, second: &Value) -> Result<Value, Self::Error> {
+			self.host.add(first, second)
+		}
+		fn negate(&self, value: &Value) -> Result<Value, Self::Error> {
+			Ok(Value::Number(-numeric(value)))
+		}
+		fn increment(&self, value: &Value) -> Result<(Value, Value), Self::Error> {
+			Ok((
+				Value::Number(numeric(value)),
+				Value::Number(numeric(value) + 1.0),
+			))
+		}
+		fn equal(&self, first: &Value, second: &Value) -> Result<bool, Self::Error> {
+			self.host.equal(first, second)
+		}
+		fn at_least(&self, first: &Value, second: &Value) -> Result<bool, Self::Error> {
+			Ok(numeric(first) >= numeric(second))
+		}
+		fn truthy(&self, value: &Value) -> bool {
+			self.host.truthy(value)
+		}
+		fn word_separators(&self) -> Result<Value, Self::Error> {
+			Ok(if self.host.words {
+				Value::Number(1.0)
+			} else {
+				Value::Null
+			})
+		}
+		fn capture_matches(&self) -> bool {
+			self.captures
+		}
+		fn simple_search(&self) -> Result<Value, Self::Error> {
+			Ok(if self.literal {
+				Value::Number(1.0)
+			} else {
+				Value::Null
+			})
+		}
+		fn search_length(&self, _: &Value) -> Result<Value, Self::Error> {
+			Ok(Value::Number(1.0))
+		}
+		fn text_length(&self) -> Result<Value, Self::Error> {
+			self.host.text_length()
+		}
+		fn index_of(&self, _: &Value, _: &Value) -> Result<Value, Self::Error> {
+			Ok(Value::Number(
+				self.host
+					.matches
+					.borrow_mut()
+					.pop_front()
+					.map_or(-1.0, |entry| entry.0),
+			))
+		}
+		fn valid_match(
+			&self,
+			_: &Value,
+			text_length: &Value,
+			start: &Value,
+			length: &Value,
+		) -> Result<bool, Self::Error> {
+			self.host.valid_match(text_length, start, length)
+		}
+		fn write_literal(
+			&self,
+			index: &Value,
+			start: &Value,
+			end: &Value,
+		) -> Result<(), Self::Error> {
+			self.writes
+				.borrow_mut()
+				.push((numeric(index), numeric(start), numeric(end)));
+			if self.fail_write {
+				Err("write")
+			} else {
+				Ok(())
+			}
+		}
+		fn create_searcher(&self) -> Result<Value, Self::Error> {
+			Ok(Value::Null)
+		}
+		fn reset(&self, _: &Value) -> Result<(), Self::Error> {
+			self.host.reset_regex()
+		}
+		fn next(&self, _: &Value) -> Result<Value, Self::Error> {
+			self.host.exec()
+		}
+		fn match_start(&self, value: &Value) -> Result<Value, Self::Error> {
+			self.host.match_start(value)
+		}
+		fn match_length(&self, value: &Value) -> Result<Value, Self::Error> {
+			self.host.match_length(value)
+		}
+		fn write_regex(
+			&self,
+			index: &Value,
+			start: &Value,
+			end: &Value,
+			_: &Value,
+		) -> Result<(), Self::Error> {
+			self.write_literal(index, start, end)
+		}
+	}
+	fn collection(literal: bool, captures: bool, words: bool, fail_write: bool) -> LineCollection {
+		LineCollection {
+			host: Host {
+				words,
+				..host(&[(0.0, 1.0), (2.0, 1.0), (4.0, 1.0)])
+			},
+			literal,
+			captures,
+			writes: RefCell::new(Vec::new()),
+			fail_write,
+		}
+	}
+
+	#[test]
+	fn line_collection_retains_word_filtering_counts_coordinates_and_post_acceptance_limits() {
+		let literal = collection(true, false, true, false);
+		let count = collect_line_matches(
+			&literal,
+			Value::Number(2.0),
+			&Value::Number(1.0),
+			&Value::Number(4.0),
+		);
+		assert_eq!(
+			(
+				count,
+				literal.writes.into_inner(),
+				literal.host.matches.borrow().len()
+			),
+			(
+				Ok(Value::Number(4.0)),
+				vec![(2.0, 4.0, 5.0), (3.0, 6.0, 7.0)],
+				0
+			)
+		);
+		let regex = collection(true, true, false, false);
+		let count = collect_line_matches(
+			&regex,
+			Value::Number(0.0),
+			&Value::Number(0.0),
+			&Value::Number(0.0),
+		);
+		assert_eq!(
+			(
+				count,
+				regex.writes.into_inner(),
+				regex.host.matches.borrow().len(),
+				regex.host.writes.into_inner()
+			),
+			(
+				Ok(Value::Number(1.0)),
+				vec![(0.0, 1.0, 2.0)],
+				2,
+				vec!['r', 'e']
+			)
+		);
+	}
+
+	#[test]
+	fn line_collection_stops_on_result_failure_without_reading_more_matches() {
+		for literal in [false, true] {
+			let host = collection(literal, false, false, true);
+			let count = collect_line_matches(
+				&host,
+				Value::Number(0.0),
+				&Value::Number(0.0),
+				&Value::Number(10.0),
+			);
+			assert_eq!(
+				(
+					count,
+					host.writes.into_inner(),
+					host.host.matches.borrow().len()
+				),
+				(Err("write"), vec![(0.0, 1.0, 2.0)], 2)
+			);
 		}
 	}
 

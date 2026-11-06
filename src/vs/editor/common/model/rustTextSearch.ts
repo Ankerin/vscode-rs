@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { IDisposable, toDisposable } from '../../../base/common/lifecycle.js';
+import { WordCharacterClassifier } from '../core/wordCharacterClassifier.js';
 
 /** Live regex/property capabilities retain exact callbacks, results, and partial state writes. */
 export interface IRustTextSearchHost {
@@ -38,18 +39,48 @@ export interface IRustWordBoundaryHost {
 /** Scoped result references distinguish unavailable control from original null/undefined returns. */
 interface IRustTextSearchResult { take(): RegExpExecArray | null | undefined; free(): void }
 
+/** Live line-search operations retain result-array aliases, regex methods, and factory ordering. */
+interface IRustSearchCursor {
+	reset(lastIndex: number): void;
+	next(text: string): RegExpExecArray | null;
+}
+
+/** Live line-search operations retain result-array aliases, regex methods, and factory ordering. */
+export interface IRustLineMatchHost {
+	add(first: number, second: number): number;
+	negate(value: number): number;
+	increment(value: number): [number, number];
+	equal(first: number, second: number): boolean;
+	atLeast(first: number, second: number): boolean;
+	wordSeparators(): WordCharacterClassifier | null;
+	captureMatches(): boolean;
+	simpleSearch(): string | null;
+	searchLength(value: string): number;
+	textLength(): number;
+	indexOf(search: string, index: number): number;
+	validMatch(words: WordCharacterClassifier, textLength: number, start: number, length: number): boolean;
+	writeLiteral(index: number, start: number, end: number): void;
+	createSearcher(): IRustSearchCursor;
+	reset(searcher: IRustSearchCursor): void;
+	next(searcher: IRustSearchCursor): RegExpExecArray | null;
+	matchStart(matched: RegExpExecArray): number;
+	matchLength(matched: RegExpExecArray): number;
+	writeRegex(index: number, start: number, end: number, matched: RegExpExecArray): void;
+}
+
 /** Generated text-search control participates in the core's atomic registration lifetime. */
 export interface IRustTextSearchModule {
 	text_search_abi_version(): number;
 	run_text_search(host: IRustTextSearchHost, reset: boolean): IRustTextSearchResult;
 	is_valid_text_search_match(host: IRustWordBoundaryHost, textLength: number, start: number, length: number): boolean;
+	collect_text_search_matches(host: IRustLineMatchHost, count: number, delta: number, limit: number): number;
 }
 
 let registeredModule: IRustTextSearchModule | undefined;
 
 /** Installs text-search control without changing existing Searcher classes or regex objects. */
 export function registerRustTextSearch(module: IRustTextSearchModule): IDisposable {
-	if (typeof module.text_search_abi_version !== 'function' || module.text_search_abi_version() !== 2 || typeof module.run_text_search !== 'function' || typeof module.is_valid_text_search_match !== 'function') { throw new Error('The Rust text search bindings do not match the searcher control contract'); }
+	if (typeof module.text_search_abi_version !== 'function' || module.text_search_abi_version() !== 3 || typeof module.run_text_search !== 'function' || typeof module.is_valid_text_search_match !== 'function' || typeof module.collect_text_search_matches !== 'function') { throw new Error('The Rust text search bindings do not match the searcher control contract'); }
 	if (registeredModule) { throw new Error('A Rust text search module is already registered'); }
 	registeredModule = module;
 	return toDisposable(() => { if (registeredModule === module) { registeredModule = undefined; } });
@@ -66,4 +97,10 @@ export function tryRunRustTextSearch(reset: boolean, createHost: () => IRustText
 /** Uses native boundary control with the original borrowed text and classifier capabilities. */
 export function tryRustWordBoundary(textLength: number, start: number, length: number, createHost: () => IRustWordBoundaryHost): boolean | undefined {
 	return registeredModule?.is_valid_text_search_match(createHost(), textLength, start, length);
+}
+
+/** Collects into the original result array, including original partial writes on failure. */
+export function tryRustLineMatches(count: number, delta: number, limit: number, createHost: () => IRustLineMatchHost): { count: number } | undefined {
+	if (!registeredModule) { return undefined; }
+	return { count: registeredModule.collect_text_search_matches(createHost(), count, delta, limit) };
 }

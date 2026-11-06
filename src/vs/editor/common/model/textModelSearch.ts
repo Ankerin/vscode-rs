@@ -10,7 +10,7 @@ import { Position } from '../core/position.js';
 import { Range } from '../core/range.js';
 import { EndOfLinePreference, FindMatch, SearchData } from '../model.js';
 import { TextModel } from './textModel.js';
-import { IRustTextSearchHost, tryRunRustTextSearch, tryRustWordBoundary } from './rustTextSearch.js';
+import { IRustTextSearchHost, tryRunRustTextSearch, tryRustWordBoundary, tryRustLineMatches } from './rustTextSearch.js';
 
 const LIMIT_FIND_COUNT = 999;
 
@@ -254,6 +254,28 @@ export class TextModelSearch {
 	}
 
 	private static _findMatchesInLine(searchData: SearchData, text: string, lineNumber: number, deltaOffset: number, resultLen: number, result: FindMatch[], captureMatches: boolean, limitResultCount: number): number {
+		const native = tryRustLineMatches(resultLen, deltaOffset, limitResultCount, () => ({
+			add: (first, second) => first + second,
+			negate: value => -value,
+			increment: value => { const previous = value++; return [previous, value]; },
+			equal: (first, second) => first === second,
+			atLeast: (first, second) => first >= second,
+			wordSeparators: () => searchData.wordSeparators,
+			captureMatches: () => !!captureMatches,
+			simpleSearch: () => searchData.simpleSearch,
+			searchLength: value => value.length,
+			textLength: () => text.length,
+			indexOf: (search, index) => text.indexOf(search, index),
+			validMatch: (words, textLength, start, length) => isValidMatch(words, text, textLength, start, length),
+			writeLiteral: (index, start, end) => { result[index] = new FindMatch(new Range(lineNumber, start, lineNumber, end), null); },
+			createSearcher: () => new Searcher(searchData.wordSeparators, searchData.regex),
+			reset: searcher => searcher.reset(0),
+			next: searcher => searcher.next(text),
+			matchStart: matched => matched.index,
+			matchLength: matched => matched[0].length,
+			writeRegex: (index, start, end, matched) => { result[index] = createFindMatch(new Range(lineNumber, start, lineNumber, end), matched, captureMatches); }
+		}));
+		if (native !== undefined) { return native.count; }
 		const wordSeparators = searchData.wordSeparators;
 		if (!captureMatches && searchData.simpleSearch) {
 			const searchString = searchData.simpleSearch;
