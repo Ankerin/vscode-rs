@@ -44,6 +44,7 @@ import { IRustModelValidationModule, registerRustModelValidation } from '../rust
 import { IRustModelQueryModule, registerRustModelQuery } from '../rustModelQuery.js';
 import { IRustModelSnapshotModule, registerRustModelSnapshot } from '../rustModelSnapshot.js';
 import { IRustModelLifecycleModule, registerRustModelLifecycle } from '../rustModelLifecycle.js';
+import { IRustModelOptionsModule, registerRustModelOptions } from '../rustModelOptions.js';
 
 /** The generated binding surface; UTF-16 arrays preserve JavaScript string semantics. */
 export interface IRustTextBuffer {
@@ -81,7 +82,7 @@ interface IRustTextSnapshot {
 	free(): void;
 }
 
-export interface IRustTextBufferModule extends IRustSequenceDiffModule, IRustTextChangeModule, IRustTokensModule, IRustCursorColumnsModule, IRustDecorationsModule, IRustTextShapeModule, IRustBracketEditsModule, IRustBracketLengthsModule, IRustSmallSetModule, IRustBracketTreesModule, IRustBracketNodeReaderModule, IRustBracketPositionMapperModule, IRustBracketParserModule, IRustBracketTokenizerModule, IRustFastBracketTokenizerModule, IRustBracketCollectionModule, IRustBracketPairCollectionModule, IRustBracketSearchModule, IRustBracketLifecycleModule, IRustBracketIndentationModule, IRustBracketAstModule, IRustBracketMutationModule, IRustBracketTransformModule, IRustBracketNodeMetadataModule, IRustBracketNumberArrayModule, IRustTextSearchModule, IRustModelValidationModule, IRustModelQueryModule, IRustModelSnapshotModule, IRustModelLifecycleModule {
+export interface IRustTextBufferModule extends IRustSequenceDiffModule, IRustTextChangeModule, IRustTokensModule, IRustCursorColumnsModule, IRustDecorationsModule, IRustTextShapeModule, IRustBracketEditsModule, IRustBracketLengthsModule, IRustSmallSetModule, IRustBracketTreesModule, IRustBracketNodeReaderModule, IRustBracketPositionMapperModule, IRustBracketParserModule, IRustBracketTokenizerModule, IRustFastBracketTokenizerModule, IRustBracketCollectionModule, IRustBracketPairCollectionModule, IRustBracketSearchModule, IRustBracketLifecycleModule, IRustBracketIndentationModule, IRustBracketAstModule, IRustBracketMutationModule, IRustBracketTransformModule, IRustBracketNodeMetadataModule, IRustBracketNumberArrayModule, IRustTextSearchModule, IRustModelValidationModule, IRustModelQueryModule, IRustModelSnapshotModule, IRustModelLifecycleModule, IRustModelOptionsModule {
 	text_buffer_abi_version(): number;
 	WasmTextBuffer: {
 		new(units: Uint16Array): IRustTextBuffer;
@@ -411,6 +412,7 @@ export function registerRustTextBuffer(module: IRustTextBufferModule, initializa
 		registration.add(registerRustModelQuery(module));
 		registration.add(registerRustModelSnapshot(module));
 		registration.add(registerRustModelLifecycle(module));
+		registration.add(registerRustModelOptions(module));
 	} catch (error) {
 		registration.dispose();
 		throw error;

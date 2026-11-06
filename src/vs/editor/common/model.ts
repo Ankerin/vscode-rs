@@ -30,6 +30,7 @@ import { TextModelEditSource } from './textModelEditSource.js';
 import { TextEdit } from './core/edits/textEdit.js';
 import { IViewModel } from './viewModel.js';
 import type { IGuessedIndentation } from './model/indentationGuesser.js';
+import { IRustModelOptionsHost, IRustModelOptionsSource, RustModelOptionValue, RustModelOptionsOperation, ownRustModelOptions, rustModelOptionsFields, rustModelOptionsSourceFields, tryRustModelOptions } from './model/rustModelOptions.js';
 
 /**
  * Vertical Lane in the overview ruler of the editor.
@@ -567,15 +568,17 @@ export interface ICursorStateComputer {
 export class TextModelResolvedOptions {
 	_textModelResolvedOptionsBrand: void = undefined;
 
-	readonly tabSize: number;
-	readonly indentSize: number;
-	private readonly _indentSizeIsTabSize: boolean;
-	readonly insertSpaces: boolean;
-	readonly defaultEOL: DefaultEndOfLine;
-	readonly trimAutoWhitespace: boolean;
-	readonly bracketPairColorizationOptions: BracketPairColorizationOptions;
+	readonly tabSize!: number;
+	readonly indentSize!: number;
+	private readonly _indentSizeIsTabSize!: boolean;
+	readonly insertSpaces!: boolean;
+	readonly defaultEOL!: DefaultEndOfLine;
+	readonly trimAutoWhitespace!: boolean;
+	readonly bracketPairColorizationOptions!: BracketPairColorizationOptions;
 
 	public get originalIndentSize(): number | 'tabSize' {
+		const rust = tryRustModelOptions<number | 'tabSize'>(RustModelOptionsOperation.OriginalIndent, () => this._createRustModelOptionsHost());
+		if (rust) { return rust.value; }
 		return this._indentSizeIsTabSize ? 'tabSize' : this.indentSize;
 	}
 
@@ -590,6 +593,8 @@ export class TextModelResolvedOptions {
 		trimAutoWhitespace: boolean;
 		bracketPairColorizationOptions: BracketPairColorizationOptions;
 	}) {
+		const rust = tryRustModelOptions<void>(RustModelOptionsOperation.Initialize, () => this._createRustModelOptionsHost(src));
+		if (rust) { return ownRustModelOptions(this); }
 		this.tabSize = Math.max(1, src.tabSize | 0);
 		if (src.indentSize === 'tabSize') {
 			this.indentSize = this.tabSize;
@@ -602,12 +607,28 @@ export class TextModelResolvedOptions {
 		this.defaultEOL = src.defaultEOL | 0;
 		this.trimAutoWhitespace = Boolean(src.trimAutoWhitespace);
 		this.bracketPairColorizationOptions = src.bracketPairColorizationOptions;
+		return ownRustModelOptions(this);
+	}
+
+	/** Preserves source/field observations while Rust owns resolved-option control. */
+	private _createRustModelOptionsHost(source?: IRustModelOptionsSource, other?: TextModelResolvedOptions): IRustModelOptionsHost {
+		return {
+			source: index => (source as object as Record<string, RustModelOptionValue>)[rustModelOptionsSourceFields[index]],
+			get: (readOther, index) => ((readOther ? other : this) as object as Record<string, RustModelOptionValue>)[rustModelOptionsFields[index]],
+			set: (index, value) => { (this as object as Record<string, RustModelOptionValue>)[rustModelOptionsFields[index]] = value; },
+			integer: (value, minimum) => minimum ? Math.max(1, value | 0) : value | 0,
+			bracketsEqual: (first, second) => equals(first, second),
+			createEvent: () => ({ tabSize: false, indentSize: false, insertSpaces: false, trimAutoWhitespace: false }),
+			eventField: (event, index, changed) => { event[(['tabSize', 'indentSize', 'insertSpaces', 'trimAutoWhitespace'] as const)[index]] = changed; }
+		};
 	}
 
 	/**
 	 * @internal
 	 */
 	public equals(other: TextModelResolvedOptions): boolean {
+		const rust = tryRustModelOptions<boolean>(RustModelOptionsOperation.Equal, () => this._createRustModelOptionsHost(undefined, other));
+		if (rust) { return rust.value; }
 		return (
 			this.tabSize === other.tabSize
 			&& this._indentSizeIsTabSize === other._indentSizeIsTabSize
@@ -623,6 +644,8 @@ export class TextModelResolvedOptions {
 	 * @internal
 	 */
 	public createChangeEvent(newOpts: TextModelResolvedOptions): IModelOptionsChangedEvent {
+		const rust = tryRustModelOptions<IModelOptionsChangedEvent>(RustModelOptionsOperation.ChangeEvent, () => this._createRustModelOptionsHost(undefined, newOpts));
+		if (rust) { return rust.value; }
 		return {
 			tabSize: this.tabSize !== newOpts.tabSize,
 			indentSize: this.indentSize !== newOpts.indentSize,
